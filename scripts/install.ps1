@@ -98,6 +98,11 @@ function Resolve-Platform {
 }
 
 function Download-File([string]$Uri, [string]$Destination) {
+    $parsedUri = [System.Uri]$Uri
+    if ($parsedUri.Scheme -eq 'file') {
+        Copy-Item -Path $parsedUri.LocalPath -Destination $Destination -Force
+        return
+    }
     Invoke-WebRequest -Uri $Uri -OutFile $Destination
 }
 
