@@ -230,6 +230,137 @@ func TestLogoutIsIdempotentAndLocalOnly(t *testing.T) {
 	}
 }
 
+func TestRememberRequiresFlagsAndSavedLogin(t *testing.T) {
+	store := &fakeStore{path: "/tmp/lore/config.json", loadErr: config.ErrNotFound}
+	app, stdout, stderr := newTestApp(store, nil)
+
+	if exitCode := app.Run([]string{"remember"}); exitCode != 1 {
+		t.Fatalf("missing flags exitCode = %d, want 1", exitCode)
+	}
+	if !strings.Contains(stderr.String(), "Usage: lore remember") {
+		t.Fatalf("stderr = %q, want remember usage", stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if exitCode := app.Run([]string{"remember", "--project-id", "p1", "--type", "decision", "--title", "t1", "--content", "c1"}); exitCode != 1 {
+		t.Fatalf("no-login exitCode = %d, want 1", exitCode)
+	}
+	if !strings.Contains(stderr.String(), "run lore login") {
+		t.Fatalf("stderr = %q, want login remediation", stderr.String())
+	}
+}
+
+func TestRememberRejectsInvalidMetadataWithoutRequest(t *testing.T) {
+	store := &fakeStore{path: "/tmp/lore/config.json", loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token"}}
+	client := &fakeClient{}
+	app, stdout, stderr := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
+
+	exitCode := app.Run([]string{"remember", "--project-id", "p1", "--type", "decision", "--title", "t1", "--content", "c1", "--metadata-json", "[]"})
+	if exitCode != 1 {
+		t.Fatalf("Run() exitCode = %d, want 1", exitCode)
+	}
+	if client.createCalls != 0 {
+		t.Fatalf("createCalls = %d, want 0", client.createCalls)
+	}
+	if !strings.Contains(stderr.String(), "metadata-json") {
+		t.Fatalf("stderr = %q, want metadata validation error", stderr.String())
+	}
+	assertNoTokenLeak(t, stdout.String(), stderr.String(), "secret-token")
+}
+
+func TestRememberSupportsHumanAndJSONOutput(t *testing.T) {
+	store := &fakeStore{path: "/tmp/lore/config.json", loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token"}}
+	memory := httpclient.Memory{ID: "m1", ProjectID: "p1", Scope: "project", Type: "decision", Title: "Ship it", Content: "long content", Metadata: map[string]any{"team": "cli"}, CreatedBy: "user-1"}
+	client := &fakeClient{memory: memory}
+	app, stdout, stderr := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
+
+	if exitCode := app.Run([]string{"remember", "--project-id", "p1", "--type", "decision", "--title", "Ship it", "--content", "long content"}); exitCode != 0 {
+		t.Fatalf("human Run() exitCode = %d, want 0, stderr=%q", exitCode, stderr.String())
+	}
+	if client.createRequest.Scope != "project" || client.createRequest.ProjectID != "p1" {
+		t.Fatalf("createRequest = %+v, want default scope and project", client.createRequest)
+	}
+	if strings.Contains(stdout.String(), "long content") {
+		t.Fatalf("stdout leaked content: %q", stdout.String())
+	}
+	assertNoTokenLeak(t, stdout.String(), stderr.String(), "secret-token")
+
+	stdout.Reset()
+	stderr.Reset()
+	if exitCode := app.Run([]string{"remember", "--project-id", "p1", "--type", "decision", "--title", "Ship it", "--content", "long content", "--json", "--metadata-json", `{"team":"cli"}`}); exitCode != 0 {
+		t.Fatalf("json Run() exitCode = %d, want 0, stderr=%q", exitCode, stderr.String())
+	}
+	var got struct {
+		Data httpclient.Memory `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(stdout.String()), &got); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v, stdout=%q", err, stdout.String())
+	}
+	if got.Data.ID != "m1" || client.createRequest.Metadata["team"] != "cli" {
+		t.Fatalf("json/output mismatch: got=%+v req=%+v", got.Data, client.createRequest)
+	}
+}
+
+func TestRecallSupportsHumanAndJSONOutput(t *testing.T) {
+	store := &fakeStore{path: "/tmp/lore/config.json", loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token"}}
+	client := &fakeClient{memories: []httpclient.Memory{{ID: "m1", ProjectID: "p1", Scope: "project", Type: "decision", Title: "t1", Content: "c1", CreatedBy: "user-1"}}}
+	app, stdout, stderr := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
+
+	if exitCode := app.Run([]string{"recall", "--project-id", "p1", "--type", "decision", "--limit", "10"}); exitCode != 0 {
+		t.Fatalf("human Run() exitCode = %d, want 0, stderr=%q", exitCode, stderr.String())
+	}
+	if client.listFilter.ProjectID != "p1" || client.listFilter.Type != "decision" || client.listFilter.Scope != "project" || client.listFilter.Limit != 10 {
+		t.Fatalf("listFilter = %+v", client.listFilter)
+	}
+	if strings.Contains(stdout.String(), "c1") {
+		t.Fatalf("stdout leaked content: %q", stdout.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if exitCode := app.Run([]string{"recall", "--project-id", "p1", "--json"}); exitCode != 0 {
+		t.Fatalf("json Run() exitCode = %d, want 0, stderr=%q", exitCode, stderr.String())
+	}
+	var got struct {
+		Data []httpclient.Memory `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(stdout.String()), &got); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v, stdout=%q", err, stdout.String())
+	}
+	if len(got.Data) != 1 || got.Data[0].ID != "m1" {
+		t.Fatalf("JSON output = %+v", got)
+	}
+	assertNoTokenLeak(t, stdout.String(), stderr.String(), "secret-token")
+}
+
+func TestRememberAndRecallRenderRequestIDsOnServerErrors(t *testing.T) {
+	store := &fakeStore{path: "/tmp/lore/config.json", loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token"}}
+	client := &fakeClient{}
+	app, stdout, stderr := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
+
+	client.createErr = &httpclient.APIError{StatusCode: 400, Code: "bad_request", Message: "invalid memory", RequestID: "req-remember"}
+	if exitCode := app.Run([]string{"remember", "--project-id", "p1", "--type", "decision", "--title", "t1", "--content", "c1"}); exitCode != 1 {
+		t.Fatalf("remember exitCode = %d, want 1", exitCode)
+	}
+	if !strings.Contains(stderr.String(), "remember failed: invalid memory (request_id=req-remember)") {
+		t.Fatalf("remember stderr = %q, want request-id-safe server error", stderr.String())
+	}
+	assertNoTokenLeak(t, stdout.String(), stderr.String(), "secret-token")
+
+	stdout.Reset()
+	stderr.Reset()
+	client.createErr = nil
+	client.listErr = &httpclient.APIError{StatusCode: 500, Code: "internal_error", Message: "server exploded", RequestID: "req-recall"}
+	if exitCode := app.Run([]string{"recall", "--project-id", "p1"}); exitCode != 1 {
+		t.Fatalf("recall exitCode = %d, want 1", exitCode)
+	}
+	if !strings.Contains(stderr.String(), "recall failed: server exploded (request_id=req-recall)") {
+		t.Fatalf("recall stderr = %q, want request-id-safe server error", stderr.String())
+	}
+	assertNoTokenLeak(t, stdout.String(), stderr.String(), "secret-token")
+}
+
 func TestVersionDefaultOutput(t *testing.T) {
 	app, stdout, stderr := newVersionOnlyApp(version.Info{})
 
@@ -414,11 +545,21 @@ func (s *fakeStore) Path() (string, error) {
 }
 
 type fakeClient struct {
-	healthErr error
-	readyErr  error
-	meErr     error
-	subject   httpclient.Subject
-	meToken   string
+	healthErr     error
+	readyErr      error
+	meErr         error
+	createErr     error
+	listErr       error
+	subject       httpclient.Subject
+	memory        httpclient.Memory
+	memories      []httpclient.Memory
+	meToken       string
+	createToken   string
+	listToken     string
+	createRequest httpclient.CreateMemoryRequest
+	listFilter    httpclient.ListMemoriesFilter
+	createCalls   int
+	listCalls     int
 }
 
 func (c *fakeClient) Health(_ context.Context) error { return c.healthErr }
@@ -429,6 +570,24 @@ func (c *fakeClient) Me(_ context.Context, token string) (httpclient.Subject, er
 		return httpclient.Subject{}, c.meErr
 	}
 	return c.subject, nil
+}
+func (c *fakeClient) CreateMemory(_ context.Context, token string, req httpclient.CreateMemoryRequest) (httpclient.Memory, error) {
+	c.createCalls++
+	c.createToken = token
+	c.createRequest = req
+	if c.createErr != nil {
+		return httpclient.Memory{}, c.createErr
+	}
+	return c.memory, nil
+}
+func (c *fakeClient) ListMemories(_ context.Context, token string, filter httpclient.ListMemoriesFilter) ([]httpclient.Memory, error) {
+	c.listCalls++
+	c.listToken = token
+	c.listFilter = filter
+	if c.listErr != nil {
+		return nil, c.listErr
+	}
+	return c.memories, nil
 }
 
 func assertNoTokenLeak(t *testing.T, stdout, stderr, token string) {

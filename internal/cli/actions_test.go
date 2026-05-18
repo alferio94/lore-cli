@@ -75,6 +75,53 @@ func TestLogoutActionRemainsIdempotentAndLocalOnly(t *testing.T) {
 	assertNoTokenLeak(t, first.Summary+second.Summary, "", "secret-token")
 }
 
+func TestRunRememberAndRecallUseSavedAuthConfig(t *testing.T) {
+	store := &fakeStore{path: "/tmp/lore/config.json", loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token"}}
+	client := &fakeClient{memory: httpclient.Memory{ID: "m1", ProjectID: "p1", Scope: "project", Type: "decision", Title: "t1", CreatedBy: "user-1"}, memories: []httpclient.Memory{{ID: "m1", ProjectID: "p1", Scope: "project", Type: "decision", Title: "t1", CreatedBy: "user-1"}}}
+	app, stdout, _ := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
+
+	if err := app.runRemember(rememberOptions{ProjectID: "p1", Type: "decision", Title: "t1", Content: "c1", JSONOutput: false}); err != nil {
+		t.Fatalf("runRemember() error = %v", err)
+	}
+	if client.createToken != "secret-token" || client.createRequest.Scope != "project" {
+		t.Fatalf("create call = token=%q req=%+v", client.createToken, client.createRequest)
+	}
+	if err := app.runRecall(recallOptions{ProjectID: "p1", JSONOutput: false}); err != nil {
+		t.Fatalf("runRecall() error = %v", err)
+	}
+	if client.listToken != "secret-token" || client.listFilter.Scope != "project" {
+		t.Fatalf("list call = token=%q filter=%+v", client.listToken, client.listFilter)
+	}
+	assertNoTokenLeak(t, stdout.String(), "", "secret-token")
+}
+
+func TestParseMetadataJSONAndLoadAuthenticatedClientValidation(t *testing.T) {
+	if _, err := parseMetadataJSON(`{"team":"cli"}`); err != nil {
+		t.Fatalf("parseMetadataJSON() error = %v", err)
+	}
+	if _, err := parseMetadataJSON(`[]`); err == nil {
+		t.Fatal("parseMetadataJSON() error = nil, want object validation error")
+	}
+
+	store := &fakeStore{path: "/tmp/lore/config.json", loadErr: config.ErrNotFound}
+	app, _, _ := newTestApp(store, nil)
+	if _, _, err := app.loadAuthenticatedClient(); err == nil || !strings.Contains(err.Error(), "run lore login") {
+		t.Fatalf("loadAuthenticatedClient() err = %v, want login remediation", err)
+	}
+
+	store = &fakeStore{path: "/tmp/lore/config.json", loadErr: errors.New("decode config: invalid character 'b'")}
+	app, _, _ = newTestApp(store, nil)
+	if _, _, err := app.loadAuthenticatedClient(); err == nil || !strings.Contains(err.Error(), "inspect or remove") || strings.Contains(err.Error(), "decode config") {
+		t.Fatalf("loadAuthenticatedClient() err = %v, want remediation without raw decode details", err)
+	}
+
+	store = &fakeStore{path: "/tmp/lore/config.json", loaded: config.Config{ServerURL: "https://example.test"}}
+	app, _, _ = newTestApp(store, nil)
+	if _, _, err := app.loadAuthenticatedClient(); err == nil || !strings.Contains(err.Error(), "incomplete") {
+		t.Fatalf("loadAuthenticatedClient() err = %v, want incomplete config error", err)
+	}
+}
+
 func TestStatusAndDoctorActionsPreserveDiagnosticSemantics(t *testing.T) {
 	store := &fakeStore{path: "/tmp/lore/config.json", loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token"}}
 	client := &fakeClient{

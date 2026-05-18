@@ -1,11 +1,14 @@
 package httpclient
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -43,7 +46,7 @@ func (c *HTTPClient) BaseURL() string {
 // Health checks GET /healthz.
 func (c *HTTPClient) Health(ctx context.Context) error {
 	var body statusEnvelope
-	if err := c.get(ctx, "/healthz", "", &body); err != nil {
+	if err := c.get(ctx, "/healthz", "", nil, &body); err != nil {
 		return err
 	}
 	if body.Data.Status != "ok" {
@@ -55,7 +58,7 @@ func (c *HTTPClient) Health(ctx context.Context) error {
 // Ready checks GET /readyz.
 func (c *HTTPClient) Ready(ctx context.Context) error {
 	var body statusEnvelope
-	if err := c.get(ctx, "/readyz", "", &body); err != nil {
+	if err := c.get(ctx, "/readyz", "", nil, &body); err != nil {
 		return err
 	}
 	if body.Data.Status != "ok" {
@@ -67,22 +70,77 @@ func (c *HTTPClient) Ready(ctx context.Context) error {
 // Me checks authenticated GET /v1/me.
 func (c *HTTPClient) Me(ctx context.Context, token string) (Subject, error) {
 	var body subjectEnvelope
-	if err := c.get(ctx, "/v1/me", token, &body); err != nil {
+	if err := c.get(ctx, "/v1/me", token, nil, &body); err != nil {
 		return Subject{}, err
 	}
 	return body.Data, nil
 }
 
-func (c *HTTPClient) get(ctx context.Context, path, token string, dst any) error {
+// CreateMemory posts a memory create request.
+func (c *HTTPClient) CreateMemory(ctx context.Context, token string, req CreateMemoryRequest) (Memory, error) {
+	var body memoryEnvelope
+	if err := c.request(ctx, http.MethodPost, "/v1/memories", token, nil, req, &body); err != nil {
+		return Memory{}, err
+	}
+	return body.Data, nil
+}
+
+// ListMemories lists memories with explicit filters.
+func (c *HTTPClient) ListMemories(ctx context.Context, token string, filter ListMemoriesFilter) ([]Memory, error) {
+	query := url.Values{}
+	if trimmed := strings.TrimSpace(filter.ProjectID); trimmed != "" {
+		query.Set("project_id", trimmed)
+	}
+	if trimmed := strings.TrimSpace(filter.Scope); trimmed != "" {
+		query.Set("scope", trimmed)
+	}
+	if trimmed := strings.TrimSpace(filter.Type); trimmed != "" {
+		query.Set("type", trimmed)
+	}
+	if filter.Limit > 0 {
+		query.Set("limit", strconv.Itoa(filter.Limit))
+	}
+
+	var body memoriesEnvelope
+	if err := c.get(ctx, "/v1/memories", token, query, &body); err != nil {
+		return nil, err
+	}
+	return body.Data, nil
+}
+
+func (c *HTTPClient) get(ctx context.Context, path, token string, query url.Values, dst any) error {
+	return c.request(ctx, http.MethodGet, path, token, query, nil, dst)
+}
+
+func (c *HTTPClient) request(ctx context.Context, method, path, token string, query url.Values, src, dst any) error {
 	if c == nil || c.client == nil {
 		return errors.New("http client is not configured")
 	}
+
 	url := c.baseURL + path
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if len(query) > 0 {
+		url += "?" + query.Encode()
+	}
+
+	var bodyReader *bytes.Reader
+	if src == nil {
+		bodyReader = bytes.NewReader(nil)
+	} else {
+		payload, err := json.Marshal(src)
+		if err != nil {
+			return fmt.Errorf("encode request body for %s: %w", path, err)
+		}
+		bodyReader = bytes.NewReader(payload)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, url, bodyReader)
 	if err != nil {
 		return fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Accept", "application/json")
+	if src != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	if trimmed := strings.TrimSpace(token); trimmed != "" {
 		req.Header.Set("Authorization", "Bearer "+trimmed)
 	}

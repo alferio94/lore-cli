@@ -15,6 +15,8 @@ The root TUI offers `Status`, `Login`, `Logout`, `Doctor`, `Quit`, and a disable
 - `lore status`
 - `lore logout`
 - `lore doctor`
+- `lore remember --project-id <project-id> --type decision --title "Ship it" --content "..."`
+- `lore recall --project-id <project-id> --type decision --limit 10`
 - `lore version`
 - `lore version --json`
 
@@ -22,6 +24,8 @@ The root TUI offers `Status`, `Login`, `Logout`, `Doctor`, `Quit`, and a disable
 `status` reports config presence plus `/healthz`, `/readyz`, and `/v1/me` state.
 `logout` removes local config only and does not revoke server-side tokens.
 `doctor` prints actionable config, URL, network, readiness, auth, and Pi-availability diagnostics.
+`remember` creates one memory with explicit REST fields only; `--project-id`, `--type`, `--title`, and `--content` are required, `--scope` defaults to `project`, `--metadata-json` must be a JSON object, and `--json` prints `{\"data\": {...}}`.
+`recall` lists memories by explicit filters only; `--project-id` is required, optional filters are `--type`, `--scope`, and `--limit`, semantic/full-text search is out of scope, and `--json` prints `{\"data\": [...]}`.
 `version` prints build metadata without requiring config, auth, or network access.
 
 Default local `version` output:
@@ -41,6 +45,27 @@ Overrides for deterministic tests and local development:
 
 ## Token storage warning
 The current CLI stores one user API token in a local JSON config file with restrictive permissions (`0700` dir, `0600` file). This is a temporary tradeoff for simplicity and is less secure than OS keychain storage.
+
+## Memory command smoke flow
+Use the CLI memory MVP only after `lore login` succeeds and when you already know the target `project_id`.
+
+```sh
+lore login --server https://example.test --token "$LORE_API_TOKEN"
+lore remember \
+  --project-id prj_123 \
+  --type decision \
+  --title "Ship installer smoke fix" \
+  --content "PowerShell file:// fixtures now copy locally" \
+  --metadata-json '{"area":"release","kind":"bugfix"}'
+lore recall --project-id prj_123 --type decision --limit 10
+lore recall --project-id prj_123 --json
+```
+
+Notes:
+- `remember` and `recall` reuse the saved server URL and API token from `login`.
+- Human output is concise and omits raw `content` and `metadata`.
+- Request failures surface request IDs when the server provides them.
+- Single-memory fetch, stdin/file ingestion, project lookup UX, MCP transport, semantic search, and `lore update` are intentionally out of scope for this MVP.
 
 ## Releases
 

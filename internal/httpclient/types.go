@@ -3,6 +3,7 @@ package httpclient
 import (
 	"context"
 	"fmt"
+	"time"
 )
 
 // Subject is the authenticated identity returned by /v1/me.
@@ -15,6 +16,38 @@ type Subject struct {
 	Kind        string   `json:"kind"`
 }
 
+// Memory is the Lore memory payload returned by memory endpoints.
+type Memory struct {
+	ID        string         `json:"id"`
+	ProjectID string         `json:"project_id"`
+	Scope     string         `json:"scope"`
+	Type      string         `json:"type"`
+	Title     string         `json:"title"`
+	Content   string         `json:"content"`
+	Metadata  map[string]any `json:"metadata,omitempty"`
+	CreatedBy string         `json:"created_by"`
+	CreatedAt time.Time      `json:"created_at,omitempty"`
+	UpdatedAt time.Time      `json:"updated_at,omitempty"`
+}
+
+// CreateMemoryRequest is the REST create payload for POST /v1/memories.
+type CreateMemoryRequest struct {
+	ProjectID string         `json:"project_id"`
+	Scope     string         `json:"scope"`
+	Type      string         `json:"type"`
+	Title     string         `json:"title"`
+	Content   string         `json:"content"`
+	Metadata  map[string]any `json:"metadata,omitempty"`
+}
+
+// ListMemoriesFilter contains supported query params for GET /v1/memories.
+type ListMemoriesFilter struct {
+	ProjectID string
+	Scope     string
+	Type      string
+	Limit     int
+}
+
 // Status is the common Lore status payload used by health/readiness endpoints.
 type Status struct {
 	Status string `json:"status"`
@@ -25,6 +58,8 @@ type Client interface {
 	Health(ctx context.Context) error
 	Ready(ctx context.Context) error
 	Me(ctx context.Context, token string) (Subject, error)
+	CreateMemory(ctx context.Context, token string, req CreateMemoryRequest) (Memory, error)
+	ListMemories(ctx context.Context, token string, filter ListMemoriesFilter) ([]Memory, error)
 }
 
 type statusEnvelope struct {
@@ -33,6 +68,14 @@ type statusEnvelope struct {
 
 type subjectEnvelope struct {
 	Data Subject `json:"data"`
+}
+
+type memoryEnvelope struct {
+	Data Memory `json:"data"`
+}
+
+type memoriesEnvelope struct {
+	Data []Memory `json:"data"`
 }
 
 type errorEnvelope struct {

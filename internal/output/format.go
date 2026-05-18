@@ -24,6 +24,14 @@ type Check struct {
 	Action string
 }
 
+type MemoryEnvelope struct {
+	Data httpclient.Memory `json:"data"`
+}
+
+type MemoriesEnvelope struct {
+	Data []httpclient.Memory `json:"data"`
+}
+
 // RenderChecks formats a diagnostic report.
 func RenderChecks(title string, checks []Check) string {
 	var b strings.Builder
@@ -68,6 +76,34 @@ func FormatLogoutResult(path string, removed bool) string {
 		return fmt.Sprintf("logout succeeded: removed local config at %s; no server-side token revocation was performed", path)
 	}
 	return fmt.Sprintf("logout succeeded: no local config remained at %s; no server-side token revocation was performed", path)
+}
+
+// FormatRememberSuccess renders a concise saved-memory confirmation.
+func FormatRememberSuccess(memory httpclient.Memory) string {
+	return fmt.Sprintf("remember succeeded: id=%s project_id=%s scope=%s type=%s title=%q created_by=%s", emptyFallback(memory.ID, "unknown"), emptyFallback(memory.ProjectID, "unknown"), emptyFallback(memory.Scope, "unknown"), emptyFallback(memory.Type, "unknown"), memory.Title, emptyFallback(memory.CreatedBy, "unknown"))
+}
+
+// FormatRecallResult renders a concise filtered memory list.
+func FormatRecallResult(memories []httpclient.Memory) string {
+	var b strings.Builder
+	if len(memories) == 1 {
+		fmt.Fprintf(&b, "recall returned %d memory", len(memories))
+	} else {
+		fmt.Fprintf(&b, "recall returned %d memories", len(memories))
+	}
+	b.WriteString("\n")
+	for _, memory := range memories {
+		fmt.Fprintf(&b, "- id=%s project_id=%s scope=%s type=%s title=%q created_by=%s\n", emptyFallback(memory.ID, "unknown"), emptyFallback(memory.ProjectID, "unknown"), emptyFallback(memory.Scope, "unknown"), emptyFallback(memory.Type, "unknown"), memory.Title, emptyFallback(memory.CreatedBy, "unknown"))
+	}
+	return b.String()
+}
+
+func NewMemoryEnvelope(memory httpclient.Memory) MemoryEnvelope {
+	return MemoryEnvelope{Data: memory}
+}
+
+func NewMemoriesEnvelope(memories []httpclient.Memory) MemoriesEnvelope {
+	return MemoriesEnvelope{Data: memories}
 }
 
 func emptyFallback(value, fallback string) string {

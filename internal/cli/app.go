@@ -120,6 +120,10 @@ func (a *App) Run(args []string) int {
 		return a.runLogout(actions, args[1:])
 	case "doctor":
 		return a.runDoctor(actions, args[1:])
+	case "remember":
+		return a.parseRemember(args[1:])
+	case "recall":
+		return a.parseRecall(args[1:])
 	default:
 		fmt.Fprintf(a.Stderr, "unknown command: %s\n\n", args[0])
 		a.printRootHelpTo(a.Stderr)
@@ -153,10 +157,6 @@ func (a *App) runLogin(actions InteractiveActions, args []string) int {
 
 	result, err := actions.Login(context.Background(), rawServer, rawToken)
 	if err != nil {
-		if rawServer == "" || rawToken == "" {
-			fs.Usage()
-			return 1
-		}
 		if _, ok := err.(*httpclient.UnauthorizedError); ok {
 			fmt.Fprintf(a.Stderr, "login failed: %s\n", explainLoginError(err))
 			return 1
@@ -231,6 +231,60 @@ func (a *App) runDoctor(actions InteractiveActions, args []string) int {
 	return report.ExitCode
 }
 
+func (a *App) parseRemember(args []string) int {
+	fs := newFlagSet("remember", a.Stderr)
+	projectID := fs.String("project-id", "", "Lore project ID")
+	memoryType := fs.String("type", "", "Memory type")
+	title := fs.String("title", "", "Memory title")
+	content := fs.String("content", "", "Memory content")
+	scope := fs.String("scope", "project", "Memory scope")
+	metadataJSON := fs.String("metadata-json", "", "Optional metadata JSON object")
+	jsonOutput := fs.Bool("json", false, "Print server-shaped JSON output")
+	fs.Usage = func() {
+		fmt.Fprintln(a.Stderr, "Usage: lore remember --project-id <id> --type <type> --title <title> --content <text> [--scope project] [--metadata-json <json-object>] [--json]")
+		fmt.Fprintln(a.Stderr, "Create one Lore memory via POST /v1/memories using saved login config.")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return 1
+	}
+	if fs.NArg() != 0 || strings.TrimSpace(*projectID) == "" || strings.TrimSpace(*memoryType) == "" || strings.TrimSpace(*title) == "" || strings.TrimSpace(*content) == "" {
+		fs.Usage()
+		return 1
+	}
+	if err := a.runRemember(rememberOptions{ProjectID: strings.TrimSpace(*projectID), Scope: strings.TrimSpace(*scope), Type: strings.TrimSpace(*memoryType), Title: strings.TrimSpace(*title), Content: strings.TrimSpace(*content), MetadataJSON: strings.TrimSpace(*metadataJSON), JSONOutput: *jsonOutput}); err != nil {
+		fmt.Fprintf(a.Stderr, "remember failed: %s\n", explainEndpointError(err))
+		return 1
+	}
+	return 0
+}
+
+func (a *App) parseRecall(args []string) int {
+	fs := newFlagSet("recall", a.Stderr)
+	projectID := fs.String("project-id", "", "Lore project ID")
+	memoryType := fs.String("type", "", "Memory type filter")
+	scope := fs.String("scope", "project", "Memory scope filter")
+	limit := fs.Int("limit", 0, "Maximum number of memories to return (0 uses server default)")
+	jsonOutput := fs.Bool("json", false, "Print server-shaped JSON output")
+	fs.Usage = func() {
+		fmt.Fprintln(a.Stderr, "Usage: lore recall --project-id <id> [--type <type>] [--scope <scope>] [--limit <n>] [--json]")
+		fmt.Fprintln(a.Stderr, "List Lore memories by explicit filters only; no semantic search is performed.")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return 1
+	}
+	if fs.NArg() != 0 || strings.TrimSpace(*projectID) == "" || *limit < 0 {
+		fs.Usage()
+		return 1
+	}
+	if err := a.runRecall(recallOptions{ProjectID: strings.TrimSpace(*projectID), Scope: strings.TrimSpace(*scope), Type: strings.TrimSpace(*memoryType), Limit: *limit, JSONOutput: *jsonOutput}); err != nil {
+		fmt.Fprintf(a.Stderr, "recall failed: %s\n", explainEndpointError(err))
+		return 1
+	}
+	return 0
+}
+
 func (a *App) runVersion(args []string) int {
 	fs := newFlagSet("version", a.Stderr)
 	jsonOutput := fs.Bool("json", false, "Print version metadata as JSON")
@@ -249,9 +303,7 @@ func (a *App) runVersion(args []string) int {
 
 	info := a.BuildInfo.Normalized()
 	if *jsonOutput {
-		encoder := json.NewEncoder(a.Stdout)
-		encoder.SetEscapeHTML(false)
-		if err := encoder.Encode(info); err != nil {
+		if err := writeJSON(a.Stdout, info); err != nil {
 			fmt.Fprintf(a.Stderr, "version output failed: %v\n", err)
 			return 1
 		}
@@ -272,6 +324,12 @@ func isHelpArg(arg string) bool {
 	return arg == "--help" || arg == "-h"
 }
 
+func writeJSON(dst io.Writer, value any) error {
+	encoder := json.NewEncoder(dst)
+	encoder.SetEscapeHTML(false)
+	return encoder.Encode(value)
+}
+
 func (a *App) printRootHelp() {
 	a.printRootHelpTo(a.Stdout)
 }
@@ -284,12 +342,14 @@ func (a *App) printRootHelpTo(w io.Writer) {
 	fmt.Fprintln(w, "  lore <command> [flags]")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "Commands:")
-	fmt.Fprintln(w, "  tui      Start the interactive TUI explicitly")
-	fmt.Fprintln(w, "  login    Validate a user API token with /v1/me and save local config")
-	fmt.Fprintln(w, "  status   Show config, health, readiness, and auth status")
-	fmt.Fprintln(w, "  logout   Remove local config only; no remote revocation")
-	fmt.Fprintln(w, "  doctor   Run actionable diagnostics, including optional Pi availability")
-	fmt.Fprintln(w, "  version  Print build metadata for humans or scripts")
+	fmt.Fprintln(w, "  tui       Start the interactive TUI explicitly")
+	fmt.Fprintln(w, "  login     Validate a user API token with /v1/me and save local config")
+	fmt.Fprintln(w, "  status    Show config, health, readiness, and auth status")
+	fmt.Fprintln(w, "  logout    Remove local config only; no remote revocation")
+	fmt.Fprintln(w, "  doctor    Run actionable diagnostics, including optional Pi availability")
+	fmt.Fprintln(w, "  remember  Create one memory via authenticated REST")
+	fmt.Fprintln(w, "  recall    List memories by explicit authenticated filters")
+	fmt.Fprintln(w, "  version   Print build metadata for humans or scripts")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "Use explicit subcommands for automation and scripts.")
 }

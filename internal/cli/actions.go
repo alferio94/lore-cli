@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -21,6 +22,24 @@ type ActionReport struct {
 	Title    string
 	Checks   []output.Check
 	ExitCode int
+}
+
+type rememberOptions struct {
+	ProjectID    string
+	Scope        string
+	Type         string
+	Title        string
+	Content      string
+	MetadataJSON string
+	JSONOutput   bool
+}
+
+type recallOptions struct {
+	ProjectID  string
+	Scope      string
+	Type       string
+	Limit      int
+	JSONOutput bool
 }
 
 // InteractiveActions exposes reusable command behavior for the TUI.
@@ -77,6 +96,94 @@ func (a *App) logoutAction(_ context.Context) (ActionMessage, error) {
 
 	path, _ := a.Store.Path()
 	return ActionMessage{Summary: output.FormatLogoutResult(path, hadConfig)}, nil
+}
+
+func (a *App) runRemember(args rememberOptions) error {
+	client, cfg, err := a.loadAuthenticatedClient()
+	if err != nil {
+		return err
+	}
+	metadata, err := parseMetadataJSON(args.MetadataJSON)
+	if err != nil {
+		return err
+	}
+	memory, err := client.CreateMemory(context.Background(), cfg.APIToken, httpclient.CreateMemoryRequest{
+		ProjectID: args.ProjectID,
+		Scope:     defaultScope(args.Scope),
+		Type:      args.Type,
+		Title:     args.Title,
+		Content:   args.Content,
+		Metadata:  metadata,
+	})
+	if err != nil {
+		return err
+	}
+	if args.JSONOutput {
+		return writeJSON(a.Stdout, output.NewMemoryEnvelope(memory))
+	}
+	_, err = fmt.Fprintln(a.Stdout, output.FormatRememberSuccess(memory))
+	return err
+}
+
+func (a *App) runRecall(args recallOptions) error {
+	client, cfg, err := a.loadAuthenticatedClient()
+	if err != nil {
+		return err
+	}
+	memories, err := client.ListMemories(context.Background(), cfg.APIToken, httpclient.ListMemoriesFilter{
+		ProjectID: args.ProjectID,
+		Scope:     defaultScope(args.Scope),
+		Type:      args.Type,
+		Limit:     args.Limit,
+	})
+	if err != nil {
+		return err
+	}
+	if args.JSONOutput {
+		return writeJSON(a.Stdout, output.NewMemoriesEnvelope(memories))
+	}
+	_, err = fmt.Fprint(a.Stdout, output.FormatRecallResult(memories))
+	return err
+}
+
+func (a *App) loadAuthenticatedClient() (httpclient.Client, config.Config, error) {
+	cfg, err := a.Store.Load()
+	if err != nil {
+		if errors.Is(err, config.ErrNotFound) {
+			return nil, config.Config{}, errors.New("no saved login config; run lore login --server <url> --token <token>")
+		}
+		return nil, config.Config{}, errors.New("saved login config could not be read; inspect or remove the local config file and run lore login again")
+	}
+	if strings.TrimSpace(cfg.ServerURL) == "" || strings.TrimSpace(cfg.APIToken) == "" {
+		return nil, config.Config{}, errors.New("saved login config is incomplete; run lore login --server <url> --token <token>")
+	}
+	client, err := a.ClientFactory(cfg.ServerURL)
+	if err != nil {
+		return nil, config.Config{}, err
+	}
+	return client, cfg, nil
+}
+
+func parseMetadataJSON(raw string) (map[string]any, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	var decoded any
+	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
+		return nil, fmt.Errorf("metadata-json must be valid JSON object: %w", err)
+	}
+	metadata, ok := decoded.(map[string]any)
+	if !ok {
+		return nil, errors.New("metadata-json must decode to a JSON object")
+	}
+	return metadata, nil
+}
+
+func defaultScope(scope string) string {
+	if strings.TrimSpace(scope) == "" {
+		return "project"
+	}
+	return strings.TrimSpace(scope)
 }
 
 func (a *App) statusAction(ctx context.Context) ActionReport {
