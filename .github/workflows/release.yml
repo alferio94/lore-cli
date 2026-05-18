@@ -53,12 +53,28 @@ jobs:
         include:
           - goos: darwin
             goarch: amd64
+            archive_ext: tar.gz
+            binary_name: lore
           - goos: darwin
             goarch: arm64
+            archive_ext: tar.gz
+            binary_name: lore
           - goos: linux
             goarch: amd64
+            archive_ext: tar.gz
+            binary_name: lore
           - goos: linux
             goarch: arm64
+            archive_ext: tar.gz
+            binary_name: lore
+          - goos: windows
+            goarch: amd64
+            archive_ext: zip
+            binary_name: lore.exe
+          - goos: windows
+            goarch: arm64
+            archive_ext: zip
+            binary_name: lore.exe
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -74,24 +90,32 @@ jobs:
           CGO_ENABLED: 0
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
+          ARCHIVE_EXT: ${{ matrix.archive_ext }}
+          BINARY_NAME: ${{ matrix.binary_name }}
           TAG: ${{ github.ref_name }}
           COMMIT: ${{ github.sha }}
         run: |
           set -euo pipefail
           BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          ARCHIVE="lore-cli_${TAG}_${GOOS}_${GOARCH}.tar.gz"
+          ARCHIVE="lore-cli_${TAG}_${GOOS}_${GOARCH}.${ARCHIVE_EXT}"
           BINARY_DIR="dist/${GOOS}_${GOARCH}"
           mkdir -p "$BINARY_DIR"
           go build -trimpath \
             -ldflags "-X github.com/alferio94/lore-cli/internal/version.Version=${TAG} -X github.com/alferio94/lore-cli/internal/version.Commit=${COMMIT} -X github.com/alferio94/lore-cli/internal/version.BuildDate=${BUILD_DATE}" \
-            -o "$BINARY_DIR/lore" ./cmd/lore
-          tar -C "$BINARY_DIR" -czf "dist/${ARCHIVE}" lore
+            -o "$BINARY_DIR/${BINARY_NAME}" ./cmd/lore
+          if [[ "$GOOS" == "windows" ]]; then
+            zip -j "dist/${ARCHIVE}" "$BINARY_DIR/${BINARY_NAME}"
+          else
+            tar -C "$BINARY_DIR" -czf "dist/${ARCHIVE}" "$BINARY_NAME"
+          fi
 
       - name: Upload archive artifact
         uses: actions/upload-artifact@v4
         with:
           name: archive-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: dist/*.tar.gz
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
           if-no-files-found: error
 
   publish:
@@ -109,18 +133,32 @@ jobs:
 
       - name: Generate checksums and verify asset set
         working-directory: dist
+        env:
+          TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          mapfile -t archives < <(find . -maxdepth 1 -type f -name 'lore-cli_*.tar.gz' -print | sort)
-          if [[ ${#archives[@]} -ne 4 ]]; then
-            echo "expected 4 release archives, found ${#archives[@]}" >&2
-            printf '%s\n' "${archives[@]}" >&2
+          mapfile -t actual < <(find . -maxdepth 1 -type f \( -name 'lore-cli_*.tar.gz' -o -name 'lore-cli_*.zip' \) -printf '%f\n' | sort)
+          expected=(
+            "lore-cli_${TAG}_darwin_amd64.tar.gz"
+            "lore-cli_${TAG}_darwin_arm64.tar.gz"
+            "lore-cli_${TAG}_linux_amd64.tar.gz"
+            "lore-cli_${TAG}_linux_arm64.tar.gz"
+            "lore-cli_${TAG}_windows_amd64.zip"
+            "lore-cli_${TAG}_windows_arm64.zip"
+          )
+          mapfile -t expected_sorted < <(printf '%s\n' "${expected[@]}" | sort)
+          if ! diff -u <(printf '%s\n' "${expected_sorted[@]}") <(printf '%s\n' "${actual[@]}"); then
+            echo "release asset set did not match expected filenames" >&2
             exit 1
           fi
-          sha256sum "${archives[@]}" | sed 's# \./# #g' > SHA256SUMS
-          for archive in "${archives[@]}"; do
-            if ! grep -Fq " ${archive#./}" SHA256SUMS; then
-              echo "missing checksum for ${archive#./}" >&2
+          sha256sum "${expected_sorted[@]}" > SHA256SUMS
+          if [[ $(wc -l < SHA256SUMS) -ne 6 ]]; then
+            echo "expected SHA256SUMS to contain 6 entries" >&2
+            exit 1
+          fi
+          for archive in "${expected_sorted[@]}"; do
+            if ! grep -Fq "  ${archive}" SHA256SUMS; then
+              echo "missing checksum for ${archive}" >&2
               exit 1
             fi
           done
@@ -130,6 +168,7 @@ jobs:
         with:
           files: |
             dist/lore-cli_*.tar.gz
+            dist/lore-cli_*.zip
             dist/SHA256SUMS
           fail_on_unmatched_files: true
           generate_release_notes: true

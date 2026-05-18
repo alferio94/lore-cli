@@ -45,13 +45,13 @@ The current CLI stores one user API token in a local JSON config file with restr
 ## Releases
 
 ### Supported release matrix
-Initial tagged releases publish exactly these archives:
+Tagged releases publish exactly these platform archives:
 - `darwin/amd64`
 - `darwin/arm64`
 - `linux/amd64`
 - `linux/arm64`
-
-Windows assets are intentionally excluded from this first release slice.
+- `windows/amd64`
+- `windows/arm64`
 
 ### Tag policy
 Releases are created only from annotated semantic version tags matching `vX.Y.Z`.
@@ -67,14 +67,18 @@ The GitHub Actions workflow then:
 4. publishes archives plus `SHA256SUMS` to the GitHub Release.
 
 ### Asset naming
-Each supported target is published as:
-- `lore-cli_<tag>_<os>_<arch>.tar.gz`
+Supported targets are published as:
+- macOS/Linux: `lore-cli_<tag>_<os>_<arch>.tar.gz`
+- Windows: `lore-cli_<tag>_windows_<arch>.zip`
 
 Examples:
 - `lore-cli_v1.2.3_darwin_arm64.tar.gz`
 - `lore-cli_v1.2.3_linux_amd64.tar.gz`
+- `lore-cli_v1.2.3_windows_amd64.zip`
 
-Each archive contains a single executable named `lore`.
+Archive contents:
+- macOS/Linux archives contain a single executable named `lore`
+- Windows archives contain a single executable named `lore.exe`
 
 ### Build metadata injection
 Release builds inject metadata with Go ldflags targeting:
@@ -98,10 +102,24 @@ tar -xzf lore-cli_v1.2.3_linux_amd64.tar.gz
 ./lore version
 ```
 
+Example install flow for Windows amd64 in PowerShell:
+
+```powershell
+curl.exe -LO https://github.com/alferio94/lore-cli/releases/download/v1.2.3/lore-cli_v1.2.3_windows_amd64.zip
+curl.exe -LO https://github.com/alferio94/lore-cli/releases/download/v1.2.3/SHA256SUMS
+$expected = (Select-String 'lore-cli_v1.2.3_windows_amd64.zip' SHA256SUMS).ToString().Split(' ')[0]
+$actual = (Get-FileHash .\lore-cli_v1.2.3_windows_amd64.zip -Algorithm SHA256).Hash.ToLower()
+if ($actual -ne $expected) { throw 'checksum mismatch' }
+Expand-Archive .\lore-cli_v1.2.3_windows_amd64.zip -DestinationPath .\lore-cli
+.\lore-cli\lore.exe version
+```
+
+Use the shared `SHA256SUMS` file to verify any published archive, including Windows `.zip` assets.
+
 ## Out of scope
 This slice intentionally excludes:
 - `lore update` or any self-update network logic;
 - runtime-agent installation flows beyond the disabled placeholder;
-- code signing, notarization, or provenance attestation beyond SHA256 checksums;
-- initial Windows release assets;
+- code signing, notarization, provenance attestation, MSI/installer packaging, or other signing/distribution automation beyond SHA256 checksums;
+- renaming existing macOS/Linux release assets;
 - keychain/SSO/browser auth, multi-profile storage, admin token issuance or revocation UX, and remote logout.
