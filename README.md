@@ -59,9 +59,12 @@ lore remember \
   --metadata-json '{"area":"release","kind":"bugfix"}'
 lore recall --project-id prj_123 --type decision --limit 10
 lore recall --project-id prj_123 --json
+lore logout
+lore status # reports no saved config / unauthenticated after logout
 ```
 
 Notes:
+- `remember` requires `--content`; positional memory content is not accepted in this MVP.
 - `remember` and `recall` reuse the saved server URL and API token from `login`.
 - Human output is concise and omits raw `content` and `metadata`.
 - Request failures surface request IDs when the server provides them.
