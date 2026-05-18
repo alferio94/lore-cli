@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/alferio94/lore-cli/internal/cli"
+	"github.com/alferio94/lore-cli/internal/install"
 	"github.com/alferio94/lore-cli/internal/output"
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -31,10 +32,11 @@ const (
 type actionKind string
 
 const (
-	actionStatus actionKind = "status"
-	actionLogin  actionKind = "login"
-	actionLogout actionKind = "logout"
-	actionDoctor actionKind = "doctor"
+	actionStatus  actionKind = "status"
+	actionLogin   actionKind = "login"
+	actionLogout  actionKind = "logout"
+	actionDoctor  actionKind = "doctor"
+	actionInstall actionKind = "install"
 )
 
 type actionMsg struct {
@@ -45,22 +47,23 @@ type actionMsg struct {
 }
 
 type model struct {
-	actions     cli.InteractiveActions
-	items       []menuItem
-	selected    int
-	focus       focusArea
-	width       int
-	height      int
-	ready       bool
-	loading     bool
-	quitting    bool
-	loginInputs []textinput.Model
-	loginError  string
-	statusTitle string
-	statusBody  string
-	statusTone  string
-	spinner     spinner.Model
-	help        help.Model
+	actions                 cli.InteractiveActions
+	items                   []menuItem
+	selected                int
+	focus                   focusArea
+	width                   int
+	height                  int
+	ready                   bool
+	loading                 bool
+	quitting                bool
+	loginInputs             []textinput.Model
+	loginError              string
+	statusTitle             string
+	statusBody              string
+	statusTone              string
+	installSelectionPending bool
+	spinner                 spinner.Model
+	help                    help.Model
 }
 
 func newModel(actions cli.InteractiveActions) model {
@@ -88,7 +91,7 @@ func newModel(actions cli.InteractiveActions) model {
 			{key: "login", title: "Login", description: "Save a validated session with your server URL and user API token."},
 			{key: "logout", title: "Logout", description: "Remove the local session only. Safe to repeat."},
 			{key: "doctor", title: "Doctor", description: "Run actionable diagnostics, including Pi availability."},
-			{key: "install", title: "Install", description: "Coming soon: runtime-agent install flow is intentionally out of scope.", disabled: true},
+			{key: "install", title: "Install", description: "Pi is recommended today; Claude Code, OpenCode, Codex, and Antigravity remain Coming soon."},
 			{key: "quit", title: "Quit", description: "Leave the interactive shell."},
 		},
 		focus:       focusMenu,
@@ -155,6 +158,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.loginError = ""
 		}
+		if msg.kind == actionInstall {
+			m.installSelectionPending = false
+		}
 		return m, nil
 	}
 	return m, nil
@@ -169,10 +175,12 @@ func (m model) updateMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.selected > 0 {
 			m.selected--
 		}
+		m.installSelectionPending = false
 	case "down", "j":
 		if m.selected < len(m.items)-1 {
 			m.selected++
 		}
+		m.installSelectionPending = false
 	case "tab", "right", "l":
 		m.focus = focusDetail
 	case "enter", " ":
@@ -264,16 +272,19 @@ func (m model) activateSelection() (tea.Model, tea.Cmd) {
 	}
 	switch item.key {
 	case "status":
+		m.installSelectionPending = false
 		return m.runAsync(actionStatus, "Checking status", func(ctx context.Context) actionMsg {
 			report := m.actions.Status(ctx)
 			return actionMsg{kind: actionStatus, title: report.Title, body: renderReport(report), isError: report.ExitCode != 0}
 		})
 	case "doctor":
+		m.installSelectionPending = false
 		return m.runAsync(actionDoctor, "Running doctor", func(ctx context.Context) actionMsg {
 			report := m.actions.Doctor(ctx)
 			return actionMsg{kind: actionDoctor, title: report.Title, body: renderReport(report), isError: report.ExitCode != 0}
 		})
 	case "logout":
+		m.installSelectionPending = false
 		return m.runAsync(actionLogout, "Removing local session", func(ctx context.Context) actionMsg {
 			result, err := m.actions.Logout(ctx)
 			if err != nil {
@@ -282,6 +293,7 @@ func (m model) activateSelection() (tea.Model, tea.Cmd) {
 			return actionMsg{kind: actionLogout, title: "Logout complete", body: result.Summary}
 		})
 	case "login":
+		m.installSelectionPending = false
 		m.focus = focusLogin
 		m.loginInputs[0].Focus()
 		m.loginInputs[1].Blur()
@@ -290,7 +302,25 @@ func (m model) activateSelection() (tea.Model, tea.Cmd) {
 		m.statusBody = "Enter your server URL and a normal user API token. The token stays masked and is validated before being saved locally."
 		m.statusTone = toneInfo
 		return m, nil
+	case "install":
+		if !m.installSelectionPending {
+			m.installSelectionPending = true
+			m.focus = focusDetail
+			m.statusTitle = "Install Lore for Pi"
+			m.statusBody = install.FormatTargetSelection(install.DefaultTargets())
+			m.statusTone = toneInfo
+			return m, nil
+		}
+		m.installSelectionPending = false
+		if m.actions.Install == nil {
+			return m, nil
+		}
+		return m.runAsync(actionInstall, "Install Lore for Pi", func(ctx context.Context) actionMsg {
+			report := m.actions.Install(ctx)
+			return actionMsg{kind: actionInstall, title: report.Title, body: renderReport(report), isError: report.ExitCode != 0}
+		})
 	case "quit":
+		m.installSelectionPending = false
 		m.quitting = true
 		return m, tea.Quit
 	default:

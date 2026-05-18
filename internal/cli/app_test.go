@@ -6,6 +6,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -478,8 +480,8 @@ func TestHelpAndUnknownCommand(t *testing.T) {
 	if exitCode := app.Run([]string{"--help"}); exitCode != 0 {
 		t.Fatalf("help exitCode = %d, want 0", exitCode)
 	}
-	if !strings.Contains(stdout.String(), "Commands:") || !strings.Contains(stdout.String(), "version") {
-		t.Fatalf("stdout = %q, want root help", stdout.String())
+	if !strings.Contains(stdout.String(), "Commands:") || !strings.Contains(stdout.String(), "version") || !strings.Contains(stdout.String(), "api request") || !strings.Contains(stdout.String(), "install") {
+		t.Fatalf("stdout = %q, want root help with install and hidden broker hint", stdout.String())
 	}
 
 	stdout.Reset()
@@ -489,6 +491,125 @@ func TestHelpAndUnknownCommand(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "unknown command: wat") {
 		t.Fatalf("stderr = %q, want unknown command message", stderr.String())
+	}
+}
+
+func TestInstallCommandRunsPiInstallAndPrintsSummary(t *testing.T) {
+	homeDir := t.TempDir()
+	store := &fakeStore{path: "/tmp/lore/config/config.json", loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token"}}
+	client := &fakeClient{subject: httpclient.Subject{UserID: "user-1", Kind: "user"}}
+	app, stdout, stderr := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
+	app.UserHomeDir = func() (string, error) { return homeDir, nil }
+	app.ExecutablePath = func() (string, error) { return "/usr/local/bin/lore", nil }
+	app.BuildInfo = version.Info{Version: "v1.2.3"}
+
+	if exitCode := app.Run([]string{"install"}); exitCode != 0 {
+		t.Fatalf("install exitCode = %d, want 0, stderr=%q", exitCode, stderr.String())
+	}
+	out := stdout.String()
+	for _, want := range []string{"Lore install", "[OK] healthz", "[OK] install", "created=4", "manifest", "lore-install.json"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("stdout = %q, want substring %q", out, want)
+		}
+	}
+	assertNoTokenLeak(t, out, stderr.String(), "secret-token")
+}
+
+func TestInstallCommandPassesSavedTokenToValidationWithoutLeakingIt(t *testing.T) {
+	homeDir := t.TempDir()
+	store := &fakeStore{path: "/tmp/lore/config/config.json", loaded: config.Config{ServerURL: "https://example.test", APIToken: "lore api request"}}
+	client := &fakeClient{subject: httpclient.Subject{UserID: "user-1", Kind: "user"}}
+	app, stdout, stderr := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
+	app.UserHomeDir = func() (string, error) { return homeDir, nil }
+	app.ExecutablePath = func() (string, error) { return "/usr/local/bin/lore", nil }
+	app.BuildInfo = version.Info{Version: "v1.2.3"}
+
+	if exitCode := app.Run([]string{"install"}); exitCode != 1 {
+		t.Fatalf("install exitCode = %d, want 1 for validation failure, stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "contains saved auth material") {
+		t.Fatalf("stdout = %q, want secret-safe validation finding", out)
+	}
+	if !strings.Contains(out, "extensions/lore-memory.ts") {
+		t.Fatalf("stdout = %q, want managed file validation detail", out)
+	}
+	assertNoTokenLeak(t, out, stderr.String(), "lore api request")
+}
+
+func TestInstallCommandBlocksWhenLoginIsRequired(t *testing.T) {
+	homeDir := t.TempDir()
+	store := &fakeStore{path: "/tmp/lore/config/config.json", loadErr: config.ErrNotFound}
+	app, stdout, stderr := newTestApp(store, nil)
+	app.UserHomeDir = func() (string, error) { return homeDir, nil }
+	app.ExecutablePath = func() (string, error) { return "/usr/local/bin/lore", nil }
+
+	if exitCode := app.Run([]string{"install"}); exitCode != 1 {
+		t.Fatalf("install exitCode = %d, want 1", exitCode)
+	}
+	if got := stdout.String(); !strings.Contains(got, "Run lore login") && !strings.Contains(got, "run lore login") {
+		t.Fatalf("stdout = %q, want login remediation", got)
+	}
+	if _, err := os.Stat(filepath.Join(homeDir, ".pi", "agent", "lore-install.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("manifest stat err = %v, want not exist", err)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+}
+
+func TestInstallUsageIncludesPiFirstGuidance(t *testing.T) {
+	store := &fakeStore{path: "/tmp/lore/config.json", loadErr: config.ErrNotFound}
+	app, _, stderr := newTestApp(store, nil)
+
+	if exitCode := app.Run([]string{"install", "unexpected"}); exitCode != 1 {
+		t.Fatalf("install exitCode = %d, want 1", exitCode)
+	}
+	for _, want := range []string{
+		"Usage: lore install",
+		"Pi-first managed runtime",
+		"saved Lore login state",
+		"Claude Code, OpenCode, Codex, and Antigravity remain Coming soon",
+	} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("stderr = %q, want substring %q", stderr.String(), want)
+		}
+	}
+}
+
+func TestAPIRequestCommandReturnsMachineReadableExitCodes(t *testing.T) {
+	store := &fakeStore{path: "/tmp/lore/config.json", loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token"}}
+	client := &fakeClient{}
+	app, stdout, stderr := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
+
+	if exitCode := app.Run([]string{"api", "request", "--json", "--method", "GET", "--path", "https://example.test/v1/context"}); exitCode != 2 {
+		t.Fatalf("validation exitCode = %d, want 2", exitCode)
+	}
+	if got := stdout.String(); !strings.Contains(got, `"ok":false`) || !strings.Contains(got, `"code":"invalid_request"`) {
+		t.Fatalf("stdout = %q, want machine validation envelope", got)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty for machine errors", stderr.String())
+	}
+
+	stdout.Reset()
+	store.loadErr = config.ErrNotFound
+	if exitCode := app.Run([]string{"api", "request", "--json", "--method", "GET", "--path", "/v1/context"}); exitCode != 3 {
+		t.Fatalf("missing-config exitCode = %d, want 3", exitCode)
+	}
+	if got := stdout.String(); !strings.Contains(got, `"code":"missing_config"`) {
+		t.Fatalf("stdout = %q, want missing config envelope", got)
+	}
+
+	stdout.Reset()
+	store.loadErr = nil
+	store.loaded = config.Config{ServerURL: "https://example.test", APIToken: "secret-token"}
+	client.requestJSONErr = &httpclient.UnauthorizedError{APIError: httpclient.APIError{StatusCode: 401, Code: "unauthorized", Message: "login required", RequestID: "req-auth"}}
+	if exitCode := app.Run([]string{"api", "request", "--json", "--method", "GET", "--path", "/v1/context"}); exitCode != 4 {
+		t.Fatalf("auth exitCode = %d, want 4", exitCode)
+	}
+	if got := stdout.String(); !strings.Contains(got, `"request_id":"req-auth"`) || strings.Contains(got, "secret-token") {
+		t.Fatalf("stdout = %q, want auth envelope without token leak", got)
 	}
 }
 
@@ -545,21 +666,27 @@ func (s *fakeStore) Path() (string, error) {
 }
 
 type fakeClient struct {
-	healthErr     error
-	readyErr      error
-	meErr         error
-	createErr     error
-	listErr       error
-	subject       httpclient.Subject
-	memory        httpclient.Memory
-	memories      []httpclient.Memory
-	meToken       string
-	createToken   string
-	listToken     string
-	createRequest httpclient.CreateMemoryRequest
-	listFilter    httpclient.ListMemoriesFilter
-	createCalls   int
-	listCalls     int
+	healthErr         error
+	readyErr          error
+	meErr             error
+	createErr         error
+	listErr           error
+	subject           httpclient.Subject
+	memory            httpclient.Memory
+	memories          []httpclient.Memory
+	meToken           string
+	createToken       string
+	listToken         string
+	createRequest     httpclient.CreateMemoryRequest
+	listFilter        httpclient.ListMemoriesFilter
+	createCalls       int
+	listCalls         int
+	requestJSONToken  string
+	requestJSONMethod string
+	requestJSONPath   string
+	requestJSONBody   json.RawMessage
+	requestJSONResult httpclient.RequestJSONResult
+	requestJSONErr    error
 }
 
 func (c *fakeClient) Health(_ context.Context) error { return c.healthErr }
@@ -588,6 +715,17 @@ func (c *fakeClient) ListMemories(_ context.Context, token string, filter httpcl
 		return nil, c.listErr
 	}
 	return c.memories, nil
+}
+
+func (c *fakeClient) RequestJSON(_ context.Context, method, path, token string, body json.RawMessage) (httpclient.RequestJSONResult, error) {
+	c.requestJSONMethod = method
+	c.requestJSONPath = path
+	c.requestJSONToken = token
+	c.requestJSONBody = body
+	if c.requestJSONErr != nil {
+		return httpclient.RequestJSONResult{}, c.requestJSONErr
+	}
+	return c.requestJSONResult, nil
 }
 
 func assertNoTokenLeak(t *testing.T, stdout, stderr, token string) {

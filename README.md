@@ -8,13 +8,14 @@ Thin Go CLI for Lore server authentication, diagnostics, a default interactive T
 - `lore --help` stays non-interactive.
 - Use explicit subcommands for automation and scripts.
 
-The root TUI offers `Status`, `Login`, `Logout`, `Doctor`, `Quit`, and a disabled `Install` placeholder marked coming soon. Version reporting is intentionally CLI-only in this slice.
+The root TUI offers `Status`, `Login`, `Logout`, `Doctor`, `Install`, and `Quit`. `Install` is Pi-first: Pi is selectable and recommended, while Claude Code, OpenCode, Codex, and Antigravity stay visible as non-selectable `Coming soon` targets. Version reporting is intentionally CLI-only in this slice.
 
 ## Explicit commands
 - `lore login --server https://example.test --token "$LORE_API_TOKEN"`
 - `lore status`
 - `lore logout`
 - `lore doctor`
+- `lore install`
 - `lore remember --project-id <project-id> --type decision --title "Ship it" --content "..."`
 - `lore recall --project-id <project-id> --type decision --limit 10`
 - `lore version`
@@ -24,6 +25,7 @@ The root TUI offers `Status`, `Login`, `Logout`, `Doctor`, `Quit`, and a disable
 `status` reports config presence plus `/healthz`, `/readyz`, and `/v1/me` state.
 `logout` removes local config only and does not revoke server-side tokens.
 `doctor` prints actionable config, URL, network, readiness, auth, and Pi-availability diagnostics.
+`install` reuses healthy saved Lore login state, runs the same config `/healthz` `/readyz` `/v1/me` preflight as `status`, installs only the managed `~/.pi/agent` Pi runtime files, and writes non-secret `~/.pi/agent/lore-install.json` metadata. Generated Pi assets call the hidden `lore api request` broker so no raw API token is written into Pi files.
 `remember` creates one memory with explicit REST fields only; `--project-id`, `--type`, `--title`, and `--content` are required, `--scope` defaults to `project`, `--metadata-json` must be a JSON object, and `--json` prints `{\"data\": {...}}`.
 `recall` lists memories by explicit filters only; `--project-id` is required, optional filters are `--type`, `--scope`, and `--limit`, semantic/full-text search is out of scope, and `--json` prints `{\"data\": [...]}`.
 `version` prints build metadata without requiring config, auth, or network access.
@@ -65,10 +67,12 @@ lore status # reports no saved config / unauthenticated after logout
 
 Notes:
 - `remember` requires `--content`; positional memory content is not accepted in this MVP.
-- `remember` and `recall` reuse the saved server URL and API token from `login`.
-- Human output is concise and omits raw `content` and `metadata`.
+- `remember`, `recall`, and `install` reuse the saved server URL and API token from `login`.
+- `install` blocks before any Pi writes when saved config is missing, invalid, or unhealthy, and surfaces login/remediation guidance instead.
+- Human output is concise and omits raw `content`, `metadata`, and secrets.
 - Request failures surface request IDs when the server provides them.
-- Single-memory fetch, stdin/file ingestion, project lookup UX, MCP transport, semantic search, and `lore update` are intentionally out of scope for this MVP.
+- `lore api request` is a hidden machine broker for allowlisted authenticated API calls used by the managed Pi runtime.
+- Single-memory fetch, non-`--body-json` broker body input modes, project lookup UX, MCP transport, semantic search, and `lore update` are intentionally out of scope for this MVP.
 
 ## Releases
 
@@ -168,12 +172,12 @@ Local builds keep the defaults:
 ### Security notes
 - Remote script execution is a convenience tradeoff; pinned URLs are preferred over mutable branch-tip URLs.
 - `SHA256SUMS` verification provides release-asset integrity checks but does not replace signing or notarization.
-- `lore install`, `lore update`, package managers, code signing, and notarization remain out of scope for this slice.
+- `lore update`, package managers, code signing, and notarization remain out of scope for this slice.
 
 ## Out of scope
 This slice intentionally excludes:
 - `lore update` or any self-update network logic;
-- runtime-agent installation flows beyond the disabled placeholder;
+- runtime-agent installation flows beyond the Pi-first managed install path and visible `Coming soon` placeholders for other clients;
 - code signing, notarization, provenance attestation, MSI/installer packaging, or other signing/distribution automation beyond SHA256 checksums;
 - renaming existing macOS/Linux release assets;
 - keychain/SSO/browser auth, multi-profile storage, admin token issuance or revocation UX, and remote logout.

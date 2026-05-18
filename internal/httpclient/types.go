@@ -2,6 +2,7 @@ package httpclient
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 )
@@ -60,6 +61,7 @@ type Client interface {
 	Me(ctx context.Context, token string) (Subject, error)
 	CreateMemory(ctx context.Context, token string, req CreateMemoryRequest) (Memory, error)
 	ListMemories(ctx context.Context, token string, filter ListMemoriesFilter) ([]Memory, error)
+	RequestJSON(ctx context.Context, method, path, token string, body json.RawMessage) (RequestJSONResult, error)
 }
 
 type statusEnvelope struct {
@@ -84,6 +86,13 @@ type errorEnvelope struct {
 		Message   string `json:"message"`
 		RequestID string `json:"request_id"`
 	} `json:"error"`
+}
+
+// RequestJSONResult carries token-safe machine broker results.
+type RequestJSONResult struct {
+	StatusCode int
+	RequestID  string
+	Data       json.RawMessage
 }
 
 // APIError is a token-safe error decoded from Lore error envelopes.

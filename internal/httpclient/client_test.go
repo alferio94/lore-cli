@@ -240,6 +240,77 @@ func TestMemoryEndpointsReturnTypedAPIErrors(t *testing.T) {
 	}
 }
 
+func TestValidateBrokerRequestRejectsUnsafeTargetsAndBodies(t *testing.T) {
+	tests := []struct {
+		name    string
+		method  string
+		path    string
+		body    json.RawMessage
+		wantErr string
+	}{
+		{name: "full url", method: http.MethodGet, path: "https://example.test/v1/context", wantErr: "relative API path"},
+		{name: "unsafe path", method: http.MethodGet, path: "/v1/me", wantErr: "allowlisted"},
+		{name: "get body", method: http.MethodGet, path: "/v1/context", body: json.RawMessage(`{"project":"lore-cli"}`), wantErr: "does not accept a body"},
+		{name: "delete body", method: http.MethodDelete, path: "/v1/observations/obs-1", body: json.RawMessage(`{"reason":"x"}`), wantErr: "does not accept a body"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ValidateBrokerRequest(tt.method, tt.path, tt.body)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("ValidateBrokerRequest() err = %v, want substring %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestRequestJSONUsesAllowlistedPathAndRequestID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got, want := r.Method, http.MethodGet; got != want {
+			t.Fatalf("method = %q, want %q", got, want)
+		}
+		if got, want := r.URL.RequestURI(), "/v1/context?project=lore-cli"; got != want {
+			t.Fatalf("request URI = %q, want %q", got, want)
+		}
+		if got, want := r.Header.Get("Authorization"), "Bearer secret-token"; got != want {
+			t.Fatalf("Authorization = %q, want %q", got, want)
+		}
+		w.Header().Set("X-Request-Id", "req-context-1")
+		writeJSON(w, http.StatusOK, map[string]any{"data": map[string]any{"project": "lore-cli"}})
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server.URL, time.Second)
+	result, err := client.RequestJSON(context.Background(), http.MethodGet, "/v1/context?project=lore-cli", "secret-token", nil)
+	if err != nil {
+		t.Fatalf("RequestJSON() error = %v", err)
+	}
+	if result.StatusCode != http.StatusOK || result.RequestID != "req-context-1" {
+		t.Fatalf("result = %+v, want status and request id", result)
+	}
+	if string(result.Data) != `{"project":"lore-cli"}` {
+		t.Fatalf("data = %s, want decoded envelope data", result.Data)
+	}
+}
+
+func TestRequestJSONErrorFallsBackToHeaderRequestID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Request-Id", "req-stats-500")
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"code": "internal_error", "message": "boom"}})
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server.URL, time.Second)
+	_, err := client.RequestJSON(context.Background(), http.MethodGet, "/v1/stats", "secret-token", nil)
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("RequestJSON() error = %T %v, want *APIError", err, err)
+	}
+	if apiErr.RequestID != "req-stats-500" {
+		t.Fatalf("RequestID = %q, want req-stats-500", apiErr.RequestID)
+	}
+}
+
 func newTestClient(t *testing.T, baseURL string, timeout time.Duration) *HTTPClient {
 	t.Helper()
 	client, err := New(baseURL, timeout)

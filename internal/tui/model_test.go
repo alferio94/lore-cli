@@ -12,18 +12,22 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-func TestInitialRenderShowsMenuHintsAndInstallPlaceholder(t *testing.T) {
+func TestInitialRenderShowsMenuHintsAndInstallEntry(t *testing.T) {
 	m := newModel(cli.InteractiveActions{})
 	view := m.View()
-	for _, want := range []string{"Lore", "Status", "Login", "Install", "coming soon", "Explicit subcommands remain available"} {
+	for _, want := range []string{"Lore", "Status", "Login", "Install", "Pi", "Explicit subcommands remain available"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view missing %q:\n%s", want, view)
 		}
 	}
 }
 
-func TestNavigationAndDisabledInstallMessage(t *testing.T) {
-	m := newModel(cli.InteractiveActions{})
+func TestNavigationAndInstallTargetSelectionMessage(t *testing.T) {
+	calls := 0
+	m := newModel(cli.InteractiveActions{Install: func(context.Context) cli.ActionReport {
+		calls++
+		return cli.ActionReport{Title: "Lore install", ExitCode: 0}
+	}})
 	for i := 0; i < 4; i++ {
 		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
 		m = updated.(model)
@@ -31,13 +35,95 @@ func TestNavigationAndDisabledInstallMessage(t *testing.T) {
 	if got := m.items[m.selected].key; got != "install" {
 		t.Fatalf("selected key = %q, want install", got)
 	}
+	if m.items[m.selected].disabled {
+		t.Fatal("install item should be selectable")
+	}
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	if cmd != nil {
+		t.Fatal("first install enter unexpectedly started async install")
+	}
+	if calls != 0 {
+		t.Fatalf("install calls = %d, want 0 before confirming Pi target", calls)
+	}
+	if got := m.statusTitle; got != "Install Lore for Pi" {
+		t.Fatalf("statusTitle = %q, want Install Lore for Pi", got)
+	}
+	for _, want := range []string{"Pi", "Recommended", "Claude Code", "OpenCode", "Codex", "Antigravity", "Coming soon"} {
+		if !strings.Contains(m.statusBody, want) {
+			t.Fatalf("statusBody missing %q:\n%s", want, m.statusBody)
+		}
+	}
+}
+
+func TestInstallActionRendersSuccessAndLoginRemediationStates(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		m := newModel(cli.InteractiveActions{Install: func(context.Context) cli.ActionReport {
+			return cli.ActionReport{Title: "Lore install", ExitCode: 0, Checks: []output.Check{{Name: "install", Status: output.StatusOK, Detail: "created=4 updated=0 unchanged=0 backed_up=0 failed=0"}, {Name: "manifest", Status: output.StatusOK, Detail: "lore-install.json verified"}}}
+		}})
+		for i := 0; i < 4; i++ {
+			updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+			m = updated.(model)
+		}
+		updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		m = updated.(model)
+		if cmd != nil {
+			t.Fatal("first install enter unexpectedly started async install")
+		}
+		updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		m = updated.(model)
+		updated, _ = m.Update(cmd())
+		m = updated.(model)
+		if got := m.statusTitle; got != "Lore install" {
+			t.Fatalf("statusTitle = %q, want Lore install", got)
+		}
+		if !strings.Contains(m.statusBody, "created=4") || !strings.Contains(m.statusBody, "manifest") {
+			t.Fatalf("statusBody = %q, want install summary and manifest info", m.statusBody)
+		}
+		if got := m.statusTone; got != toneSuccess {
+			t.Fatalf("statusTone = %q, want success", got)
+		}
+	})
+
+	t.Run("login required", func(t *testing.T) {
+		m := newModel(cli.InteractiveActions{Install: func(context.Context) cli.ActionReport {
+			return cli.ActionReport{Title: "Lore install", ExitCode: 1, Checks: []output.Check{{Name: "config", Status: output.StatusWarn, Detail: "no-config", Action: "Run lore login --server <url> --token <token>."}}}
+		}})
+		for i := 0; i < 4; i++ {
+			updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+			m = updated.(model)
+		}
+		updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		m = updated.(model)
+		if cmd != nil {
+			t.Fatal("first install enter unexpectedly started async install")
+		}
+		updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		m = updated.(model)
+		updated, _ = m.Update(cmd())
+		m = updated.(model)
+		if got := m.statusTone; got != toneError {
+			t.Fatalf("statusTone = %q, want error", got)
+		}
+		if !strings.Contains(m.statusBody, "Run lore login") {
+			t.Fatalf("statusBody = %q, want login remediation", m.statusBody)
+		}
+	})
+}
+
+func TestInstallTargetSelectionListsOnlyPiAsSelectable(t *testing.T) {
+	m := newModel(cli.InteractiveActions{})
+	for i := 0; i < 4; i++ {
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		m = updated.(model)
+	}
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(model)
-	if got := m.statusTitle; got != "Install" {
-		t.Fatalf("statusTitle = %q, want Install", got)
+	if !strings.Contains(m.statusBody, "Only Pi is selectable in this slice.") {
+		t.Fatalf("statusBody = %q, want Pi-only guidance", m.statusBody)
 	}
-	if !strings.Contains(m.statusBody, "out of scope") && !strings.Contains(m.statusBody, "Coming soon") {
-		t.Fatalf("statusBody = %q, want coming soon copy", m.statusBody)
+	if strings.Contains(m.statusBody, "Claude Code — Recommended") {
+		t.Fatalf("statusBody = %q, did not expect non-Pi targets to be marked recommended", m.statusBody)
 	}
 }
 

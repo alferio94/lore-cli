@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/alferio94/lore-cli/internal/config"
 	"github.com/alferio94/lore-cli/internal/httpclient"
+	"github.com/alferio94/lore-cli/internal/install"
 	"github.com/alferio94/lore-cli/internal/output"
 )
 
@@ -42,21 +45,42 @@ type recallOptions struct {
 	JSONOutput bool
 }
 
+type apiRequestOptions struct {
+	JSONOutput bool
+	Method     string
+	Path       string
+	BodyJSON   string
+}
+
+type authConfigError struct {
+	Code    string
+	Message string
+}
+
+func (e *authConfigError) Error() string {
+	if e == nil {
+		return "saved login config is unavailable"
+	}
+	return e.Message
+}
+
 // InteractiveActions exposes reusable command behavior for the TUI.
 type InteractiveActions struct {
-	Login  func(ctx context.Context, serverURL, token string) (ActionMessage, error)
-	Logout func(ctx context.Context) (ActionMessage, error)
-	Status func(ctx context.Context) ActionReport
-	Doctor func(ctx context.Context) ActionReport
+	Login   func(ctx context.Context, serverURL, token string) (ActionMessage, error)
+	Logout  func(ctx context.Context) (ActionMessage, error)
+	Status  func(ctx context.Context) ActionReport
+	Doctor  func(ctx context.Context) ActionReport
+	Install func(ctx context.Context) ActionReport
 }
 
 // InteractiveActions returns the shared action set used by the CLI and future TUI.
 func (a *App) InteractiveActions() InteractiveActions {
 	return InteractiveActions{
-		Login:  a.loginAction,
-		Logout: a.logoutAction,
-		Status: a.statusAction,
-		Doctor: a.doctorAction,
+		Login:   a.loginAction,
+		Logout:  a.logoutAction,
+		Status:  a.statusAction,
+		Doctor:  a.doctorAction,
+		Install: a.installAction,
 	}
 }
 
@@ -147,21 +171,82 @@ func (a *App) runRecall(args recallOptions) error {
 }
 
 func (a *App) loadAuthenticatedClient() (httpclient.Client, config.Config, error) {
-	cfg, err := a.Store.Load()
+	cfg, err := a.loadSavedAuthConfig()
 	if err != nil {
-		if errors.Is(err, config.ErrNotFound) {
-			return nil, config.Config{}, errors.New("no saved login config; run lore login --server <url> --token <token>")
-		}
-		return nil, config.Config{}, errors.New("saved login config could not be read; inspect or remove the local config file and run lore login again")
-	}
-	if strings.TrimSpace(cfg.ServerURL) == "" || strings.TrimSpace(cfg.APIToken) == "" {
-		return nil, config.Config{}, errors.New("saved login config is incomplete; run lore login --server <url> --token <token>")
+		return nil, config.Config{}, err
 	}
 	client, err := a.ClientFactory(cfg.ServerURL)
 	if err != nil {
 		return nil, config.Config{}, err
 	}
 	return client, cfg, nil
+}
+
+func (a *App) loadSavedAuthConfig() (config.Config, error) {
+	cfg, err := a.Store.Load()
+	if err != nil {
+		if errors.Is(err, config.ErrNotFound) {
+			return config.Config{}, &authConfigError{Code: "missing_config", Message: "no saved login config; run lore login --server <url> --token <token>"}
+		}
+		return config.Config{}, &authConfigError{Code: "invalid_config", Message: "saved login config could not be read; inspect or remove the local config file and run lore login again"}
+	}
+	if strings.TrimSpace(cfg.ServerURL) == "" || strings.TrimSpace(cfg.APIToken) == "" {
+		return config.Config{}, &authConfigError{Code: "incomplete_config", Message: "saved login config is incomplete; run lore login --server <url> --token <token>"}
+	}
+	return cfg, nil
+}
+
+func (a *App) runAPIRequest(args apiRequestOptions) int {
+	body := json.RawMessage(strings.TrimSpace(args.BodyJSON))
+	if !args.JSONOutput {
+		return a.writeBrokerError(2, 0, "invalid_request", "lore api request requires --json", "")
+	}
+	if _, err := httpclient.ValidateBrokerRequest(strings.ToUpper(strings.TrimSpace(args.Method)), strings.TrimSpace(args.Path), body); err != nil {
+		return a.writeBrokerError(2, 400, "invalid_request", err.Error(), "")
+	}
+
+	client, cfg, err := a.loadAuthenticatedClient()
+	if err != nil {
+		var configErr *authConfigError
+		if errors.As(err, &configErr) {
+			return a.writeBrokerError(3, 0, configErr.Code, configErr.Message, "")
+		}
+		return a.writeBrokerError(6, 0, "internal_error", "failed to initialize authenticated client", "")
+	}
+
+	result, err := client.RequestJSON(context.Background(), strings.ToUpper(strings.TrimSpace(args.Method)), strings.TrimSpace(args.Path), cfg.APIToken, body)
+	if err != nil {
+		return a.writeBrokerRequestError(err)
+	}
+	if err := writeJSON(a.Stdout, map[string]any{"ok": true, "status": result.StatusCode, "request_id": result.RequestID, "data": json.RawMessage(result.Data)}); err != nil {
+		return a.writeBrokerError(6, 0, "internal_error", "failed to encode broker response", "")
+	}
+	return 0
+}
+
+func (a *App) writeBrokerRequestError(err error) int {
+	var unauthorized *httpclient.UnauthorizedError
+	if errors.As(err, &unauthorized) {
+		return a.writeBrokerError(4, unauthorized.StatusCode, unauthorized.Code, unauthorized.Message, unauthorized.RequestID)
+	}
+	var apiErr *httpclient.APIError
+	if errors.As(err, &apiErr) {
+		code := apiErr.Code
+		if code == "" {
+			code = "remote_error"
+		}
+		return a.writeBrokerError(5, apiErr.StatusCode, code, apiErr.Message, apiErr.RequestID)
+	}
+	var networkErr *httpclient.NetworkError
+	if errors.As(err, &networkErr) {
+		return a.writeBrokerError(5, 0, "network_error", "network request failed", "")
+	}
+	return a.writeBrokerError(2, 400, "invalid_request", err.Error(), "")
+}
+
+func (a *App) writeBrokerError(exitCode, status int, code, message, requestID string) int {
+	_ = writeJSON(a.Stdout, map[string]any{"ok": false, "status": status, "code": code, "message": message, "request_id": requestID})
+	return exitCode
 }
 
 func parseMetadataJSON(raw string) (map[string]any, error) {
@@ -194,6 +279,68 @@ func (a *App) statusAction(ctx context.Context) ActionReport {
 func (a *App) doctorAction(ctx context.Context) ActionReport {
 	checks, exitCode := a.collectChecks(ctx, true)
 	return ActionReport{Title: "Lore doctor", Checks: checks, ExitCode: exitCode}
+}
+
+func (a *App) installAction(ctx context.Context) ActionReport {
+	service := install.Service{Store: a.Store, ClientFactory: install.ClientFactory(a.ClientFactory)}
+	report := ActionReport{Title: "Lore install"}
+	preflight := service.Preflight(ctx)
+	report.Checks = append(report.Checks, preflight.Checks...)
+	if !preflight.CanContinue {
+		report.ExitCode = 1
+		return report
+	}
+
+	cfg, err := a.Store.Load()
+	if err != nil {
+		report.Checks = append(report.Checks, output.Check{Name: "install", Status: output.StatusFail, Detail: "saved login state changed before install could start", Action: "Run lore login again and retry lore install."})
+		report.ExitCode = 1
+		return report
+	}
+
+	homeDir, err := a.resolveUserHomeDir()
+	if err != nil {
+		report.Checks = append(report.Checks, output.Check{Name: "install", Status: output.StatusFail, Detail: err.Error(), Action: "Retry after HOME can be resolved for the current user."})
+		report.ExitCode = 1
+		return report
+	}
+	binaryPath, err := a.resolveExecutablePath()
+	if err != nil {
+		report.Checks = append(report.Checks, output.Check{Name: "install", Status: output.StatusFail, Detail: err.Error(), Action: "Retry from a normal Lore CLI binary context so the managed Pi manifest can record the CLI path."})
+		report.ExitCode = 1
+		return report
+	}
+	configPath, err := a.Store.Path()
+	if err != nil {
+		report.Checks = append(report.Checks, output.Check{Name: "install", Status: output.StatusFail, Detail: err.Error(), Action: "Fix the local config directory permissions or override LORE_CONFIG_DIR."})
+		report.ExitCode = 1
+		return report
+	}
+
+	result, err := service.InstallPi(install.PiInstallRequest{
+		HomeDir:        homeDir,
+		ServerURL:      preflight.ServerURL,
+		LoreBinaryPath: binaryPath,
+		LoreConfigDir:  filepath.Dir(configPath),
+		LoreCLIVersion: a.BuildInfo.Normalized().Version,
+		SavedToken:     cfg.APIToken,
+	})
+	if err != nil {
+		report.Checks = append(report.Checks, output.Check{Name: "install", Status: output.StatusFail, Detail: err.Error(), Action: "Inspect the Pi runtime directory and rerun lore install after fixing the reported issue."})
+		report.ExitCode = 1
+		return report
+	}
+
+	status := output.StatusOK
+	if len(result.Summary.Failed) > 0 {
+		status = output.StatusFail
+		report.ExitCode = 1
+	}
+	report.Checks = append(report.Checks,
+		output.Check{Name: "install", Status: status, Detail: formatInstallSummary(result)},
+		output.Check{Name: "manifest", Status: output.StatusOK, Detail: fmt.Sprintf("verified %s auth_mode=%s managed_files=%d", result.Layout.ManifestPath, result.Manifest.AuthMode, len(result.Manifest.ManagedFiles))},
+	)
+	return report
 }
 
 func (a *App) collectChecks(ctx context.Context, includePi bool) ([]output.Check, int) {
@@ -267,6 +414,28 @@ func (a *App) collectChecks(ctx context.Context, includePi bool) ([]output.Check
 	}
 
 	return checks, exitCode
+}
+
+func formatInstallSummary(result install.PiInstallResult) string {
+	summary := fmt.Sprintf("target=%s created=%d updated=%d unchanged=%d backed_up=%d failed=%d", result.Manifest.Target, len(result.Summary.Created), len(result.Summary.Updated), len(result.Summary.Unchanged), len(result.Summary.BackedUp), len(result.Summary.Failed))
+	if len(result.Summary.Failed) == 0 {
+		return summary
+	}
+	return fmt.Sprintf("%s findings=%s", summary, strings.Join(result.Summary.Failed, "; "))
+}
+
+func (a *App) resolveUserHomeDir() (string, error) {
+	if a.UserHomeDir != nil {
+		return a.UserHomeDir()
+	}
+	return os.UserHomeDir()
+}
+
+func (a *App) resolveExecutablePath() (string, error) {
+	if a.ExecutablePath != nil {
+		return a.ExecutablePath()
+	}
+	return os.Executable()
 }
 
 func (a *App) piCheck() output.Check {

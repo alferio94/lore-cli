@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 
@@ -28,13 +29,15 @@ type ClientFactory func(baseURL string) (httpclient.Client, error)
 
 // App wires command IO and dependencies.
 type App struct {
-	Stdout        io.Writer
-	Stderr        io.Writer
-	Store         ConfigStore
-	ClientFactory ClientFactory
-	LookPath      func(string) (string, error)
-	TUIRunner     func(context.Context, InteractiveActions) error
-	BuildInfo     version.Info
+	Stdout         io.Writer
+	Stderr         io.Writer
+	Store          ConfigStore
+	ClientFactory  ClientFactory
+	LookPath       func(string) (string, error)
+	UserHomeDir    func() (string, error)
+	ExecutablePath func() (string, error)
+	TUIRunner      func(context.Context, InteractiveActions) error
+	BuildInfo      version.Info
 }
 
 // New returns a CLI app with production defaults.
@@ -46,8 +49,10 @@ func New(configDir string, stdout, stderr io.Writer, buildInfo version.Info) *Ap
 		ClientFactory: func(baseURL string) (httpclient.Client, error) {
 			return httpclient.New(baseURL, 0)
 		},
-		LookPath:  exec.LookPath,
-		BuildInfo: buildInfo.Normalized(),
+		LookPath:       exec.LookPath,
+		UserHomeDir:    os.UserHomeDir,
+		ExecutablePath: os.Executable,
+		BuildInfo:      buildInfo.Normalized(),
 	}
 }
 
@@ -61,6 +66,12 @@ func (a *App) Run(args []string) int {
 	}
 	if a.LookPath == nil {
 		a.LookPath = exec.LookPath
+	}
+	if a.UserHomeDir == nil {
+		a.UserHomeDir = os.UserHomeDir
+	}
+	if a.ExecutablePath == nil {
+		a.ExecutablePath = os.Executable
 	}
 	if len(args) > 0 {
 		if isHelpArg(args[0]) {
@@ -120,6 +131,10 @@ func (a *App) Run(args []string) int {
 		return a.runLogout(actions, args[1:])
 	case "doctor":
 		return a.runDoctor(actions, args[1:])
+	case "install":
+		return a.runInstall(actions, args[1:])
+	case "api":
+		return a.runAPI(actions, args[1:])
 	case "remember":
 		return a.parseRemember(args[1:])
 	case "recall":
@@ -229,6 +244,47 @@ func (a *App) runDoctor(actions InteractiveActions, args []string) int {
 	report := actions.Doctor(context.Background())
 	fmt.Fprint(a.Stdout, output.RenderChecks(report.Title, report.Checks))
 	return report.ExitCode
+}
+
+func (a *App) runInstall(actions InteractiveActions, args []string) int {
+	fs := newFlagSet("install", a.Stderr)
+	fs.Usage = func() {
+		fmt.Fprintln(a.Stderr, "Usage: lore install")
+		fmt.Fprintln(a.Stderr, "Install the Pi-first managed runtime using saved Lore login state.")
+		fmt.Fprintln(a.Stderr, "Healthy saved config is reused automatically; Claude Code, OpenCode, Codex, and Antigravity remain Coming soon.")
+	}
+	if err := fs.Parse(args); err != nil {
+		return 1
+	}
+	if fs.NArg() != 0 {
+		fs.Usage()
+		return 1
+	}
+
+	report := actions.Install(context.Background())
+	fmt.Fprint(a.Stdout, output.RenderChecks(report.Title, report.Checks))
+	return report.ExitCode
+}
+
+func (a *App) runAPI(_ InteractiveActions, args []string) int {
+	if len(args) == 0 || args[0] != "request" {
+		fmt.Fprintln(a.Stderr, "Usage: lore api request --json --method <METHOD> --path <PATH> [--body-json <JSON>]")
+		return 1
+	}
+
+	fs := flag.NewFlagSet("api request", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	jsonOutput := fs.Bool("json", false, "Print machine-readable JSON output")
+	method := fs.String("method", "", "HTTP method")
+	path := fs.String("path", "", "Relative API path")
+	bodyJSON := fs.String("body-json", "", "Optional JSON object/array request body")
+	if err := fs.Parse(args[1:]); err != nil {
+		return a.writeBrokerError(2, 400, "invalid_request", "invalid lore api request arguments", "")
+	}
+	if fs.NArg() != 0 {
+		return a.writeBrokerError(2, 400, "invalid_request", "unexpected positional arguments", "")
+	}
+	return a.runAPIRequest(apiRequestOptions{JSONOutput: *jsonOutput, Method: *method, Path: *path, BodyJSON: *bodyJSON})
 }
 
 func (a *App) parseRemember(args []string) int {
@@ -347,7 +403,9 @@ func (a *App) printRootHelpTo(w io.Writer) {
 	fmt.Fprintln(w, "  status    Show config, health, readiness, and auth status")
 	fmt.Fprintln(w, "  logout    Remove local config only; no remote revocation")
 	fmt.Fprintln(w, "  doctor    Run actionable diagnostics, including optional Pi availability")
+	fmt.Fprintln(w, "  install   Install the Pi-first managed runtime using saved Lore auth")
 	fmt.Fprintln(w, "  remember  Create one memory via authenticated REST")
+	fmt.Fprintln(w, "  api request  Hidden machine broker for allowlisted authenticated API calls")
 	fmt.Fprintln(w, "  recall    List memories by explicit authenticated filters")
 	fmt.Fprintln(w, "  version   Print build metadata for humans or scripts")
 	fmt.Fprintln(w, "")

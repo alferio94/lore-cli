@@ -1,0 +1,13 @@
+{
+  "lore": {
+    "server_url": "{{LORE_SERVER_URL}}",
+    "auth_mode": "cli-request",
+    "binary_path": "{{LORE_BINARY_PATH}}",
+    "config_dir": "{{LORE_CONFIG_DIR}}",
+    "managed_extensions": [
+      "extensions/lore-memory.ts",
+      "extensions/lore-delegation.ts",
+      "extensions/lore-footer.ts"
+    ]
+  }
+}

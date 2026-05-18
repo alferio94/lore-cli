@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -144,6 +145,27 @@ func TestStatusAndDoctorActionsPreserveDiagnosticSemantics(t *testing.T) {
 	}
 	assertCheckNames(t, doctor.Checks, "config", "healthz", "readyz", "auth", "pi")
 	assertNoTokenLeak(t, output.RenderChecks(doctor.Title, doctor.Checks), "", "secret-token")
+}
+
+func TestRunAPIRequestUsesSavedAuthAndReturnsSuccessEnvelope(t *testing.T) {
+	store := &fakeStore{path: "/tmp/lore/config.json", loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token"}}
+	client := &fakeClient{requestJSONResult: httpclient.RequestJSONResult{StatusCode: 200, RequestID: "req-context", Data: json.RawMessage(`{"project":"lore-cli"}`)}}
+	app, stdout, _ := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
+
+	exitCode := app.runAPIRequest(apiRequestOptions{JSONOutput: true, Method: "get", Path: "/v1/context?project=lore-cli"})
+	if exitCode != 0 {
+		t.Fatalf("runAPIRequest() exitCode = %d, want 0", exitCode)
+	}
+	if client.requestJSONToken != "secret-token" || client.requestJSONMethod != "GET" {
+		t.Fatalf("requestJSON call = token=%q method=%q", client.requestJSONToken, client.requestJSONMethod)
+	}
+	if client.requestJSONPath != "/v1/context?project=lore-cli" {
+		t.Fatalf("requestJSON path = %q", client.requestJSONPath)
+	}
+	if got := stdout.String(); !strings.Contains(got, `"ok":true`) || !strings.Contains(got, `"request_id":"req-context"`) {
+		t.Fatalf("stdout = %q, want success envelope", got)
+	}
+	assertNoTokenLeak(t, stdout.String(), "", "secret-token")
 }
 
 func assertCheckNames(t *testing.T, checks []output.Check, want ...string) {
