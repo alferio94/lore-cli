@@ -1,8 +1,16 @@
 # Lore CLI
 
-Thin Go CLI MVP for Lore server authentication and diagnostics.
+Thin Go CLI MVP for Lore server authentication, diagnostics, and a default interactive TUI.
 
-## MVP commands
+## Interactive entrypoint
+- `lore` starts the interactive TUI by default.
+- `lore tui` starts the same interactive TUI explicitly.
+- `lore --help` stays non-interactive.
+- Use explicit subcommands for automation and scripts.
+
+The root TUI offers `Status`, `Login`, `Logout`, `Doctor`, `Quit`, and a disabled `Install` placeholder marked coming soon. Runtime-agent installation and version/release flows remain deferred and are intentionally out of scope in this change.
+
+## Explicit commands
 - `lore login --server https://example.test --token "$LORE_API_TOKEN"`
 - `lore status`
 - `lore logout`

@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -32,6 +31,7 @@ type App struct {
 	Store         ConfigStore
 	ClientFactory ClientFactory
 	LookPath      func(string) (string, error)
+	TUIRunner     func(context.Context, InteractiveActions) error
 }
 
 // New returns a CLI app with production defaults.
@@ -66,21 +66,47 @@ func (a *App) Run(args []string) int {
 	if a.LookPath == nil {
 		a.LookPath = exec.LookPath
 	}
-
-	if len(args) == 0 || isHelpArg(args[0]) {
+	if len(args) == 0 {
+		if a.TUIRunner == nil {
+			fmt.Fprintln(a.Stderr, "internal error: TUI runner is not configured")
+			return 1
+		}
+		if err := a.TUIRunner(context.Background(), a.InteractiveActions()); err != nil {
+			fmt.Fprintf(a.Stderr, "failed to start interactive UI: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+	if isHelpArg(args[0]) {
 		a.printRootHelp()
 		return 0
 	}
 
+	actions := a.InteractiveActions()
+
 	switch args[0] {
+	case "tui":
+		if len(args) != 1 {
+			fmt.Fprintln(a.Stderr, "Usage: lore tui")
+			return 1
+		}
+		if a.TUIRunner == nil {
+			fmt.Fprintln(a.Stderr, "internal error: TUI runner is not configured")
+			return 1
+		}
+		if err := a.TUIRunner(context.Background(), actions); err != nil {
+			fmt.Fprintf(a.Stderr, "failed to start interactive UI: %v\n", err)
+			return 1
+		}
+		return 0
 	case "login":
-		return a.runLogin(args[1:])
+		return a.runLogin(actions, args[1:])
 	case "status":
-		return a.runStatus(args[1:])
+		return a.runStatus(actions, args[1:])
 	case "logout":
-		return a.runLogout(args[1:])
+		return a.runLogout(actions, args[1:])
 	case "doctor":
-		return a.runDoctor(args[1:])
+		return a.runDoctor(actions, args[1:])
 	case "help":
 		a.printRootHelp()
 		return 0
@@ -91,7 +117,7 @@ func (a *App) Run(args []string) int {
 	}
 }
 
-func (a *App) runLogin(args []string) int {
+func (a *App) runLogin(actions InteractiveActions, args []string) int {
 	fs := newFlagSet("login", a.Stderr)
 	server := fs.String("server", "", "Lore server base URL")
 	token := fs.String("token", "", "User API token")
@@ -115,28 +141,25 @@ func (a *App) runLogin(args []string) int {
 		return 1
 	}
 
-	client, err := a.ClientFactory(rawServer)
+	result, err := actions.Login(context.Background(), rawServer, rawToken)
 	if err != nil {
-		fmt.Fprintf(a.Stderr, "login failed: %v\n", err)
-		return 1
-	}
-	subject, err := client.Me(context.Background(), rawToken)
-	if err != nil {
-		fmt.Fprintf(a.Stderr, "login failed: %s\n", explainLoginError(err))
-		return 1
-	}
-
-	if err := a.Store.Save(config.Config{ServerURL: rawServer, APIToken: rawToken}); err != nil {
+		if rawServer == "" || rawToken == "" {
+			fs.Usage()
+			return 1
+		}
+		if _, ok := err.(*httpclient.UnauthorizedError); ok {
+			fmt.Fprintf(a.Stderr, "login failed: %s\n", explainLoginError(err))
+			return 1
+		}
 		fmt.Fprintf(a.Stderr, "login failed: %v\n", err)
 		return 1
 	}
 
-	path, _ := a.Store.Path()
-	fmt.Fprintln(a.Stdout, output.FormatLoginSuccess(subject, path))
+	fmt.Fprintln(a.Stdout, result.Summary)
 	return 0
 }
 
-func (a *App) runStatus(args []string) int {
+func (a *App) runStatus(actions InteractiveActions, args []string) int {
 	fs := newFlagSet("status", a.Stderr)
 	fs.Usage = func() {
 		fmt.Fprintln(a.Stderr, "Usage: lore status")
@@ -150,12 +173,12 @@ func (a *App) runStatus(args []string) int {
 		return 1
 	}
 
-	checks, exitCode := a.collectChecks(false)
-	fmt.Fprint(a.Stdout, output.RenderChecks("Lore status", checks))
-	return exitCode
+	report := actions.Status(context.Background())
+	fmt.Fprint(a.Stdout, output.RenderChecks(report.Title, report.Checks))
+	return report.ExitCode
 }
 
-func (a *App) runLogout(args []string) int {
+func (a *App) runLogout(actions InteractiveActions, args []string) int {
 	fs := newFlagSet("logout", a.Stderr)
 	fs.Usage = func() {
 		fmt.Fprintln(a.Stderr, "Usage: lore logout")
@@ -169,26 +192,17 @@ func (a *App) runLogout(args []string) int {
 		return 1
 	}
 
-	hadConfig := true
-	if _, err := a.Store.Load(); err != nil {
-		if errors.Is(err, config.ErrNotFound) {
-			hadConfig = false
-		} else {
-			fmt.Fprintf(a.Stderr, "logout failed: %v\n", err)
-			return 1
-		}
-	}
-	if err := a.Store.Delete(); err != nil {
+	result, err := actions.Logout(context.Background())
+	if err != nil {
 		fmt.Fprintf(a.Stderr, "logout failed: %v\n", err)
 		return 1
 	}
 
-	path, _ := a.Store.Path()
-	fmt.Fprintln(a.Stdout, output.FormatLogoutResult(path, hadConfig))
+	fmt.Fprintln(a.Stdout, result.Summary)
 	return 0
 }
 
-func (a *App) runDoctor(args []string) int {
+func (a *App) runDoctor(actions InteractiveActions, args []string) int {
 	fs := newFlagSet("doctor", a.Stderr)
 	fs.Usage = func() {
 		fmt.Fprintln(a.Stderr, "Usage: lore doctor")
@@ -202,116 +216,9 @@ func (a *App) runDoctor(args []string) int {
 		return 1
 	}
 
-	checks, exitCode := a.collectChecks(true)
-	fmt.Fprint(a.Stdout, output.RenderChecks("Lore doctor", checks))
-	return exitCode
-}
-
-func (a *App) collectChecks(includePi bool) ([]output.Check, int) {
-	path, pathErr := a.Store.Path()
-	if pathErr != nil {
-		checks := []output.Check{{Name: "config-path", Status: output.StatusFail, Detail: pathErr.Error(), Action: "Fix the local config directory permissions or override LORE_CONFIG_DIR."}}
-		if includePi {
-			checks = append(checks, a.piCheck())
-		}
-		return checks, 1
-	}
-
-	cfg, err := a.Store.Load()
-	if err != nil {
-		if errors.Is(err, config.ErrNotFound) {
-			checks := []output.Check{{Name: "config", Status: output.StatusWarn, Detail: fmt.Sprintf("no-config at %s", path), Action: "Run lore login --server <url> --token <token>."}}
-			if includePi {
-				checks = append(checks, a.piCheck())
-			}
-			return checks, 1
-		}
-		checks := []output.Check{{Name: "config", Status: output.StatusFail, Detail: err.Error(), Action: "Inspect or remove the local config file and log in again."}}
-		if includePi {
-			checks = append(checks, a.piCheck())
-		}
-		return checks, 1
-	}
-
-	checks := []output.Check{{Name: "config", Status: output.StatusOK, Detail: fmt.Sprintf("configured server=%s token=%s path=%s", cfg.ServerURL, config.RedactToken(cfg.APIToken), path)}}
-
-	client, err := a.ClientFactory(cfg.ServerURL)
-	if err != nil {
-		checks = append(checks, output.Check{Name: "server-url", Status: output.StatusFail, Detail: err.Error(), Action: "Fix the server URL with lore login --server <http(s)://host> --token <token>."})
-		if includePi {
-			checks = append(checks, a.piCheck())
-		}
-		return checks, 1
-	}
-
-	exitCode := 0
-	if err := client.Health(context.Background()); err != nil {
-		checks = append(checks, output.Check{Name: "healthz", Status: output.StatusFail, Detail: explainEndpointError(err), Action: "Check server reachability and that the Lore API is running."})
-		exitCode = 1
-	} else {
-		checks = append(checks, output.Check{Name: "healthz", Status: output.StatusOK, Detail: "server is live"})
-	}
-
-	if err := client.Ready(context.Background()); err != nil {
-		checks = append(checks, output.Check{Name: "readyz", Status: output.StatusFail, Detail: explainEndpointError(err), Action: "Wait for the server to become ready or inspect server logs."})
-		exitCode = 1
-	} else {
-		checks = append(checks, output.Check{Name: "readyz", Status: output.StatusOK, Detail: "server is ready"})
-	}
-
-	if strings.TrimSpace(cfg.APIToken) == "" {
-		checks = append(checks, output.Check{Name: "auth", Status: output.StatusFail, Detail: "missing API token", Action: "Run lore login again with a valid normal user API token."})
-		exitCode = 1
-	} else if subject, err := client.Me(context.Background(), cfg.APIToken); err != nil {
-		checks = append(checks, output.Check{Name: "auth", Status: output.StatusFail, Detail: explainLoginError(err), Action: "Obtain a valid normal user API token and run lore login again."})
-		exitCode = 1
-	} else {
-		checks = append(checks, output.Check{Name: "auth", Status: output.StatusOK, Detail: output.FormatSubject(subject)})
-	}
-
-	if includePi {
-		pi := a.piCheck()
-		checks = append(checks, pi)
-		if pi.Status == output.StatusWarn && exitCode == 0 {
-			exitCode = 1
-		}
-	}
-
-	return checks, exitCode
-}
-
-func (a *App) piCheck() output.Check {
-	if _, err := a.LookPath("pi"); err != nil {
-		return output.Check{Name: "pi", Status: output.StatusWarn, Detail: "pi binary not found on PATH", Action: "Install Pi or add it to PATH if Pi automation is expected on this machine."}
-	}
-	return output.Check{Name: "pi", Status: output.StatusOK, Detail: "pi binary available on PATH"}
-}
-
-func explainLoginError(err error) string {
-	var unauthorized *httpclient.UnauthorizedError
-	if errors.As(err, &unauthorized) {
-		return "normal user API token required; /v1/me rejected the provided token"
-	}
-	return explainEndpointError(err)
-}
-
-func explainEndpointError(err error) string {
-	var networkErr *httpclient.NetworkError
-	if errors.As(err, &networkErr) {
-		return "network request failed"
-	}
-	var readinessErr *httpclient.ReadinessError
-	if errors.As(err, &readinessErr) {
-		return readinessErr.Error()
-	}
-	var apiErr *httpclient.APIError
-	if errors.As(err, &apiErr) {
-		if apiErr.RequestID != "" {
-			return fmt.Sprintf("%s (request_id=%s)", apiErr.Message, apiErr.RequestID)
-		}
-		return apiErr.Message
-	}
-	return err.Error()
+	report := actions.Doctor(context.Background())
+	fmt.Fprint(a.Stdout, output.RenderChecks(report.Title, report.Checks))
+	return report.ExitCode
 }
 
 func newFlagSet(name string, stderr io.Writer) *flag.FlagSet {
@@ -332,11 +239,15 @@ func (a *App) printRootHelpTo(w io.Writer) {
 	fmt.Fprintln(w, "Lore CLI")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "Usage:")
+	fmt.Fprintln(w, "  lore                  Start the interactive TUI")
 	fmt.Fprintln(w, "  lore <command> [flags]")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "Commands:")
+	fmt.Fprintln(w, "  tui     Start the interactive TUI explicitly")
 	fmt.Fprintln(w, "  login   Validate a user API token with /v1/me and save local config")
 	fmt.Fprintln(w, "  status  Show config, health, readiness, and auth status")
 	fmt.Fprintln(w, "  logout  Remove local config only; no remote revocation")
 	fmt.Fprintln(w, "  doctor  Run actionable diagnostics, including optional Pi availability")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "Use explicit subcommands for automation and scripts.")
 }

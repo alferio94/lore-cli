@@ -228,6 +228,55 @@ func TestLogoutIsIdempotentAndLocalOnly(t *testing.T) {
 	}
 }
 
+func TestZeroArgAndExplicitTUIDispatch(t *testing.T) {
+	store := &fakeStore{path: "/tmp/lore/config.json", loadErr: config.ErrNotFound}
+	app, stdout, stderr := newTestApp(store, nil)
+
+	calls := 0
+	app.TUIRunner = func(_ context.Context, actions InteractiveActions) error {
+		calls++
+		if actions.Login == nil || actions.Status == nil || actions.Logout == nil || actions.Doctor == nil {
+			t.Fatalf("interactive actions were not wired")
+		}
+		return nil
+	}
+
+	if exitCode := app.Run(nil); exitCode != 0 {
+		t.Fatalf("zero-arg exitCode = %d, want 0, stderr=%q", exitCode, stderr.String())
+	}
+	if exitCode := app.Run([]string{"tui"}); exitCode != 0 {
+		t.Fatalf("explicit tui exitCode = %d, want 0, stderr=%q", exitCode, stderr.String())
+	}
+	if calls != 2 {
+		t.Fatalf("TUIRunner calls = %d, want 2", calls)
+	}
+	if stdout.Len() != 0 || stderr.Len() != 0 {
+		t.Fatalf("unexpected output: stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+}
+
+func TestTUIRunnerFailuresAndUsage(t *testing.T) {
+	store := &fakeStore{path: "/tmp/lore/config.json", loadErr: config.ErrNotFound}
+	app, _, stderr := newTestApp(store, nil)
+	app.TUIRunner = func(context.Context, InteractiveActions) error { return errors.New("tty unavailable") }
+
+	if exitCode := app.Run(nil); exitCode != 1 {
+		t.Fatalf("zero-arg exitCode = %d, want 1", exitCode)
+	}
+	if !strings.Contains(stderr.String(), "failed to start interactive UI") {
+		t.Fatalf("stderr = %q, want interactive UI failure", stderr.String())
+	}
+
+	stderr.Reset()
+	app.TUIRunner = func(context.Context, InteractiveActions) error { return nil }
+	if exitCode := app.Run([]string{"tui", "extra"}); exitCode != 1 {
+		t.Fatalf("tui extra exitCode = %d, want 1", exitCode)
+	}
+	if !strings.Contains(stderr.String(), "Usage: lore tui") {
+		t.Fatalf("stderr = %q, want tui usage", stderr.String())
+	}
+}
+
 func TestHelpAndUnknownCommand(t *testing.T) {
 	store := &fakeStore{path: "/tmp/lore/config.json", loadErr: config.ErrNotFound}
 	app, stdout, stderr := newTestApp(store, nil)
