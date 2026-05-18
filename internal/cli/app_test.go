@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/alferio94/lore-cli/internal/config"
 	"github.com/alferio94/lore-cli/internal/httpclient"
+	"github.com/alferio94/lore-cli/internal/version"
 )
 
 func TestLoginSavesValidatedSession(t *testing.T) {
@@ -228,6 +230,67 @@ func TestLogoutIsIdempotentAndLocalOnly(t *testing.T) {
 	}
 }
 
+func TestVersionDefaultOutput(t *testing.T) {
+	app, stdout, stderr := newVersionOnlyApp(version.Info{})
+
+	exitCode := app.Run([]string{"version"})
+	if exitCode != 0 {
+		t.Fatalf("Run() exitCode = %d, want 0, stderr=%q", exitCode, stderr.String())
+	}
+	if got, want := stdout.String(), "lore version dev commit=none buildDate=unknown\n"; got != want {
+		t.Fatalf("stdout = %q, want %q", got, want)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+}
+
+func TestVersionJSONOutput(t *testing.T) {
+	app, stdout, stderr := newVersionOnlyApp(version.Info{Version: "v1.2.3", Commit: "abc1234", BuildDate: "2026-05-17T12:34:56Z"})
+
+	exitCode := app.Run([]string{"version", "--json"})
+	if exitCode != 0 {
+		t.Fatalf("Run() exitCode = %d, want 0, stderr=%q", exitCode, stderr.String())
+	}
+
+	var got map[string]string
+	if err := json.Unmarshal([]byte(stdout.String()), &got); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v, stdout=%q", err, stdout.String())
+	}
+	if got["version"] != "v1.2.3" || got["commit"] != "abc1234" || got["buildDate"] != "2026-05-17T12:34:56Z" {
+		t.Fatalf("JSON output = %#v", got)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+}
+
+func TestVersionRejectsExtraArgs(t *testing.T) {
+	app, _, stderr := newVersionOnlyApp(version.Info{})
+
+	exitCode := app.Run([]string{"version", "extra"})
+	if exitCode != 1 {
+		t.Fatalf("Run() exitCode = %d, want 1", exitCode)
+	}
+	if !strings.Contains(stderr.String(), "Usage: lore version [--json]") {
+		t.Fatalf("stderr = %q, want version usage", stderr.String())
+	}
+}
+
+func TestVersionRunsWithoutStoreOrNetworkDependencies(t *testing.T) {
+	stdout := &strings.Builder{}
+	stderr := &strings.Builder{}
+	app := &App{Stdout: stdout, Stderr: stderr, BuildInfo: version.Info{Version: "v9.9.9", Commit: "deadbeef", BuildDate: "2026-05-17T00:00:00Z"}}
+
+	exitCode := app.Run([]string{"version"})
+	if exitCode != 0 {
+		t.Fatalf("Run() exitCode = %d, want 0, stderr=%q", exitCode, stderr.String())
+	}
+	if got := stdout.String(); !strings.Contains(got, "v9.9.9") || !strings.Contains(got, "deadbeef") {
+		t.Fatalf("stdout = %q, want build metadata", got)
+	}
+}
+
 func TestZeroArgAndExplicitTUIDispatch(t *testing.T) {
 	store := &fakeStore{path: "/tmp/lore/config.json", loadErr: config.ErrNotFound}
 	app, stdout, stderr := newTestApp(store, nil)
@@ -284,7 +347,7 @@ func TestHelpAndUnknownCommand(t *testing.T) {
 	if exitCode := app.Run([]string{"--help"}); exitCode != 0 {
 		t.Fatalf("help exitCode = %d, want 0", exitCode)
 	}
-	if !strings.Contains(stdout.String(), "Commands:") {
+	if !strings.Contains(stdout.String(), "Commands:") || !strings.Contains(stdout.String(), "version") {
 		t.Fatalf("stdout = %q, want root help", stdout.String())
 	}
 
@@ -307,6 +370,12 @@ func newTestApp(store *fakeStore, factory ClientFactory) (*App, *strings.Builder
 		}
 	}
 	return &App{Stdout: stdout, Stderr: stderr, Store: store, ClientFactory: factory, LookPath: func(name string) (string, error) { return "/usr/bin/pi", nil }}, stdout, stderr
+}
+
+func newVersionOnlyApp(buildInfo version.Info) (*App, *strings.Builder, *strings.Builder) {
+	stdout := &strings.Builder{}
+	stderr := &strings.Builder{}
+	return &App{Stdout: stdout, Stderr: stderr, BuildInfo: buildInfo}, stdout, stderr
 }
 
 type fakeStore struct {

@@ -1,0 +1,131 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate semantic annotated tag
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "release tags must match vX.Y.Z; got $TAG" >&2
+            exit 1
+          fi
+          TYPE="$(git cat-file -t "$TAG")"
+          if [[ "$TYPE" != "tag" ]]; then
+            echo "release tags must be annotated; got object type $TYPE" >&2
+            exit 1
+          fi
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run test gate
+        run: go test ./...
+
+  build:
+    needs: validate
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build release archive
+        env:
+          CGO_ENABLED: 0
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          TAG: ${{ github.ref_name }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          ARCHIVE="lore-cli_${TAG}_${GOOS}_${GOARCH}.tar.gz"
+          BINARY_DIR="dist/${GOOS}_${GOARCH}"
+          mkdir -p "$BINARY_DIR"
+          go build -trimpath \
+            -ldflags "-X github.com/alferio94/lore-cli/internal/version.Version=${TAG} -X github.com/alferio94/lore-cli/internal/version.Commit=${COMMIT} -X github.com/alferio94/lore-cli/internal/version.BuildDate=${BUILD_DATE}" \
+            -o "$BINARY_DIR/lore" ./cmd/lore
+          tar -C "$BINARY_DIR" -czf "dist/${ARCHIVE}" lore
+
+      - name: Upload archive artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: archive-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download archives
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: archive-*
+          merge-multiple: true
+
+      - name: Generate checksums and verify asset set
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          mapfile -t archives < <(find . -maxdepth 1 -type f -name 'lore-cli_*.tar.gz' -print | sort)
+          if [[ ${#archives[@]} -ne 4 ]]; then
+            echo "expected 4 release archives, found ${#archives[@]}" >&2
+            printf '%s\n' "${archives[@]}" >&2
+            exit 1
+          fi
+          sha256sum "${archives[@]}" | sed 's# \./# #g' > SHA256SUMS
+          for archive in "${archives[@]}"; do
+            if ! grep -Fq " ${archive#./}" SHA256SUMS; then
+              echo "missing checksum for ${archive#./}" >&2
+              exit 1
+            fi
+          done
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/lore-cli_*.tar.gz
+            dist/SHA256SUMS
+          fail_on_unmatched_files: true
+          generate_release_notes: true

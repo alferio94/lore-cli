@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"github.com/alferio94/lore-cli/internal/config"
 	"github.com/alferio94/lore-cli/internal/httpclient"
 	"github.com/alferio94/lore-cli/internal/output"
+	"github.com/alferio94/lore-cli/internal/version"
 )
 
 // ConfigStore captures the config operations used by the CLI.
@@ -32,10 +34,11 @@ type App struct {
 	ClientFactory ClientFactory
 	LookPath      func(string) (string, error)
 	TUIRunner     func(context.Context, InteractiveActions) error
+	BuildInfo     version.Info
 }
 
 // New returns a CLI app with production defaults.
-func New(configDir string, stdout, stderr io.Writer) *App {
+func New(configDir string, stdout, stderr io.Writer, buildInfo version.Info) *App {
 	return &App{
 		Stdout: stdout,
 		Stderr: stderr,
@@ -43,7 +46,8 @@ func New(configDir string, stdout, stderr io.Writer) *App {
 		ClientFactory: func(baseURL string) (httpclient.Client, error) {
 			return httpclient.New(baseURL, 0)
 		},
-		LookPath: exec.LookPath,
+		LookPath:  exec.LookPath,
+		BuildInfo: buildInfo.Normalized(),
 	}
 }
 
@@ -55,6 +59,22 @@ func (a *App) Run(args []string) int {
 	if a.Stderr == nil {
 		a.Stderr = io.Discard
 	}
+	if a.LookPath == nil {
+		a.LookPath = exec.LookPath
+	}
+	if len(args) > 0 {
+		if isHelpArg(args[0]) {
+			a.printRootHelp()
+			return 0
+		}
+		if args[0] == "help" {
+			a.printRootHelp()
+			return 0
+		}
+		if args[0] == "version" {
+			return a.runVersion(args[1:])
+		}
+	}
 	if a.Store == nil {
 		fmt.Fprintln(a.Stderr, "internal error: config store is not configured")
 		return 1
@@ -62,9 +82,6 @@ func (a *App) Run(args []string) int {
 	if a.ClientFactory == nil {
 		fmt.Fprintln(a.Stderr, "internal error: client factory is not configured")
 		return 1
-	}
-	if a.LookPath == nil {
-		a.LookPath = exec.LookPath
 	}
 	if len(args) == 0 {
 		if a.TUIRunner == nil {
@@ -75,10 +92,6 @@ func (a *App) Run(args []string) int {
 			fmt.Fprintf(a.Stderr, "failed to start interactive UI: %v\n", err)
 			return 1
 		}
-		return 0
-	}
-	if isHelpArg(args[0]) {
-		a.printRootHelp()
 		return 0
 	}
 
@@ -107,9 +120,6 @@ func (a *App) Run(args []string) int {
 		return a.runLogout(actions, args[1:])
 	case "doctor":
 		return a.runDoctor(actions, args[1:])
-	case "help":
-		a.printRootHelp()
-		return 0
 	default:
 		fmt.Fprintf(a.Stderr, "unknown command: %s\n\n", args[0])
 		a.printRootHelpTo(a.Stderr)
@@ -221,6 +231,37 @@ func (a *App) runDoctor(actions InteractiveActions, args []string) int {
 	return report.ExitCode
 }
 
+func (a *App) runVersion(args []string) int {
+	fs := newFlagSet("version", a.Stderr)
+	jsonOutput := fs.Bool("json", false, "Print version metadata as JSON")
+	fs.Usage = func() {
+		fmt.Fprintln(a.Stderr, "Usage: lore version [--json]")
+		fmt.Fprintln(a.Stderr, "Print build metadata without requiring local config, auth, or network access.")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return 1
+	}
+	if fs.NArg() != 0 {
+		fs.Usage()
+		return 1
+	}
+
+	info := a.BuildInfo.Normalized()
+	if *jsonOutput {
+		encoder := json.NewEncoder(a.Stdout)
+		encoder.SetEscapeHTML(false)
+		if err := encoder.Encode(info); err != nil {
+			fmt.Fprintf(a.Stderr, "version output failed: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+
+	fmt.Fprintln(a.Stdout, info.String())
+	return 0
+}
+
 func newFlagSet(name string, stderr io.Writer) *flag.FlagSet {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -243,11 +284,12 @@ func (a *App) printRootHelpTo(w io.Writer) {
 	fmt.Fprintln(w, "  lore <command> [flags]")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "Commands:")
-	fmt.Fprintln(w, "  tui     Start the interactive TUI explicitly")
-	fmt.Fprintln(w, "  login   Validate a user API token with /v1/me and save local config")
-	fmt.Fprintln(w, "  status  Show config, health, readiness, and auth status")
-	fmt.Fprintln(w, "  logout  Remove local config only; no remote revocation")
-	fmt.Fprintln(w, "  doctor  Run actionable diagnostics, including optional Pi availability")
+	fmt.Fprintln(w, "  tui      Start the interactive TUI explicitly")
+	fmt.Fprintln(w, "  login    Validate a user API token with /v1/me and save local config")
+	fmt.Fprintln(w, "  status   Show config, health, readiness, and auth status")
+	fmt.Fprintln(w, "  logout   Remove local config only; no remote revocation")
+	fmt.Fprintln(w, "  doctor   Run actionable diagnostics, including optional Pi availability")
+	fmt.Fprintln(w, "  version  Print build metadata for humans or scripts")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "Use explicit subcommands for automation and scripts.")
 }
