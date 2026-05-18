@@ -1,6 +1,6 @@
 # Lore CLI
 
-Thin Go CLI for Lore server authentication, diagnostics, a default interactive TUI, and releaseable tagged binaries.
+Thin Go CLI for Lore server authentication, diagnostics, a default interactive TUI, and releaseable tagged binaries with first-party install scripts.
 
 ## Interactive entrypoint
 - `lore` starts the interactive TUI by default.
@@ -45,13 +45,49 @@ The current CLI stores one user API token in a local JSON config file with restr
 ## Releases
 
 ### Supported release matrix
-Tagged releases publish exactly these platform archives:
+Tagged releases publish exactly these platform archives plus installer scripts and `SHA256SUMS`:
 - `darwin/amd64`
 - `darwin/arm64`
 - `linux/amd64`
 - `linux/arm64`
 - `windows/amd64`
 - `windows/arm64`
+- `install.sh`
+- `install.ps1`
+
+### Recommended scripted install
+Pinned release asset URLs are the primary documented path.
+
+macOS/Linux:
+
+```sh
+curl -fsSL https://github.com/alferio94/lore-cli/releases/download/v1.2.3/install.sh | sh
+```
+
+Windows PowerShell:
+
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/alferio94/lore-cli/releases/download/v1.2.3/install.ps1 | iex"
+```
+
+Defaults:
+- macOS/Linux installs `lore` to `~/.local/bin/lore`
+- Windows installs `lore.exe` to `%LOCALAPPDATA%\Programs\Lore\lore.exe`
+- the installer verifies the selected archive against the release `SHA256SUMS`
+- PATH is not modified unless you opt in with `--add-to-path` or `-AddToPath`
+
+Useful overrides:
+- `install.sh --version v1.2.3 --bin-dir "$HOME/bin" --add-to-path`
+- `install.sh --version latest` (secondary convenience path; pinned tags remain recommended)
+- `install.ps1 -Version v1.2.3 -InstallDir "$env:LOCALAPPDATA\Programs\Lore" -AddToPath`
+- `install.ps1 -Version latest`
+
+The installers always re-download the selected release, verify checksums, replace the target binary idempotently, and run `lore version` / `lore.exe version` before reporting success.
+
+### Manual uninstall and config retention
+- macOS/Linux: delete `~/.local/bin/lore` or your custom `--bin-dir` target.
+- Windows: delete `%LOCALAPPDATA%\Programs\Lore\lore.exe` or your custom `-InstallDir` target.
+- Config is preserved by default under `os.UserConfigDir()/lore/config.json`; removing config is a separate optional cleanup step.
 
 ### Tag policy
 Releases are created only from annotated semantic version tags matching `vX.Y.Z`.
@@ -63,13 +99,16 @@ Example:
 The GitHub Actions workflow then:
 1. validates the tag shape and annotated-tag object type;
 2. runs `go test ./...` as a release gate;
-3. builds platform archives with injected version metadata;
-4. publishes archives plus `SHA256SUMS` to the GitHub Release.
+3. validates installer syntax and runs installer smoke tests;
+4. builds platform archives with injected version metadata;
+5. renders `install.sh` and `install.ps1` with the tag embedded as their default version;
+6. publishes archives, installer scripts, and `SHA256SUMS` to the GitHub Release.
 
 ### Asset naming
 Supported targets are published as:
 - macOS/Linux: `lore-cli_<tag>_<os>_<arch>.tar.gz`
 - Windows: `lore-cli_<tag>_windows_<arch>.zip`
+- Installers: `install.sh`, `install.ps1`
 
 Examples:
 - `lore-cli_v1.2.3_darwin_arm64.tar.gz`
@@ -91,30 +130,10 @@ Local builds keep the defaults:
 - commit: `none`
 - build date: `unknown`
 
-### Download and verify
-Example install flow for a Linux amd64 release:
-
-```sh
-curl -LO https://github.com/alferio94/lore-cli/releases/download/v1.2.3/lore-cli_v1.2.3_linux_amd64.tar.gz
-curl -LO https://github.com/alferio94/lore-cli/releases/download/v1.2.3/SHA256SUMS
-grep 'lore-cli_v1.2.3_linux_amd64.tar.gz' SHA256SUMS | sha256sum -c -
-tar -xzf lore-cli_v1.2.3_linux_amd64.tar.gz
-./lore version
-```
-
-Example install flow for Windows amd64 in PowerShell:
-
-```powershell
-curl.exe -LO https://github.com/alferio94/lore-cli/releases/download/v1.2.3/lore-cli_v1.2.3_windows_amd64.zip
-curl.exe -LO https://github.com/alferio94/lore-cli/releases/download/v1.2.3/SHA256SUMS
-$expected = (Select-String 'lore-cli_v1.2.3_windows_amd64.zip' SHA256SUMS).ToString().Split(' ')[0]
-$actual = (Get-FileHash .\lore-cli_v1.2.3_windows_amd64.zip -Algorithm SHA256).Hash.ToLower()
-if ($actual -ne $expected) { throw 'checksum mismatch' }
-Expand-Archive .\lore-cli_v1.2.3_windows_amd64.zip -DestinationPath .\lore-cli
-.\lore-cli\lore.exe version
-```
-
-Use the shared `SHA256SUMS` file to verify any published archive, including Windows `.zip` assets.
+### Security notes
+- Remote script execution is a convenience tradeoff; pinned URLs are preferred over mutable branch-tip URLs.
+- `SHA256SUMS` verification provides release-asset integrity checks but does not replace signing or notarization.
+- `lore install`, `lore update`, package managers, code signing, and notarization remain out of scope for this slice.
 
 ## Out of scope
 This slice intentionally excludes:

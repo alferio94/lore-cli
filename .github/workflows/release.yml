@@ -44,6 +44,15 @@ jobs:
       - name: Run test gate
         run: go test ./...
 
+      - name: Validate installer scripts
+        run: |
+          set -euo pipefail
+          bash -n scripts/install.sh
+          pwsh -NoLogo -NoProfile -Command '$errors = $null; [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path "scripts/install.ps1"), [ref]$null, [ref]$errors); if ($errors) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }'
+
+      - name: Run installer smoke tests
+        run: bash scripts/test-installers.sh
+
   build:
     needs: validate
     runs-on: ubuntu-latest
@@ -124,12 +133,26 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
       - name: Download archives
         uses: actions/download-artifact@v4
         with:
           path: dist
           pattern: archive-*
           merge-multiple: true
+
+      - name: Render installer assets
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          sed "s/__DEFAULT_VERSION__/${TAG}/g" scripts/install.sh > dist/install.sh
+          sed "s/__DEFAULT_VERSION__/${TAG}/g" scripts/install.ps1 > dist/install.ps1
+          chmod +x dist/install.sh
+          test -s dist/install.sh
+          test -s dist/install.ps1
 
       - name: Generate checksums and verify asset set
         working-directory: dist
@@ -170,5 +193,7 @@ jobs:
             dist/lore-cli_*.tar.gz
             dist/lore-cli_*.zip
             dist/SHA256SUMS
+            dist/install.sh
+            dist/install.ps1
           fail_on_unmatched_files: true
           generate_release_notes: true
