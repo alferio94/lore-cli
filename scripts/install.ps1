@@ -67,6 +67,15 @@ function Get-ReleaseBaseUrl([string]$ResolvedVersion) {
     return "https://github.com/$RepoSlug/releases/download/$ResolvedVersion"
 }
 
+function Test-IsWindowsHost {
+    $isWindowsVariable = Get-Variable -Name IsWindows -ErrorAction SilentlyContinue
+    if ($null -ne $isWindowsVariable) {
+        return [bool]$isWindowsVariable.Value
+    }
+
+    return [System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT
+}
+
 function Resolve-Platform {
     if ($PlatformArchOverride) {
         $overrideArch = $PlatformArchOverride.ToLowerInvariant()
@@ -80,7 +89,7 @@ function Resolve-Platform {
         }
     }
 
-    if (-not $IsWindows) {
+    if (-not (Test-IsWindowsHost)) {
         Fail 'install.ps1 only supports Windows targets.'
     }
 
@@ -135,34 +144,55 @@ function Verify-Install([string]$BinaryPath) {
     }
 }
 
+function Normalize-PathSegment([string]$PathValue) {
+    return $PathValue.Trim().TrimEnd('\\', '/')
+}
+
+function Test-PathSegmentPresent([string[]]$Segments, [string]$TargetDir) {
+    $normalizedTarget = Normalize-PathSegment -PathValue $TargetDir
+    foreach ($segment in $Segments) {
+        if ([string]::Equals((Normalize-PathSegment -PathValue $segment), $normalizedTarget, [System.StringComparison]::OrdinalIgnoreCase)) {
+            return $true
+        }
+    }
+    return $false
+}
+
 function Update-UserPath([string]$TargetDir) {
     $currentUserPath = [Environment]::GetEnvironmentVariable('Path', 'User')
     $segments = @()
     if ($currentUserPath) {
         $segments = $currentUserPath -split ';' | Where-Object { $_ }
     }
-    if ($segments -contains $TargetDir) {
-        Write-Host "$TargetDir is already on the user PATH."
-        return
+    if (Test-PathSegmentPresent -Segments $segments -TargetDir $TargetDir) {
+        return 'already-present'
     }
     $newPath = if ($currentUserPath) { "$currentUserPath;$TargetDir" } else { $TargetDir }
     [Environment]::SetEnvironmentVariable('Path', $newPath, 'User')
-    Write-Host "Added $TargetDir to the user PATH. Open a new terminal to pick up the change."
+    return 'added'
 }
 
-function Handle-Path([string]$TargetDir) {
+function Handle-Path([string]$TargetDir, [string]$BinaryPath) {
     $pathSegments = ($env:PATH -split ';') | Where-Object { $_ }
-    if ($pathSegments -contains $TargetDir) {
-        Write-Host "$TargetDir is already on PATH."
+    $currentSessionHasTarget = Test-PathSegmentPresent -Segments $pathSegments -TargetDir $TargetDir
+
+    Write-Host "Run it directly now: $BinaryPath"
+
+    if ($AddToPath) {
+        $pathUpdateResult = Update-UserPath -TargetDir $TargetDir
+        if ($pathUpdateResult -eq 'added') {
+            Write-Host "Added $TargetDir to the user PATH. Open a new terminal/session to run 'lore' by name."
+        }
+        else {
+            Write-Host "$TargetDir is already configured on the user PATH."
+            if (-not $currentSessionHasTarget) {
+                Write-Host "Open a new terminal/session if 'lore' is not available in this window yet."
+            }
+        }
         return
     }
-    if ($AddToPath) {
-        Update-UserPath -TargetDir $TargetDir
-    }
-    else {
-        Write-Host "Add $TargetDir to PATH to run 'lore' without a full path:"
-        Write-Host "  [Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path', 'User') + ';$TargetDir', 'User')"
-    }
+
+    Write-Host "PATH is unchanged by default. Optional PATH opt-in later: rerun install.ps1 -AddToPath or add $TargetDir to your user PATH."
 }
 
 if ($Help) {
@@ -191,8 +221,8 @@ try {
     }
     $targetPath = Install-Binary -ExtractedBinary $extractedBinary -TargetDir $InstallDir
     Verify-Install -BinaryPath $targetPath
-    Handle-Path -TargetDir $InstallDir
     Write-Host "Installed $targetPath"
+    Handle-Path -TargetDir $InstallDir -BinaryPath $targetPath
     Write-Host "Uninstall: delete $targetPath; config under your user config directory is preserved by default."
     if ($Force) {
         Write-Verbose 'Force flag accepted; installs already replace existing binaries idempotently.'

@@ -151,29 +151,40 @@ append_path_line() {
   if [ ! -f "$rc_file" ]; then
     : > "$rc_file"
   fi
-  if grep -Fq "$path_line" "$rc_file"; then
-    log "PATH entry already present in ${rc_file}"
+  if grep -Fqx "$path_line" "$rc_file"; then
+    printf 'already-present\n'
     return
   fi
   printf '\n%s\n' "$path_line" >> "$rc_file"
-  log "Added PATH guidance to ${rc_file}; restart your shell after installation."
+  printf 'added\n'
 }
 
 handle_path() {
   target_dir="$1"
+  target_path="$2"
+  current_shell_has_target=0
   case ":$PATH:" in
     *:"$target_dir":*)
-      log "${target_dir} is already on PATH."
-      return
+      current_shell_has_target=1
       ;;
   esac
+
+  log "Run it directly now: ${target_path}"
 
   if [ "$ADD_TO_PATH" -eq 1 ]; then
     rc_file="${HOME}/.profile"
     path_line="export PATH=\"${target_dir}:\$PATH\""
-    append_path_line "$rc_file" "$path_line"
+    path_status="$(append_path_line "$rc_file" "$path_line")"
+    if [ "$path_status" = "added" ]; then
+      log "Added PATH entry to ${rc_file}. Open a new terminal/session to run 'lore' by name."
+    else
+      log "PATH entry already present in ${rc_file}."
+      if [ "$current_shell_has_target" -ne 1 ]; then
+        log "Open a new terminal/session if 'lore' is not available in this shell yet."
+      fi
+    fi
   else
-    log "Add ${target_dir} to PATH to run 'lore' without a full path:"
+    log "PATH is unchanged by default. Optional PATH opt-in later: rerun with --add-to-path or add this line to ${HOME}/.profile:"
     log "  export PATH=\"${target_dir}:\$PATH\""
   fi
 }
@@ -236,6 +247,6 @@ verify_checksum "$SUMS_PATH" "$ARCHIVE_PATH"
 extract_archive "$ARCHIVE_PATH" "$TMPDIR"
 TARGET_PATH="$(install_binary "$TMPDIR/$BINARY_NAME" "$BIN_DIR")"
 verify_install "$TARGET_PATH"
-handle_path "$BIN_DIR"
 log "Installed ${TARGET_PATH}"
+handle_path "$BIN_DIR" "$TARGET_PATH"
 log "Uninstall: delete ${TARGET_PATH}; config under your user config directory is preserved by default."

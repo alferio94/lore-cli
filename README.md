@@ -92,7 +92,7 @@ macOS/Linux:
 curl -fsSL https://github.com/alferio94/lore-cli/releases/download/v1.2.3/install.sh | sh
 ```
 
-Windows PowerShell:
+Windows PowerShell 5.1 or PowerShell 7+ on Windows:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -c "irm https://github.com/alferio94/lore-cli/releases/download/v1.2.3/install.ps1 | iex"
@@ -103,12 +103,19 @@ Defaults:
 - Windows installs `lore.exe` to `%LOCALAPPDATA%\Programs\Lore\lore.exe`
 - the installer verifies the selected archive against the release `SHA256SUMS`
 - PATH is not modified unless you opt in with `--add-to-path` or `-AddToPath`
+- no interactive PATH prompt is shown, so piped and CI installs stay non-blocking
 
 Useful overrides:
 - `install.sh --version v1.2.3 --bin-dir "$HOME/bin" --add-to-path`
 - `install.sh --version latest` (secondary convenience path; pinned tags remain recommended)
 - `install.ps1 -Version v1.2.3 -InstallDir "$env:LOCALAPPDATA\Programs\Lore" -AddToPath`
 - `install.ps1 -Version latest`
+
+After install:
+- both installers run a direct version check before reporting success
+- run the binary immediately from the printed install path (`~/.local/bin/lore` or `%LOCALAPPDATA%\Programs\Lore\lore.exe`) if you did not opt into PATH
+- if you used `--add-to-path` or `-AddToPath`, open a new terminal/session before running `lore` by name
+- if you skipped PATH opt-in, rerun the installer with the flag later or add the printed path yourself
 
 The installers always re-download the selected release, verify checksums, replace the target binary idempotently, and run `lore version` / `lore.exe version` before reporting success.
 
