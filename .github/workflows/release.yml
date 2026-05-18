@@ -25,7 +25,11 @@ jobs:
             echo "release tags must match vX.Y.Z; got $TAG" >&2
             exit 1
           fi
-          TYPE="$(git cat-file -t "$TAG")"
+          # actions/checkout may leave the tag name resolved to the peeled commit
+          # on tag-triggered workflows. Fetch the tag ref explicitly before
+          # enforcing annotated-tag semantics.
+          git fetch --force origin "refs/tags/${TAG}:refs/tags/${TAG}"
+          TYPE="$(git cat-file -t "refs/tags/${TAG}")"
           if [[ "$TYPE" != "tag" ]]; then
             echo "release tags must be annotated; got object type $TYPE" >&2
             exit 1
