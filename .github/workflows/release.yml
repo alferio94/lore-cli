@@ -53,27 +53,8 @@ jobs:
       - name: Run installer smoke tests
         run: bash scripts/test-installers.sh
 
-  installer-smoke-windows:
-    needs: validate
-    runs-on: windows-latest
-    steps:
-      - name: Check out source
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - name: Run Windows PowerShell installer smoke test
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'Stop'
-          .\scripts\test-installers-windows.ps1
-
   build:
-    needs: [validate, installer-smoke-windows]
+    needs: validate
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

@@ -138,7 +138,7 @@ Example:
 The GitHub Actions workflow then:
 1. validates the tag shape and annotated-tag object type;
 2. runs `go test ./...` as a release gate;
-3. validates installer syntax and runs installer smoke tests;
+3. validates installer syntax and runs Unix installer smoke tests;
 4. builds platform archives with injected version metadata;
 5. renders `install.sh` and `install.ps1` with the tag embedded as their default version;
 6. publishes archives, installer scripts, and `SHA256SUMS` to the GitHub Release.
