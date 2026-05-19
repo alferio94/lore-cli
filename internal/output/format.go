@@ -67,7 +67,7 @@ func FormatSubject(subject httpclient.Subject) string {
 
 // FormatLoginSuccess renders a token-safe login confirmation.
 func FormatLoginSuccess(subject httpclient.Subject, path string) string {
-	return fmt.Sprintf("login succeeded: %s\nconfig saved to %s", FormatSubject(subject), path)
+	return fmt.Sprintf("login succeeded: %s\nOS keychain-backed login metadata saved to %s", FormatSubject(subject), path)
 }
 
 // FormatLogoutResult renders an idempotent local-only logout summary.

@@ -61,11 +61,12 @@ func TestNormalizeServerURL(t *testing.T) {
 	}
 }
 
-func TestStoreSaveLoadDeleteRoundTrip(t *testing.T) {
+func TestStoreSaveLoadDeleteRoundTripMetadataOnly(t *testing.T) {
 	store := NewStore(t.TempDir())
 	original := Config{
-		ServerURL: " https://example.test/ ",
-		APIToken:  "secret-token",
+		ServerURL:         " https://example.test/ ",
+		APIToken:          "secret-token",
+		CredentialAccount: "acct-123",
 	}
 
 	if err := store.Save(original); err != nil {
@@ -80,15 +81,19 @@ func TestStoreSaveLoadDeleteRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if loaded.Version != 1 {
-		t.Fatalf("Version = %d, want 1", loaded.Version)
+	if loaded.Version != CurrentVersion {
+		t.Fatalf("Version = %d, want %d", loaded.Version, CurrentVersion)
 	}
 	if loaded.ServerURL != "https://example.test" {
 		t.Fatalf("ServerURL = %q, want normalized value", loaded.ServerURL)
 	}
-	if loaded.APIToken != original.APIToken {
-		t.Fatalf("APIToken mismatch after load")
+	if loaded.CredentialAccount != "acct-123" {
+		t.Fatalf("CredentialAccount = %q, want acct-123", loaded.CredentialAccount)
 	}
+	if loaded.APIToken != "" {
+		t.Fatalf("APIToken = %q, want empty for metadata-only persistence", loaded.APIToken)
+	}
+	assertNoTokenOnDisk(t, path)
 	assertNoTempFiles(t, filepath.Dir(path))
 	assertPermissions(t, filepath.Dir(path), path)
 
@@ -102,6 +107,32 @@ func TestStoreSaveLoadDeleteRoundTrip(t *testing.T) {
 
 	if err := store.Delete(); err != nil {
 		t.Fatalf("Delete() second call error = %v", err)
+	}
+}
+
+func TestStoreLoadLegacyTokenForMigration(t *testing.T) {
+	store := NewStore(t.TempDir())
+	path, err := store.Path()
+	if err != nil {
+		t.Fatalf("Path() error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	legacy := []byte("{\n  \"version\": 1,\n  \"server_url\": \"https://example.test\",\n  \"api_token\": \"legacy-token\"\n}\n")
+	if err := os.WriteFile(path, legacy, 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	loaded, err := store.Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if loaded.APIToken != "legacy-token" {
+		t.Fatalf("APIToken = %q, want legacy-token", loaded.APIToken)
+	}
+	if loaded.Version != 1 {
+		t.Fatalf("Version = %d, want legacy version 1", loaded.Version)
 	}
 }
 
@@ -135,6 +166,18 @@ func TestRedaction(t *testing.T) {
 	}
 	if RedactToken("") != "<missing>" {
 		t.Fatalf("RedactToken(empty) = %q", RedactToken(""))
+	}
+}
+
+func assertNoTokenOnDisk(t *testing.T, path string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	text := string(data)
+	if strings.Contains(text, "secret-token") || strings.Contains(text, "api_token") {
+		t.Fatalf("config file leaked token data: %s", text)
 	}
 }
 

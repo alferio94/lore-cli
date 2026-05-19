@@ -21,9 +21,9 @@ The root TUI offers `Status`, `Login`, `Logout`, `Doctor`, `Install`, and `Quit`
 - `lore version`
 - `lore version --json`
 
-`login` validates the provided normal user API token with `GET /v1/me` before saving local config.
-`status` reports config presence plus `/healthz`, `/readyz`, and `/v1/me` state.
-`logout` removes local config only and does not revoke server-side tokens.
+`login` validates the provided normal user API token with `GET /v1/me` before saving metadata-only local config plus the token in the OS keychain.
+`status` reports saved login metadata presence plus `/healthz`, `/readyz`, and `/v1/me` state.
+`logout` removes local login metadata plus the matching OS keychain credential only and does not revoke server-side tokens.
 `doctor` prints actionable config, URL, network, readiness, auth, and Pi-availability diagnostics.
 `install` reuses healthy saved Lore login state, runs the same config `/healthz` `/readyz` `/v1/me` preflight as `status`, installs only the managed `~/.pi/agent` Pi runtime files, and writes non-secret `~/.pi/agent/lore-install.json` metadata. Generated Pi assets call the hidden `lore api request` broker so no raw API token is written into Pi files.
 `remember` creates one memory with explicit REST fields only; `--project-id`, `--type`, `--title`, and `--content` are required, `--scope` defaults to `project`, `--metadata-json` must be a JSON object, and `--json` prints `{\"data\": {...}}`.
@@ -45,8 +45,10 @@ Overrides for deterministic tests and local development:
 - `LORE_CONFIG_DIR`
 - injected config directory in code via `config.NewStore(...)`
 
-## Token storage warning
-The current CLI stores one user API token in a local JSON config file with restrictive permissions (`0700` dir, `0600` file). This is a temporary tradeoff for simplicity and is less secure than OS keychain storage.
+## Saved login state
+The CLI stores non-secret login metadata in `config.json` with restrictive permissions (`0700` dir, `0600` file) and stores the user API token in the OS keychain. Raw API tokens are not written to `config.json`, Pi-managed files, or install manifests.
+
+Linux/headless environments must provide a working Secret Service/keyring session. If the credential backend is unavailable, `login`, `status`, `doctor`, `remember`, `recall`, hidden broker calls, and `install` fail closed with remediation instead of falling back to plaintext token storage.
 
 ## Memory command smoke flow
 Use the CLI memory MVP only after `lore login` succeeds and when you already know the target `project_id`.
@@ -67,8 +69,8 @@ lore status # reports no saved config / unauthenticated after logout
 
 Notes:
 - `remember` requires `--content`; positional memory content is not accepted in this MVP.
-- `remember`, `recall`, and `install` reuse the saved server URL and API token from `login`.
-- `install` blocks before any Pi writes when saved config is missing, invalid, or unhealthy, and surfaces login/remediation guidance instead.
+- `remember`, `recall`, and `install` reuse the saved server URL plus the API token resolved from the OS keychain.
+- `install` blocks before any Pi writes when saved login metadata is missing, invalid, unhealthy, or cannot reach the keychain, and surfaces remediation guidance instead.
 - Human output is concise and omits raw `content`, `metadata`, and secrets.
 - Request failures surface request IDs when the server provides them.
 - `lore api request` is a hidden machine broker for allowlisted authenticated API calls used by the managed Pi runtime.
@@ -126,7 +128,7 @@ The installers always re-download the selected release, verify checksums, replac
 ### Manual uninstall and config retention
 - macOS/Linux: delete `~/.local/bin/lore` or your custom `--bin-dir` target.
 - Windows: delete `%LOCALAPPDATA%\Programs\Lore\lore.exe` or your custom `-InstallDir` target.
-- Config is preserved by default under `os.UserConfigDir()/lore/config.json`; removing config is a separate optional cleanup step.
+- Login metadata is preserved by default under `os.UserConfigDir()/lore/config.json`; use `lore logout` if you also want to remove the matching OS keychain credential.
 
 ### Tag policy
 Releases are created only from annotated semantic version tags matching `vX.Y.Z`.

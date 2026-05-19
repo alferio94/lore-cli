@@ -145,7 +145,7 @@ function Verify-Install([string]$BinaryPath) {
 }
 
 function Normalize-PathSegment([string]$PathValue) {
-    return $PathValue.Trim().TrimEnd('\\', '/')
+    return $PathValue.Trim().TrimEnd([char[]]@('\', '/'))
 }
 
 function Test-PathSegmentPresent([string[]]$Segments, [string]$TargetDir) {

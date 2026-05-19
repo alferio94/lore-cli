@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/alferio94/lore-cli/internal/auth"
 	"github.com/alferio94/lore-cli/internal/config"
 	"github.com/alferio94/lore-cli/internal/httpclient"
 	"github.com/alferio94/lore-cli/internal/install"
@@ -52,6 +53,12 @@ type apiRequestOptions struct {
 	BodyJSON   string
 }
 
+type apiMCPCallOptions struct {
+	JSONOutput bool
+	Tool       string
+	ArgsJSON   string
+}
+
 type authConfigError struct {
 	Code    string
 	Message string
@@ -59,7 +66,7 @@ type authConfigError struct {
 
 func (e *authConfigError) Error() string {
 	if e == nil {
-		return "saved login config is unavailable"
+		return "saved login state is unavailable"
 	}
 	return e.Message
 }
@@ -97,8 +104,8 @@ func (a *App) loginAction(ctx context.Context, serverURL, token string) (ActionM
 		return ActionMessage{}, err
 	}
 
-	if err := a.Store.Save(config.Config{ServerURL: rawServer, APIToken: rawToken}); err != nil {
-		return ActionMessage{}, err
+	if err := a.authManager().Save(rawServer, rawToken); err != nil {
+		return ActionMessage{}, explainAuthSaveError(err)
 	}
 
 	path, _ := a.Store.Path()
@@ -114,7 +121,7 @@ func (a *App) logoutAction(_ context.Context) (ActionMessage, error) {
 			return ActionMessage{}, err
 		}
 	}
-	if err := a.Store.Delete(); err != nil {
+	if err := a.authManager().Logout(); err != nil {
 		return ActionMessage{}, err
 	}
 
@@ -123,7 +130,7 @@ func (a *App) logoutAction(_ context.Context) (ActionMessage, error) {
 }
 
 func (a *App) runRemember(args rememberOptions) error {
-	client, cfg, err := a.loadAuthenticatedClient()
+	client, session, err := a.loadAuthenticatedClient()
 	if err != nil {
 		return err
 	}
@@ -131,7 +138,7 @@ func (a *App) runRemember(args rememberOptions) error {
 	if err != nil {
 		return err
 	}
-	memory, err := client.CreateMemory(context.Background(), cfg.APIToken, httpclient.CreateMemoryRequest{
+	memory, err := client.CreateMemory(context.Background(), session.Token, httpclient.CreateMemoryRequest{
 		ProjectID: args.ProjectID,
 		Scope:     defaultScope(args.Scope),
 		Type:      args.Type,
@@ -150,11 +157,11 @@ func (a *App) runRemember(args rememberOptions) error {
 }
 
 func (a *App) runRecall(args recallOptions) error {
-	client, cfg, err := a.loadAuthenticatedClient()
+	client, session, err := a.loadAuthenticatedClient()
 	if err != nil {
 		return err
 	}
-	memories, err := client.ListMemories(context.Background(), cfg.APIToken, httpclient.ListMemoriesFilter{
+	memories, err := client.ListMemories(context.Background(), session.Token, httpclient.ListMemoriesFilter{
 		ProjectID: args.ProjectID,
 		Scope:     defaultScope(args.Scope),
 		Type:      args.Type,
@@ -170,30 +177,37 @@ func (a *App) runRecall(args recallOptions) error {
 	return err
 }
 
-func (a *App) loadAuthenticatedClient() (httpclient.Client, config.Config, error) {
-	cfg, err := a.loadSavedAuthConfig()
+func (a *App) loadAuthenticatedClient() (httpclient.Client, auth.Session, error) {
+	session, err := a.loadSavedAuthSession()
 	if err != nil {
-		return nil, config.Config{}, err
+		return nil, auth.Session{}, err
 	}
-	client, err := a.ClientFactory(cfg.ServerURL)
+	client, err := a.ClientFactory(session.ServerURL)
 	if err != nil {
-		return nil, config.Config{}, err
+		return nil, auth.Session{}, err
 	}
-	return client, cfg, nil
+	return client, session, nil
 }
 
-func (a *App) loadSavedAuthConfig() (config.Config, error) {
-	cfg, err := a.Store.Load()
-	if err != nil {
-		if errors.Is(err, config.ErrNotFound) {
-			return config.Config{}, &authConfigError{Code: "missing_config", Message: "no saved login config; run lore login --server <url> --token <token>"}
+func (a *App) loadSavedAuthSession() (auth.Session, error) {
+	session, err := a.authManager().Load()
+	if err == nil {
+		return session, nil
+	}
+	var authErr *auth.Error
+	if errors.As(err, &authErr) {
+		switch authErr.Code {
+		case auth.ErrConfigNotFound:
+			return auth.Session{}, &authConfigError{Code: "missing_config", Message: "no saved login state; run lore login --server <url> --token <token>"}
+		case auth.ErrCredentialMissing:
+			return auth.Session{}, &authConfigError{Code: "incomplete_config", Message: "saved login state is incomplete; run lore login --server <url> --token <token>"}
+		case auth.ErrCredentialUnavailable:
+			return auth.Session{}, &authConfigError{Code: "credential_unavailable", Message: unavailableCredentialMessage("saved login state could not access secure credential storage")}
+		default:
+			return auth.Session{}, &authConfigError{Code: "invalid_config", Message: "saved login state could not be read; inspect or remove the local config file and run lore login again"}
 		}
-		return config.Config{}, &authConfigError{Code: "invalid_config", Message: "saved login config could not be read; inspect or remove the local config file and run lore login again"}
 	}
-	if strings.TrimSpace(cfg.ServerURL) == "" || strings.TrimSpace(cfg.APIToken) == "" {
-		return config.Config{}, &authConfigError{Code: "incomplete_config", Message: "saved login config is incomplete; run lore login --server <url> --token <token>"}
-	}
-	return cfg, nil
+	return auth.Session{}, err
 }
 
 func (a *App) runAPIRequest(args apiRequestOptions) int {
@@ -205,7 +219,7 @@ func (a *App) runAPIRequest(args apiRequestOptions) int {
 		return a.writeBrokerError(2, 400, "invalid_request", err.Error(), "")
 	}
 
-	client, cfg, err := a.loadAuthenticatedClient()
+	client, session, err := a.loadAuthenticatedClient()
 	if err != nil {
 		var configErr *authConfigError
 		if errors.As(err, &configErr) {
@@ -214,13 +228,42 @@ func (a *App) runAPIRequest(args apiRequestOptions) int {
 		return a.writeBrokerError(6, 0, "internal_error", "failed to initialize authenticated client", "")
 	}
 
-	result, err := client.RequestJSON(context.Background(), strings.ToUpper(strings.TrimSpace(args.Method)), strings.TrimSpace(args.Path), cfg.APIToken, body)
+	result, err := client.RequestJSON(context.Background(), strings.ToUpper(strings.TrimSpace(args.Method)), strings.TrimSpace(args.Path), session.Token, body)
 	if err != nil {
 		return a.writeBrokerRequestError(err)
 	}
 	if err := writeJSON(a.Stdout, map[string]any{"ok": true, "status": result.StatusCode, "request_id": result.RequestID, "data": json.RawMessage(result.Data)}); err != nil {
 		return a.writeBrokerError(6, 0, "internal_error", "failed to encode broker response", "")
 	}
+	return 0
+}
+
+func (a *App) runAPIMCPCall(args apiMCPCallOptions) int {
+	arguments := json.RawMessage(strings.TrimSpace(args.ArgsJSON))
+	if _, _, err := httpclient.ValidateBrokerMCPCall(strings.TrimSpace(args.Tool), arguments); err != nil {
+		return a.writeBrokerError(2, 400, "invalid_request", err.Error(), "")
+	}
+
+	client, session, err := a.loadAuthenticatedClient()
+	if err != nil {
+		var configErr *authConfigError
+		if errors.As(err, &configErr) {
+			return a.writeBrokerError(3, 0, configErr.Code, configErr.Message, "")
+		}
+		return a.writeBrokerError(6, 0, "internal_error", "failed to initialize authenticated client", "")
+	}
+
+	result, err := client.MCPCall(context.Background(), session.Token, strings.TrimSpace(args.Tool), arguments)
+	if err != nil {
+		return a.writeBrokerRequestError(err)
+	}
+	if args.JSONOutput {
+		if err := writeJSON(a.Stdout, map[string]any{"ok": true, "status": result.StatusCode, "request_id": result.RequestID, "data": json.RawMessage(result.Data)}); err != nil {
+			return a.writeBrokerError(6, 0, "internal_error", "failed to encode broker response", "")
+		}
+		return 0
+	}
+	fmt.Fprintln(a.Stdout, string(result.Data))
 	return 0
 }
 
@@ -282,18 +325,11 @@ func (a *App) doctorAction(ctx context.Context) ActionReport {
 }
 
 func (a *App) installAction(ctx context.Context) ActionReport {
-	service := install.Service{Store: a.Store, ClientFactory: install.ClientFactory(a.ClientFactory)}
+	service := install.Service{Store: a.Store, Auth: a.authManager(), ClientFactory: install.ClientFactory(a.ClientFactory)}
 	report := ActionReport{Title: "Lore install"}
 	preflight := service.Preflight(ctx)
 	report.Checks = append(report.Checks, preflight.Checks...)
 	if !preflight.CanContinue {
-		report.ExitCode = 1
-		return report
-	}
-
-	cfg, err := a.Store.Load()
-	if err != nil {
-		report.Checks = append(report.Checks, output.Check{Name: "install", Status: output.StatusFail, Detail: "saved login state changed before install could start", Action: "Run lore login again and retry lore install."})
 		report.ExitCode = 1
 		return report
 	}
@@ -323,7 +359,7 @@ func (a *App) installAction(ctx context.Context) ActionReport {
 		LoreBinaryPath: binaryPath,
 		LoreConfigDir:  filepath.Dir(configPath),
 		LoreCLIVersion: a.BuildInfo.Normalized().Version,
-		SavedToken:     cfg.APIToken,
+		SavedToken:     preflight.Token,
 	})
 	if err != nil {
 		report.Checks = append(report.Checks, output.Check{Name: "install", Status: output.StatusFail, Detail: err.Error(), Action: "Inspect the Pi runtime directory and rerun lore install after fixing the reported issue."})
@@ -369,9 +405,23 @@ func (a *App) collectChecks(ctx context.Context, includePi bool) ([]output.Check
 		return checks, 1
 	}
 
-	checks := []output.Check{{Name: "config", Status: output.StatusOK, Detail: fmt.Sprintf("configured server=%s token=%s path=%s", cfg.ServerURL, config.RedactToken(cfg.APIToken), path)}}
+	checks := []output.Check{{Name: "config", Status: output.StatusOK, Detail: formatSavedLoginState(cfg, path)}}
+	defaultAuthAction := "Run lore login again with a valid normal user API token."
+	session, err := a.loadSavedAuthSession()
+	if err != nil {
+		action := defaultAuthAction
+		var configErr *authConfigError
+		if errors.As(err, &configErr) && configErr.Code == "credential_unavailable" {
+			action = unavailableCredentialAction()
+		}
+		checks = append(checks, output.Check{Name: "auth", Status: output.StatusFail, Detail: err.Error(), Action: action})
+		if includePi {
+			checks = append(checks, a.piCheck())
+		}
+		return checks, 1
+	}
 
-	client, err := a.ClientFactory(cfg.ServerURL)
+	client, err := a.ClientFactory(session.ServerURL)
 	if err != nil {
 		checks = append(checks, output.Check{Name: "server-url", Status: output.StatusFail, Detail: err.Error(), Action: "Fix the server URL with lore login --server <http(s)://host> --token <token>."})
 		if includePi {
@@ -395,10 +445,7 @@ func (a *App) collectChecks(ctx context.Context, includePi bool) ([]output.Check
 		checks = append(checks, output.Check{Name: "readyz", Status: output.StatusOK, Detail: "server is ready"})
 	}
 
-	if strings.TrimSpace(cfg.APIToken) == "" {
-		checks = append(checks, output.Check{Name: "auth", Status: output.StatusFail, Detail: "missing API token", Action: "Run lore login again with a valid normal user API token."})
-		exitCode = 1
-	} else if subject, err := client.Me(ctx, cfg.APIToken); err != nil {
+	if subject, err := client.Me(ctx, session.Token); err != nil {
 		checks = append(checks, output.Check{Name: "auth", Status: output.StatusFail, Detail: explainLoginError(err), Action: "Obtain a valid normal user API token and run lore login again."})
 		exitCode = 1
 	} else {
@@ -414,6 +461,17 @@ func (a *App) collectChecks(ctx context.Context, includePi bool) ([]output.Check
 	}
 
 	return checks, exitCode
+}
+
+func formatSavedLoginState(cfg config.Config, path string) string {
+	return fmt.Sprintf("saved login state server=%s path=%s auth=OS keychain-backed metadata only", cfg.ServerURL, path)
+}
+
+func (a *App) authManager() AuthManager {
+	if a.Auth != nil {
+		return a.Auth
+	}
+	return auth.Manager{ConfigStore: a.Store}
 }
 
 func formatInstallSummary(result install.PiInstallResult) string {
@@ -451,6 +509,22 @@ func explainLoginError(err error) string {
 		return "normal user API token required; /v1/me rejected the provided token"
 	}
 	return explainEndpointError(err)
+}
+
+func explainAuthSaveError(err error) error {
+	var authErr *auth.Error
+	if errors.As(err, &authErr) && authErr.Code == auth.ErrCredentialUnavailable {
+		return errors.New(unavailableCredentialMessage("could not store the API token in secure credential storage"))
+	}
+	return err
+}
+
+func unavailableCredentialMessage(prefix string) string {
+	return fmt.Sprintf("%s; unlock or enable the OS keychain, and on headless Linux start a Secret Service session such as gnome-keyring, then run lore login again", prefix)
+}
+
+func unavailableCredentialAction() string {
+	return "Unlock or enable the OS keychain, and on headless Linux start a Secret Service session such as gnome-keyring, then run lore login again."
 }
 
 func explainEndpointError(err error) string {

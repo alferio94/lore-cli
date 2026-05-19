@@ -35,3 +35,21 @@ func TestFormatRecallResultIsConcise(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderChecksAndLoginFormattingStayUserVisibleAndSecretSafe(t *testing.T) {
+	got := RenderChecks("Lore status", []Check{{Name: "config", Status: StatusOK, Detail: "saved login state", Action: "Run lore login again."}, {Name: "auth", Status: StatusFail, Detail: "token missing"}})
+	for _, want := range []string{"Lore status", "- [OK] config: saved login state", "  action: Run lore login again.", "- [FAIL] auth: token missing"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("RenderChecks() = %q, want %q", got, want)
+		}
+	}
+
+	subject := httpclient.Subject{Kind: "user", UserID: "user-1", ID: "subject-1", Roles: []string{"admin", "developer"}, TokenSource: "api_token", TokenID: "token-1"}
+	login := FormatLoginSuccess(subject, "/tmp/lore/config.json")
+	logout := FormatLogoutResult("/tmp/lore/config.json", true)
+	for _, want := range []string{"authenticated kind=user user_id=user-1 subject_id=subject-1 roles=admin,developer token_source=api_token token_id=token-1", "OS keychain-backed login metadata saved to /tmp/lore/config.json", "removed local config at /tmp/lore/config.json", "no server-side token revocation was performed"} {
+		if !strings.Contains(login+"\n"+logout, want) {
+			t.Fatalf("combined output = %q, want %q", login+"\n"+logout, want)
+		}
+	}
+}

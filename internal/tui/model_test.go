@@ -15,7 +15,7 @@ import (
 func TestInitialRenderShowsMenuHintsAndInstallEntry(t *testing.T) {
 	m := newModel(cli.InteractiveActions{})
 	view := m.View()
-	for _, want := range []string{"Lore", "Status", "Login", "Install", "Pi", "Explicit subcommands remain available"} {
+	for _, want := range []string{"Lore", "Status", "Login", "Install", "Pi", "secure credential", "login metadata", "Explicit subcommands remain available"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view missing %q:\n%s", want, view)
 		}
@@ -138,6 +138,9 @@ func TestLoginFormMasksTokenAndValidatesRequiredFields(t *testing.T) {
 	}
 	if got := m.loginInputs[1].EchoMode; got != textinput.EchoPassword {
 		t.Fatalf("token EchoMode = %v, want password mode", got)
+	}
+	if got := m.statusBody; !strings.Contains(got, "secure credential storage") || !strings.Contains(got, "login metadata") {
+		t.Fatalf("statusBody = %q, want secure credential storage guidance", got)
 	}
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
 	m = updated.(model)

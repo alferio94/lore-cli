@@ -54,6 +54,12 @@ type renderedPiFile struct {
 	mergeJSON    bool
 }
 
+var managedPiExtensionRelativePaths = []string{
+	filepath.Join("extensions", "lore-memory.ts"),
+	filepath.Join("extensions", "lore-delegation.ts"),
+	filepath.Join("extensions", "lore-footer.ts"),
+}
+
 func ResolvePiLayout(homeDir string) PiLayout {
 	agentDir := filepath.Join(homeDir, ".pi", "agent")
 	extensionsDir := filepath.Join(agentDir, "extensions")
@@ -85,6 +91,9 @@ func (s Service) InstallPi(req PiInstallRequest) (PiInstallResult, error) {
 	backupRoot := filepath.Join(layout.AgentDir, "backups", req.Now.UTC().Format("20060102T150405Z"))
 	rendered, err := renderPiFiles(layout, req)
 	if err != nil {
+		return PiInstallResult{}, err
+	}
+	if err := validateRenderedPiFiles(rendered); err != nil {
 		return PiInstallResult{}, err
 	}
 	manifest := Manifest{
@@ -165,9 +174,9 @@ func renderPiFiles(layout PiLayout, req PiInstallRequest) ([]renderedPiFile, err
 		absolutePath string
 		mergeJSON    bool
 	}{
-		{assetPath: "assets/pi/lore-memory.ts", relativePath: filepath.Join("extensions", "lore-memory.ts"), absolutePath: filepath.Join(layout.ExtensionsDir, "lore-memory.ts")},
-		{assetPath: "assets/pi/lore-delegation.ts", relativePath: filepath.Join("extensions", "lore-delegation.ts"), absolutePath: filepath.Join(layout.ExtensionsDir, "lore-delegation.ts")},
-		{assetPath: "assets/pi/lore-footer.ts", relativePath: filepath.Join("extensions", "lore-footer.ts"), absolutePath: filepath.Join(layout.ExtensionsDir, "lore-footer.ts")},
+		{assetPath: "assets/pi/lore-memory.ts", relativePath: managedPiExtensionRelativePaths[0], absolutePath: filepath.Join(layout.ExtensionsDir, "lore-memory.ts")},
+		{assetPath: "assets/pi/lore-delegation.ts", relativePath: managedPiExtensionRelativePaths[1], absolutePath: filepath.Join(layout.ExtensionsDir, "lore-delegation.ts")},
+		{assetPath: "assets/pi/lore-footer.ts", relativePath: managedPiExtensionRelativePaths[2], absolutePath: filepath.Join(layout.ExtensionsDir, "lore-footer.ts")},
 		{assetPath: "assets/pi/settings.json", relativePath: "settings.json", absolutePath: layout.SettingsPath, mergeJSON: true},
 	}
 
@@ -184,6 +193,23 @@ func renderPiFiles(layout PiLayout, req PiInstallRequest) ([]renderedPiFile, err
 		rendered = append(rendered, renderedPiFile{relativePath: file.relativePath, absolutePath: file.absolutePath, content: []byte(resolved), mergeJSON: file.mergeJSON})
 	}
 	return rendered, nil
+}
+
+func validateRenderedPiFiles(files []renderedPiFile) error {
+	byPath := make(map[string]renderedPiFile, len(files))
+	for _, file := range files {
+		byPath[file.relativePath] = file
+	}
+	for _, relativePath := range managedPiExtensionRelativePaths {
+		file, ok := byPath[relativePath]
+		if !ok {
+			return fmt.Errorf("validate rendered Pi assets: %s missing", relativePath)
+		}
+		if !strings.Contains(string(file.content), "export default function") {
+			return fmt.Errorf("validate rendered Pi assets: %s missing documented export default function factory", relativePath)
+		}
+	}
+	return nil
 }
 
 func applyRenderedFile(file renderedPiFile, backupRoot string) ([]byte, string, error) {
@@ -259,33 +285,51 @@ func mergeMaps(base, overlay map[string]any) map[string]any {
 func validateManagedContents(contents map[string][]byte, req PiInstallRequest) []string {
 	var findings []string
 	requiredSnippets := map[string][]string{
-		filepath.Join("extensions", "lore-memory.ts"): {
-			"lore api request",
-			"export const lore_search",
-			"export const lore_save",
-			"export const lore_update",
-			"export const lore_delete",
-			"export const lore_get_observation",
-			"export const lore_context",
-			"export const lore_timeline",
-			"export const lore_stats",
-			"export const lore_session_summary",
+		managedPiExtensionRelativePaths[0]: {
+			"\"api\", \"request\"",
+			"\"api\", \"mcp-call\"",
+			"lore_project_context",
+			"export default function",
+			"Text",
+			"renderCall(",
+			"renderResult(",
+			"text: formatContent(payload.data)",
+			"pi.registerTool",
+			"name: \"lore_search\"",
+			"name: \"lore_save\"",
+			"name: \"lore_get_observation\"",
+			"name: \"lore_context\"",
+			"name: \"lore_project_list\"",
+			"name: \"lore_project_create\"",
+			"name: \"lore_project_get\"",
+			"name: \"lore_skill_save\"",
+			"name: \"lore_skill_list\"",
+			"name: \"lore_skill_get\"",
+			"/v1/memories",
+			"/v1/projects",
+			"/v1/skills",
+		},
+		managedPiExtensionRelativePaths[1]: {"export default function"},
+		managedPiExtensionRelativePaths[2]: {"export default function", "ctx.ui.setFooter", "getContextUsage", "getExtensionStatuses"},
+	}
+	forbiddenSnippets := map[string][]string{
+		managedPiExtensionRelativePaths[0]: {
+			"name: \"lore_update\"",
+			"name: \"lore_delete\"",
+			"name: \"lore_timeline\"",
+			"name: \"lore_stats\"",
+			"name: \"lore_session_summary\"",
+			"unsupportedLegacyTool",
 			"/v1/search",
 			"/v1/observations",
 			"/v1/context",
-			"/v1/timeline",
 			"/v1/stats",
+			"/v1/timeline",
 			"/v1/sessions",
 		},
-		filepath.Join("extensions", "lore-delegation.ts"): {"lore api request", "/v1/sessions"},
-		filepath.Join("extensions", "lore-footer.ts"):     {"lore api request"},
 	}
-	for _, relativePath := range []string{
-		filepath.Join("extensions", "lore-memory.ts"),
-		filepath.Join("extensions", "lore-delegation.ts"),
-		filepath.Join("extensions", "lore-footer.ts"),
-		"settings.json",
-	} {
+	pathsToValidate := append(append([]string(nil), managedPiExtensionRelativePaths...), "settings.json")
+	for _, relativePath := range pathsToValidate {
 		content, ok := contents[relativePath]
 		if !ok {
 			findings = append(findings, fmt.Sprintf("%s missing after install", relativePath))
@@ -296,12 +340,17 @@ func validateManagedContents(contents map[string][]byte, req PiInstallRequest) [
 			findings = append(findings, fmt.Sprintf("%s contains saved auth material", relativePath))
 		}
 		if strings.Contains(relativePath, ".ts") {
-			if strings.TrimSpace(req.ServerURL) != "" && !strings.Contains(text, req.ServerURL) {
+			if relativePath == managedPiExtensionRelativePaths[0] && strings.TrimSpace(req.ServerURL) != "" && !strings.Contains(text, req.ServerURL) {
 				findings = append(findings, fmt.Sprintf("%s missing server URL %q", relativePath, req.ServerURL))
 			}
 			for _, snippet := range requiredSnippets[relativePath] {
 				if !strings.Contains(text, snippet) {
 					findings = append(findings, fmt.Sprintf("%s missing required contract snippet %q", relativePath, snippet))
+				}
+			}
+			for _, snippet := range forbiddenSnippets[relativePath] {
+				if strings.Contains(text, snippet) {
+					findings = append(findings, fmt.Sprintf("%s contains forbidden legacy memory contract snippet %q", relativePath, snippet))
 				}
 			}
 		}

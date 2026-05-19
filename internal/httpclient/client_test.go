@@ -248,10 +248,14 @@ func TestValidateBrokerRequestRejectsUnsafeTargetsAndBodies(t *testing.T) {
 		body    json.RawMessage
 		wantErr string
 	}{
-		{name: "full url", method: http.MethodGet, path: "https://example.test/v1/context", wantErr: "relative API path"},
+		{name: "full url", method: http.MethodGet, path: "https://example.test/v1/memories", wantErr: "relative API path"},
 		{name: "unsafe path", method: http.MethodGet, path: "/v1/me", wantErr: "allowlisted"},
-		{name: "get body", method: http.MethodGet, path: "/v1/context", body: json.RawMessage(`{"project":"lore-cli"}`), wantErr: "does not accept a body"},
-		{name: "delete body", method: http.MethodDelete, path: "/v1/observations/obs-1", body: json.RawMessage(`{"reason":"x"}`), wantErr: "does not accept a body"},
+		{name: "legacy path", method: http.MethodGet, path: "/v1/context", wantErr: "allowlisted"},
+		{name: "deep skills route approve", method: http.MethodGet, path: "/v1/skills/name/approve", wantErr: "allowlisted"},
+		{name: "deep skills route publish", method: http.MethodGet, path: "/v1/skills/name/publish", wantErr: "allowlisted"},
+		{name: "deep project route", method: http.MethodGet, path: "/v1/projects/p-1/memories", wantErr: "allowlisted"},
+		{name: "get body", method: http.MethodGet, path: "/v1/memories", body: json.RawMessage(`{"project_id":"lore-cli"}`), wantErr: "does not accept a body"},
+		{name: "post scalar body", method: http.MethodPost, path: "/v1/memories", body: json.RawMessage(`"bad"`), wantErr: "JSON object or array"},
 	}
 
 	for _, tt := range tests {
@@ -264,50 +268,143 @@ func TestValidateBrokerRequestRejectsUnsafeTargetsAndBodies(t *testing.T) {
 	}
 }
 
+func TestValidateBrokerRequestAllowsManagedMemorySkillAndProjectRoutes(t *testing.T) {
+	tests := []struct {
+		name   string
+		method string
+		path   string
+	}{
+		{name: "get memories", method: http.MethodGet, path: "/v1/memories?project_id=lore-cli"},
+		{name: "post memories", method: http.MethodPost, path: "/v1/memories"},
+		{name: "get memory by id", method: http.MethodGet, path: "/v1/memories/m-1"},
+		{name: "get skills", method: http.MethodGet, path: "/v1/skills"},
+		{name: "post skills", method: http.MethodPost, path: "/v1/skills"},
+		{name: "get skill by name", method: http.MethodGet, path: "/v1/skills/sdd-apply"},
+		{name: "get projects", method: http.MethodGet, path: "/v1/projects"},
+		{name: "post projects", method: http.MethodPost, path: "/v1/projects"},
+		{name: "get project by id", method: http.MethodGet, path: "/v1/projects/p-1"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := ValidateBrokerRequest(tt.method, tt.path, nil); err != nil {
+				t.Fatalf("ValidateBrokerRequest() error = %v", err)
+			}
+		})
+	}
+}
+
 func TestRequestJSONUsesAllowlistedPathAndRequestID(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got, want := r.Method, http.MethodGet; got != want {
 			t.Fatalf("method = %q, want %q", got, want)
 		}
-		if got, want := r.URL.RequestURI(), "/v1/context?project=lore-cli"; got != want {
+		if got, want := r.URL.RequestURI(), "/v1/memories?project_id=lore-cli"; got != want {
 			t.Fatalf("request URI = %q, want %q", got, want)
 		}
 		if got, want := r.Header.Get("Authorization"), "Bearer secret-token"; got != want {
 			t.Fatalf("Authorization = %q, want %q", got, want)
 		}
-		w.Header().Set("X-Request-Id", "req-context-1")
-		writeJSON(w, http.StatusOK, map[string]any{"data": map[string]any{"project": "lore-cli"}})
+		w.Header().Set("X-Request-Id", "req-memories-1")
+		writeJSON(w, http.StatusOK, map[string]any{"data": map[string]any{"project_id": "lore-cli"}})
 	}))
 	defer server.Close()
 
 	client := newTestClient(t, server.URL, time.Second)
-	result, err := client.RequestJSON(context.Background(), http.MethodGet, "/v1/context?project=lore-cli", "secret-token", nil)
+	result, err := client.RequestJSON(context.Background(), http.MethodGet, "/v1/memories?project_id=lore-cli", "secret-token", nil)
 	if err != nil {
 		t.Fatalf("RequestJSON() error = %v", err)
 	}
-	if result.StatusCode != http.StatusOK || result.RequestID != "req-context-1" {
+	if result.StatusCode != http.StatusOK || result.RequestID != "req-memories-1" {
 		t.Fatalf("result = %+v, want status and request id", result)
 	}
-	if string(result.Data) != `{"project":"lore-cli"}` {
+	if string(result.Data) != `{"project_id":"lore-cli"}` {
 		t.Fatalf("data = %s, want decoded envelope data", result.Data)
+	}
+}
+
+func TestValidateBrokerMCPCallAllowsOnlyKnownTools(t *testing.T) {
+	if _, _, err := ValidateBrokerMCPCall("lore_project_context", json.RawMessage(`{"project_id":"p1"}`)); err != nil {
+		t.Fatalf("ValidateBrokerMCPCall allowed tool error = %v", err)
+	}
+	if _, _, err := ValidateBrokerMCPCall("lore_delete", json.RawMessage(`{}`)); err == nil || !strings.Contains(err.Error(), "allowlisted") {
+		t.Fatalf("ValidateBrokerMCPCall rejected tool err = %v, want allowlist error", err)
+	}
+	if _, _, err := ValidateBrokerMCPCall("lore_project_context", json.RawMessage(`[]`)); err == nil || !strings.Contains(err.Error(), "JSON object") {
+		t.Fatalf("ValidateBrokerMCPCall array args err = %v, want object error", err)
+	}
+}
+
+func TestMCPCallPostsJSONRPCBodyAndDecodesResult(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got, want := r.Method, http.MethodPost; got != want {
+			t.Fatalf("method = %q, want %q", got, want)
+		}
+		if got, want := r.URL.RequestURI(), "/v1/mcp"; got != want {
+			t.Fatalf("request URI = %q, want %q", got, want)
+		}
+		if got, want := r.Header.Get("Authorization"), "Bearer secret-token"; got != want {
+			t.Fatalf("Authorization = %q, want %q", got, want)
+		}
+		var body struct {
+			JSONRPC string `json:"jsonrpc"`
+			Method  string `json:"method"`
+			Params  struct {
+				Name      string         `json:"name"`
+				Arguments map[string]any `json:"arguments"`
+			} `json:"params"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		if body.JSONRPC != "2.0" || body.Method != "tools/call" || body.Params.Name != "lore_project_context" || body.Params.Arguments["project_id"] != "p1" {
+			t.Fatalf("JSON-RPC body = %+v", body)
+		}
+		w.Header().Set("X-Request-Id", "req-mcp")
+		writeJSON(w, http.StatusOK, map[string]any{"jsonrpc": "2.0", "id": "lore-cli-mcp-call", "result": map[string]any{"context": "ok"}})
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server.URL, time.Second)
+	result, err := client.MCPCall(context.Background(), "secret-token", "lore_project_context", json.RawMessage(`{"project_id":"p1"}`))
+	if err != nil {
+		t.Fatalf("MCPCall() error = %v", err)
+	}
+	if result.StatusCode != http.StatusOK || result.RequestID != "req-mcp" || string(result.Data) != `{"context":"ok"}` {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestMCPCallConvertsJSONRPCError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Request-Id", "req-mcp")
+		writeJSON(w, http.StatusOK, map[string]any{"jsonrpc": "2.0", "id": "lore-cli-mcp-call", "error": map[string]any{"code": -32602, "message": "bad args"}})
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server.URL, time.Second)
+	_, err := client.MCPCall(context.Background(), "secret-token", "lore_project_context", json.RawMessage(`{}`))
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.Code != "-32602" || apiErr.Message != "bad args" || apiErr.RequestID != "req-mcp" {
+		t.Fatalf("MCPCall() err = %T %v, want JSON-RPC APIError", err, err)
 	}
 }
 
 func TestRequestJSONErrorFallsBackToHeaderRequestID(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("X-Request-Id", "req-stats-500")
+		w.Header().Set("X-Request-Id", "req-skills-500")
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"code": "internal_error", "message": "boom"}})
 	}))
 	defer server.Close()
 
 	client := newTestClient(t, server.URL, time.Second)
-	_, err := client.RequestJSON(context.Background(), http.MethodGet, "/v1/stats", "secret-token", nil)
+	_, err := client.RequestJSON(context.Background(), http.MethodGet, "/v1/skills", "secret-token", nil)
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) {
 		t.Fatalf("RequestJSON() error = %T %v, want *APIError", err, err)
 	}
-	if apiErr.RequestID != "req-stats-500" {
-		t.Fatalf("RequestID = %q, want req-stats-500", apiErr.RequestID)
+	if apiErr.RequestID != "req-skills-500" {
+		t.Fatalf("RequestID = %q, want req-skills-500", apiErr.RequestID)
 	}
 }
 

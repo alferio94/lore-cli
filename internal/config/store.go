@@ -10,18 +10,20 @@ import (
 )
 
 const (
-	EnvConfigDir = "LORE_CONFIG_DIR"
-	configFile   = "config.json"
-	appDirName   = "lore"
+	EnvConfigDir   = "LORE_CONFIG_DIR"
+	configFile     = "config.json"
+	appDirName     = "lore"
+	CurrentVersion = 2
 )
 
 var ErrNotFound = errors.New("config not found")
 
-// Config stores the single-session MVP auth state.
+// Config stores Lore auth metadata and can also decode legacy plaintext tokens for migration.
 type Config struct {
-	Version   int    `json:"version"`
-	ServerURL string `json:"server_url"`
-	APIToken  string `json:"api_token"`
+	Version           int    `json:"version"`
+	ServerURL         string `json:"server_url"`
+	CredentialAccount string `json:"credential_account,omitempty"`
+	APIToken          string `json:"api_token,omitempty"`
 }
 
 // Store resolves and manages the Lore CLI config file.
@@ -78,6 +80,8 @@ func (s Store) Load() (Config, error) {
 		return Config{}, fmt.Errorf("decode config: %w", err)
 	}
 	cfg.ServerURL = strings.TrimSpace(cfg.ServerURL)
+	cfg.CredentialAccount = strings.TrimSpace(cfg.CredentialAccount)
+	cfg.APIToken = strings.TrimSpace(cfg.APIToken)
 	return cfg, nil
 }
 
@@ -93,7 +97,9 @@ func (s Store) Save(cfg Config) error {
 		return err
 	}
 	cfg.ServerURL = normalized
-	cfg.Version = 1
+	cfg.Version = CurrentVersion
+	cfg.CredentialAccount = strings.TrimSpace(cfg.CredentialAccount)
+	cfg.APIToken = ""
 
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("create config dir: %w", err)

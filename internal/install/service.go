@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/alferio94/lore-cli/internal/auth"
 	"github.com/alferio94/lore-cli/internal/config"
 	"github.com/alferio94/lore-cli/internal/httpclient"
 	"github.com/alferio94/lore-cli/internal/output"
@@ -37,8 +38,13 @@ type ConfigStore interface {
 
 type ClientFactory func(baseURL string) (httpclient.Client, error)
 
+type AuthLoader interface {
+	Load() (auth.Session, error)
+}
+
 type Service struct {
 	Store         ConfigStore
+	Auth          AuthLoader
 	ClientFactory ClientFactory
 }
 
@@ -48,6 +54,7 @@ type PreflightResult struct {
 	CanContinue   bool
 	LoginRequired bool
 	ServerURL     string
+	Token         string
 	ConfigPath    string
 }
 
@@ -105,18 +112,30 @@ func (s Service) Preflight(ctx context.Context) PreflightResult {
 	}
 
 	result.ServerURL = cfg.ServerURL
-	result.Checks = append(result.Checks, output.Check{Name: "config", Status: output.StatusOK, Detail: fmt.Sprintf("configured server=%s token=%s path=%s", cfg.ServerURL, config.RedactToken(cfg.APIToken), path)})
-	if strings.TrimSpace(cfg.ServerURL) == "" || strings.TrimSpace(cfg.APIToken) == "" {
-		result.LoginRequired = true
-		result.Checks = append(result.Checks, output.Check{Name: "auth", Status: output.StatusFail, Detail: "saved login config is incomplete", Action: "Run lore login again with a valid server URL and normal user API token."})
+	result.Checks = append(result.Checks, output.Check{Name: "config", Status: output.StatusOK, Detail: fmt.Sprintf("saved login state server=%s path=%s auth=OS keychain-backed metadata only", cfg.ServerURL, path)})
+	if s.Auth == nil {
+		result.Checks = append(result.Checks, output.Check{Name: "auth", Status: output.StatusFail, Detail: "install auth loader is not configured", Action: "Retry with a configured Lore CLI app instance."})
 		return result
 	}
+	session, err := s.Auth.Load()
+	if err != nil {
+		result.LoginRequired = true
+		action := "Run lore login again with a valid server URL and normal user API token."
+		var authErr *auth.Error
+		if errors.As(err, &authErr) && authErr.Code == auth.ErrCredentialUnavailable {
+			action = unavailableCredentialAction()
+		}
+		result.Checks = append(result.Checks, output.Check{Name: "auth", Status: output.StatusFail, Detail: explainAuthLoadError(err), Action: action})
+		return result
+	}
+	result.ServerURL = session.ServerURL
+	result.Token = session.Token
 	if s.ClientFactory == nil {
 		result.Checks = append(result.Checks, output.Check{Name: "server-url", Status: output.StatusFail, Detail: "install client factory is not configured", Action: "Retry with a configured Lore CLI app instance."})
 		return result
 	}
 
-	client, err := s.ClientFactory(cfg.ServerURL)
+	client, err := s.ClientFactory(session.ServerURL)
 	if err != nil {
 		result.Checks = append(result.Checks, output.Check{Name: "server-url", Status: output.StatusFail, Detail: err.Error(), Action: "Fix the server URL with lore login --server <http(s)://host> --token <token>."})
 		return result
@@ -131,7 +150,7 @@ func (s Service) Preflight(ctx context.Context) PreflightResult {
 		return result
 	}
 	result.Checks = append(result.Checks, output.Check{Name: "readyz", Status: output.StatusOK, Detail: "server is ready"})
-	if subject, err := client.Me(ctx, cfg.APIToken); err != nil {
+	if subject, err := client.Me(ctx, session.Token); err != nil {
 		result.LoginRequired = true
 		result.Checks = append(result.Checks, output.Check{Name: "auth", Status: output.StatusFail, Detail: explainLoginError(err), Action: "Obtain a valid normal user API token and run lore login again."})
 		return result
@@ -142,12 +161,37 @@ func (s Service) Preflight(ctx context.Context) PreflightResult {
 	return result
 }
 
+func explainAuthLoadError(err error) string {
+	var authErr *auth.Error
+	if errors.As(err, &authErr) {
+		switch authErr.Code {
+		case auth.ErrCredentialMissing:
+			return "saved login state is incomplete"
+		case auth.ErrCredentialUnavailable:
+			return unavailableCredentialMessage("saved login state could not access secure credential storage")
+		case auth.ErrConfigNotFound:
+			return "no saved login state"
+		default:
+			return "saved login state could not be read"
+		}
+	}
+	return err.Error()
+}
+
 func explainLoginError(err error) string {
 	var unauthorized *httpclient.UnauthorizedError
 	if errors.As(err, &unauthorized) {
 		return "normal user API token required; /v1/me rejected the provided token"
 	}
 	return explainEndpointError(err)
+}
+
+func unavailableCredentialMessage(prefix string) string {
+	return fmt.Sprintf("%s; unlock or enable the OS keychain, and on headless Linux start a Secret Service session such as gnome-keyring, then run lore login again", prefix)
+}
+
+func unavailableCredentialAction() string {
+	return "Unlock or enable the OS keychain, and on headless Linux start a Secret Service session such as gnome-keyring, then run lore login again."
 }
 
 func explainEndpointError(err error) string {

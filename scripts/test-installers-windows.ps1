@@ -1,5 +1,5 @@
 param(
-    [string]$Version = 'v9.9.9'
+    [string]$FixtureVersion = 'v9.9.9'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -15,7 +15,7 @@ function Remove-WorkDir {
 }
 
 try {
-    $releaseDir = Join-Path $WorkDir (Join-Path 'releases' $Version)
+    $releaseDir = Join-Path $WorkDir (Join-Path 'releases' $FixtureVersion)
     $buildDir = Join-Path $WorkDir 'build'
     $localAppData = Join-Path $WorkDir 'LocalAppData'
     New-Item -ItemType Directory -Force -Path $releaseDir, $buildDir, $localAppData | Out-Null
@@ -24,7 +24,7 @@ try {
     try {
         $env:GOFLAGS = ''
         go build -trimpath `
-            -ldflags "-X github.com/alferio94/lore-cli/internal/version.Version=$Version -X github.com/alferio94/lore-cli/internal/version.Commit=test -X github.com/alferio94/lore-cli/internal/version.BuildDate=test" `
+            -ldflags "-X github.com/alferio94/lore-cli/internal/version.Version=$FixtureVersion -X github.com/alferio94/lore-cli/internal/version.Commit=test -X github.com/alferio94/lore-cli/internal/version.BuildDate=test" `
             -o (Join-Path $buildDir 'lore.exe') ./cmd/lore
     }
     finally {
@@ -36,7 +36,7 @@ try {
         'ARM64' { 'arm64'; break }
         default { throw "unsupported Windows test host architecture: $env:PROCESSOR_ARCHITECTURE" }
     }
-    $archiveName = "lore-cli_${Version}_windows_${hostArch}.zip"
+    $archiveName = "lore-cli_${FixtureVersion}_windows_${hostArch}.zip"
     $releaseExe = Join-Path $releaseDir 'lore.exe'
     Copy-Item -Path (Join-Path $buildDir 'lore.exe') -Destination $releaseExe -Force
     Compress-Archive -Path $releaseExe -DestinationPath (Join-Path $releaseDir $archiveName) -Force
@@ -45,7 +45,7 @@ try {
     Set-Content -Path (Join-Path $releaseDir 'SHA256SUMS') -Value "$checksum  $archiveName"
 
     $renderedInstaller = Join-Path $WorkDir 'install.ps1'
-    (Get-Content -Path (Join-Path $RootDir 'scripts/install.ps1') -Raw).Replace('__DEFAULT_VERSION__', $Version) | Set-Content -Path $renderedInstaller
+    (Get-Content -Path (Join-Path $RootDir 'scripts/install.ps1') -Raw).Replace('__DEFAULT_VERSION__', $FixtureVersion) | Set-Content -Path $renderedInstaller
 
     $env:LOCALAPPDATA = $localAppData
     $env:LORE_INSTALL_BASE_URL = ([System.Uri]::new((Join-Path $WorkDir 'releases'))).AbsoluteUri.TrimEnd('/')
@@ -57,8 +57,8 @@ try {
     }
 
     $versionOutput = (& $installedBinary version | Out-String)
-    if ($versionOutput -notmatch [regex]::Escape($Version)) {
-        throw "installed binary version output did not include $Version. Output: $versionOutput"
+    if ($versionOutput -notmatch [regex]::Escape($FixtureVersion)) {
+        throw "installed binary version output did not include $FixtureVersion. Output: $versionOutput"
     }
     if ($output -notmatch [regex]::Escape("Run it directly now: $installedBinary")) {
         throw 'installer output did not include direct-run guidance'

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alferio94/lore-cli/internal/auth"
 	"github.com/alferio94/lore-cli/internal/config"
 	"github.com/alferio94/lore-cli/internal/httpclient"
 	"github.com/alferio94/lore-cli/internal/output"
@@ -50,7 +51,7 @@ func TestResolvePiLayoutModelsManagedPaths(t *testing.T) {
 func TestPreflightAllowsContinuationWithHealthySavedAuth(t *testing.T) {
 	store := stubStore{path: "/tmp/lore/config.json", cfg: config.Config{ServerURL: "https://example.test", APIToken: "secret-token"}}
 	client := &stubClient{subject: httpclient.Subject{UserID: "user-1", Kind: "user"}}
-	service := Service{Store: store, ClientFactory: func(baseURL string) (httpclient.Client, error) {
+	service := Service{Store: store, Auth: stubAuthLoader{session: auth.Session{ServerURL: "https://example.test", Token: "secret-token", ConfigPath: "/tmp/lore/config.json"}}, ClientFactory: func(baseURL string) (httpclient.Client, error) {
 		if got, want := baseURL, "https://example.test"; got != want {
 			t.Fatalf("baseURL = %q, want %q", got, want)
 		}
@@ -86,7 +87,7 @@ func TestPreflightBlocksMissingConfigAndAuthFailure(t *testing.T) {
 	t.Run("auth failure", func(t *testing.T) {
 		store := stubStore{path: "/tmp/lore/config.json", cfg: config.Config{ServerURL: "https://example.test", APIToken: "secret-token"}}
 		client := &stubClient{meErr: &httpclient.UnauthorizedError{APIError: httpclient.APIError{StatusCode: 401, Code: "unauthorized", Message: "login required", RequestID: "req-auth"}}}
-		service := Service{Store: store, ClientFactory: func(string) (httpclient.Client, error) { return client, nil }}
+		service := Service{Store: store, Auth: stubAuthLoader{session: auth.Session{ServerURL: "https://example.test", Token: "secret-token", ConfigPath: "/tmp/lore/config.json"}}, ClientFactory: func(string) (httpclient.Client, error) { return client, nil }}
 		result := service.Preflight(context.Background())
 		if result.CanContinue || !result.LoginRequired {
 			t.Fatalf("result = %+v, want auth-blocked login-required state", result)
@@ -94,6 +95,35 @@ func TestPreflightBlocksMissingConfigAndAuthFailure(t *testing.T) {
 		assertCheck(t, result.Checks[3], "auth", output.StatusFail)
 		if got := result.Checks[3].Detail; got == "" || !containsAll(got, "normal user API token required", "/v1/me") {
 			t.Fatalf("auth detail = %q, want token remediation detail", got)
+		}
+	})
+
+	t.Run("missing credential", func(t *testing.T) {
+		store := stubStore{path: "/tmp/lore/config.json", cfg: config.Config{ServerURL: "https://example.test", CredentialAccount: "acct-test"}}
+		service := Service{Store: store, Auth: stubAuthLoader{err: &auth.Error{Code: auth.ErrCredentialMissing, Op: "load credential", Err: auth.ErrCredentialNotFound}}}
+		result := service.Preflight(context.Background())
+		if result.CanContinue || !result.LoginRequired {
+			t.Fatalf("result = %+v, want blocked login-required state", result)
+		}
+		assertCheck(t, result.Checks[1], "auth", output.StatusFail)
+		if got := result.Checks[1].Detail; got != "saved login state is incomplete" {
+			t.Fatalf("auth detail = %q, want incomplete saved-login guidance", got)
+		}
+		if got := result.Checks[1].Action; got != "Run lore login again with a valid server URL and normal user API token." {
+			t.Fatalf("auth action = %q, want shared login remediation", got)
+		}
+	})
+
+	t.Run("headless keychain failure", func(t *testing.T) {
+		store := stubStore{path: "/tmp/lore/config.json", cfg: config.Config{ServerURL: "https://example.test"}}
+		service := Service{Store: store, Auth: stubAuthLoader{err: &auth.Error{Code: auth.ErrCredentialUnavailable, Op: "load credential", Err: errors.New("no keyring")}}}
+		result := service.Preflight(context.Background())
+		if result.CanContinue || !result.LoginRequired {
+			t.Fatalf("result = %+v, want blocked login-required state", result)
+		}
+		assertCheck(t, result.Checks[1], "auth", output.StatusFail)
+		if got := result.Checks[1].Action; got == "" || !containsAll(got, "OS keychain", "headless Linux", "gnome-keyring", "lore login") {
+			t.Fatalf("auth action = %q, want headless keychain remediation", got)
 		}
 	})
 }
@@ -129,6 +159,11 @@ type stubStore struct {
 	err  error
 }
 
+type stubAuthLoader struct {
+	session auth.Session
+	err     error
+}
+
 func (s stubStore) Load() (config.Config, error) {
 	if s.err != nil {
 		return config.Config{}, s.err
@@ -141,6 +176,13 @@ func (s stubStore) Path() (string, error) {
 		return "", errors.New("missing path")
 	}
 	return s.path, nil
+}
+
+func (s stubAuthLoader) Load() (auth.Session, error) {
+	if s.err != nil {
+		return auth.Session{}, s.err
+	}
+	return s.session, nil
 }
 
 type stubClient struct {
@@ -166,6 +208,9 @@ func (*stubClient) ListMemories(context.Context, string, httpclient.ListMemories
 }
 func (*stubClient) RequestJSON(context.Context, string, string, string, json.RawMessage) (httpclient.RequestJSONResult, error) {
 	panic("unexpected RequestJSON call")
+}
+func (*stubClient) MCPCall(context.Context, string, string, json.RawMessage) (httpclient.RequestJSONResult, error) {
+	panic("unexpected MCPCall call")
 }
 
 func TestInstallPiWritesManagedFilesBackupsAndManifest(t *testing.T) {
@@ -212,6 +257,11 @@ func TestInstallPiWritesManagedFilesBackupsAndManifest(t *testing.T) {
 	if result.Manifest.BackupRoot == "" || len(result.Manifest.ManagedFiles) != 4 {
 		t.Fatalf("Manifest = %+v, want backup root and managed files", result.Manifest)
 	}
+	for i, want := range layout.ManagedFiles {
+		if got := result.Manifest.ManagedFiles[i]; got != want {
+			t.Fatalf("Manifest.ManagedFiles[%d] = %q, want %q", i, got, want)
+		}
+	}
 
 	memoryPath := filepath.Join(layout.ExtensionsDir, "lore-memory.ts")
 	memoryContent, err := os.ReadFile(memoryPath)
@@ -219,37 +269,77 @@ func TestInstallPiWritesManagedFilesBackupsAndManifest(t *testing.T) {
 		t.Fatalf("ReadFile lore-memory.ts: %v", err)
 	}
 	if got := string(memoryContent); !containsAll(got,
-		"lore api request",
+		"\"api\", \"request\"",
+		"\"api\", \"mcp-call\"",
+		"lore_project_context",
 		"https://lore.example",
-		"export const lore_search",
-		"export const lore_save",
-		"export const lore_update",
-		"export const lore_delete",
-		"export const lore_get_observation",
-		"export const lore_context",
-		"export const lore_timeline",
-		"export const lore_stats",
-		"export const lore_session_summary",
-		"brokerArgs(\"GET\", \"/v1/search\")",
-		"brokerArgs(\"POST\", \"/v1/observations\", body)",
-		"brokerArgs(\"PATCH\", `/v1/observations/${id}`, body)",
-		"brokerArgs(\"DELETE\", `/v1/observations/${id}`)",
-		"brokerArgs(\"GET\", `/v1/observations/${id}`)",
-		"brokerArgs(\"GET\", \"/v1/context\")",
-		"brokerArgs(\"GET\", \"/v1/timeline\")",
-		"brokerArgs(\"GET\", \"/v1/stats\")",
-		"brokerArgs(\"POST\", \"/v1/sessions\", body)") {
+		"export default function",
+		"ExtensionAPI",
+		"Text",
+		"renderCall(",
+		"renderResult(",
+		"text: formatContent(payload.data)",
+		"pi.registerTool",
+		"name: \"lore_search\"",
+		"name: \"lore_save\"",
+		"name: \"lore_get_observation\"",
+		"name: \"lore_context\"",
+		"name: \"lore_project_list\"",
+		"name: \"lore_project_create\"",
+		"name: \"lore_project_get\"",
+		"name: \"lore_skill_save\"",
+		"name: \"lore_skill_list\"",
+		"name: \"lore_skill_get\"",
+		"runBroker(\"GET\", path",
+		"/v1/memories",
+		"/v1/projects",
+		"runBroker(\"GET\", \"/v1/projects\", undefined",
+		"runBroker(\"GET\", `/v1/projects/${encodeURIComponent(id)}`, undefined",
+		"runBroker(\"GET\", `/v1/memories/${encodeURIComponent(id)}`, undefined",
+		"/v1/skills",
+		"runBroker(\"GET\", \"/v1/skills\", undefined",
+		"runBroker(\"GET\", `/v1/skills/${encodeURIComponent(name)}`, undefined") {
 		t.Fatalf("lore-memory.ts missing broker markers/tool names: %q", got)
 	} else if strings.Contains(got, "secret-token") {
 		t.Fatalf("lore-memory.ts leaked token: %q", got)
+	} else {
+		for _, legacy := range []string{"/v1/search", "/v1/observations", "/v1/context", "/v1/timeline", "/v1/stats", "/v1/sessions"} {
+			if strings.Contains(got, legacy) {
+				t.Fatalf("lore-memory.ts contains legacy memory route %q: %q", legacy, got)
+			}
+		}
 	}
 
 	delegationContent, err := os.ReadFile(filepath.Join(layout.ExtensionsDir, "lore-delegation.ts"))
 	if err != nil {
 		t.Fatalf("ReadFile lore-delegation.ts: %v", err)
 	}
-	if got := string(delegationContent); !containsAll(got, "lore api request", "--path", "/v1/sessions", "https://lore.example") {
-		t.Fatalf("lore-delegation.ts missing broker contract: %q", got)
+	if got := string(delegationContent); !containsAll(got,
+		"export default function",
+		"ExtensionAPI",
+		"pi.registerCommand(\"sdd-models\"",
+		"pi.registerShortcut(\"ctrl+space\"",
+		"name: \"delegate\"",
+		"name: \"delegation_read\"",
+		"name: \"delegation_list\"") {
+		t.Fatalf("lore-delegation.ts missing local delegation/model-routing markers: %q", got)
+	} else if strings.Contains(got, "lore_delegate") || strings.Contains(got, "/v1/sessions") {
+		t.Fatalf("lore-delegation.ts contains unsupported remote delegation contract: %q", got)
+	} else if !strings.Contains(got, "anchor: \"center\",\n      width: \"96%\",\n      minWidth: 72,\n      maxHeight: \"80%\",") {
+		t.Fatalf("lore-delegation.ts missing centered subagents overlay marker: %q", got)
+	}
+
+	footerContent, err := os.ReadFile(filepath.Join(layout.ExtensionsDir, "lore-footer.ts"))
+	if err != nil {
+		t.Fatalf("ReadFile lore-footer.ts: %v", err)
+	}
+	if got := string(footerContent); !containsAll(got,
+		"export default function",
+		"ExtensionAPI",
+		"ctx.ui.setFooter",
+		"getContextUsage",
+		"getExtensionStatuses") {
+		t.Fatalf("lore-footer.ts missing extension markers: %q", got)
 	}
 
 	settingsContent, err := os.ReadFile(layout.SettingsPath)
@@ -296,20 +386,27 @@ func TestValidateManagedContentsRejectsRawToken(t *testing.T) {
 	findings := validateManagedContents(map[string][]byte{
 		"extensions/lore-memory.ts": []byte(`
 const loreServerURL = "https://lore.example";
-// lore api request
-export const lore_search = { name: "lore_search", broker: () => brokerArgs("GET", "/v1/search") };
-export const lore_save = { name: "lore_save", broker: (body?: unknown) => brokerArgs("POST", "/v1/observations", body) };
-export const lore_update = { name: "lore_update", broker: (id: string, body?: unknown) => brokerArgs("PATCH", "/v1/observations", body) };
-export const lore_delete = { name: "lore_delete", broker: (id: string) => brokerArgs("DELETE", "/v1/observations") };
-export const lore_get_observation = { name: "lore_get_observation", broker: (id: string) => brokerArgs("GET", "/v1/observations") };
-export const lore_context = { name: "lore_context", broker: () => brokerArgs("GET", "/v1/context") };
-export const lore_timeline = { name: "lore_timeline", broker: () => brokerArgs("GET", "/v1/timeline") };
-export const lore_stats = { name: "lore_stats", broker: () => brokerArgs("GET", "/v1/stats") };
-export const lore_session_summary = { name: "lore_session_summary", broker: (body?: unknown) => brokerArgs("POST", "/v1/sessions", body) };
+// broker args include "api", "request"
+// MCP broker args include "api", "mcp-call" and lore_project_context
+import { Text } from "@earendil-works/pi-tui";
+export default function (pi: ExtensionAPI) {
+  pi.registerTool({ name: "lore_search", renderCall() {}, renderResult() {} });
+  pi.registerTool({ name: "lore_save", renderCall() {}, renderResult() {} });
+  pi.registerTool({ name: "lore_get_observation", renderCall() {}, renderResult() {} });
+  pi.registerTool({ name: "lore_context", renderCall() {}, renderResult() {} });
+  pi.registerTool({ name: "lore_project_list", renderCall() {}, renderResult() {} });
+  pi.registerTool({ name: "lore_project_create", renderCall() {}, renderResult() {} });
+  pi.registerTool({ name: "lore_project_get", renderCall() {}, renderResult() {} });
+  pi.registerTool({ name: "lore_skill_save", renderCall() {}, renderResult() {} });
+  pi.registerTool({ name: "lore_skill_list", renderCall() {}, renderResult() {} });
+  pi.registerTool({ name: "lore_skill_get", renderCall() {}, renderResult() {} });
+}
+text: formatContent(payload.data)
+/v1/memories /v1/projects /v1/skills
 secret-token
 `),
-		"extensions/lore-delegation.ts": []byte("lore api request https://lore.example /v1/sessions"),
-		"extensions/lore-footer.ts":     []byte("lore api request https://lore.example"),
+		"extensions/lore-delegation.ts": []byte("export default function (pi: ExtensionAPI) { ctx.ui.setStatus(\"lore-delegation\", \"\"); }"),
+		"extensions/lore-footer.ts":     []byte("export default function (pi: ExtensionAPI) { ctx.ui.setFooter(() => ({ render() { return []; } })); } getContextUsage getExtensionStatuses"),
 		"settings.json":                 []byte(`{"lore":{"server_url":"https://lore.example"}}`),
 	}, PiInstallRequest{ServerURL: "https://lore.example", SavedToken: "secret-token"})
 	if len(findings) != 1 {
@@ -317,6 +414,91 @@ secret-token
 	}
 	if got := findings[0]; !containsAll(got, "saved auth material", "extensions/lore-memory.ts") || strings.Contains(got, "secret-token") {
 		t.Fatalf("finding = %q, want secret-safe token validation detail", got)
+	}
+}
+
+func TestValidateManagedContentsRejectsLegacyMemoryRoutesWithoutRequiringDelegationSessions(t *testing.T) {
+	validMemory := []byte(`
+const loreServerURL = "https://lore.example";
+// broker args include "api", "request"
+// MCP broker args include "api", "mcp-call" and lore_project_context
+import { Text } from "@earendil-works/pi-tui";
+export default function (pi: ExtensionAPI) {
+  pi.registerTool({ name: "lore_search", renderCall() {}, renderResult() {} });
+  pi.registerTool({ name: "lore_save", renderCall() {}, renderResult() {} });
+  pi.registerTool({ name: "lore_get_observation", renderCall() {}, renderResult() {} });
+  pi.registerTool({ name: "lore_context", renderCall() {}, renderResult() {} });
+  pi.registerTool({ name: "lore_project_list", renderCall() {}, renderResult() {} });
+  pi.registerTool({ name: "lore_project_create", renderCall() {}, renderResult() {} });
+  pi.registerTool({ name: "lore_project_get", renderCall() {}, renderResult() {} });
+  pi.registerTool({ name: "lore_skill_save", renderCall() {}, renderResult() {} });
+  pi.registerTool({ name: "lore_skill_list", renderCall() {}, renderResult() {} });
+  pi.registerTool({ name: "lore_skill_get", renderCall() {}, renderResult() {} });
+}
+text: formatContent(payload.data)
+/v1/memories /v1/projects /v1/skills /v1/search /v1/observations /v1/context /v1/timeline /v1/stats /v1/sessions
+`)
+	findings := validateManagedContents(map[string][]byte{
+		"extensions/lore-memory.ts":     validMemory,
+		"extensions/lore-delegation.ts": []byte("export default function (pi: ExtensionAPI) { ctx.ui.setStatus(\"lore-delegation\", \"\"); }"),
+		"extensions/lore-footer.ts":     []byte("export default function (pi: ExtensionAPI) { ctx.ui.setFooter(() => ({ render() { return []; } })); } getContextUsage getExtensionStatuses"),
+		"settings.json":                 []byte(`{"lore":{"server_url":"https://lore.example"}}`),
+	}, PiInstallRequest{ServerURL: "https://lore.example", SavedToken: "secret-token"})
+
+	if len(findings) != 6 {
+		t.Fatalf("findings = %#v, want one finding for each legacy lore-memory.ts route", findings)
+	}
+	for _, legacy := range []string{"/v1/search", "/v1/observations", "/v1/context", "/v1/timeline", "/v1/stats", "/v1/sessions"} {
+		if !containsAny(findings, "extensions/lore-memory.ts", legacy, "forbidden legacy memory contract snippet") {
+			t.Fatalf("findings = %#v, want scoped rejection for %s", findings, legacy)
+		}
+	}
+}
+
+func TestValidateRenderedPiFilesRejectsMissingDefaultFactoryBeforeWrites(t *testing.T) {
+	layout := ResolvePiLayout(t.TempDir())
+	files := []renderedPiFile{
+		{relativePath: managedPiExtensionRelativePaths[0], absolutePath: filepath.Join(layout.ExtensionsDir, "lore-memory.ts"), content: []byte("lore api request without factory")},
+		{relativePath: managedPiExtensionRelativePaths[1], absolutePath: filepath.Join(layout.ExtensionsDir, "lore-delegation.ts"), content: []byte("export default function (pi: ExtensionAPI) {}")},
+		{relativePath: managedPiExtensionRelativePaths[2], absolutePath: filepath.Join(layout.ExtensionsDir, "lore-footer.ts"), content: []byte("export default function (pi: ExtensionAPI) { ctx.ui.setFooter(() => ({ render() { return []; } })); } getContextUsage getExtensionStatuses")},
+		{relativePath: "settings.json", absolutePath: layout.SettingsPath, content: []byte(`{}`), mergeJSON: true},
+	}
+
+	err := validateRenderedPiFiles(files)
+	if err == nil || !containsAll(err.Error(), "extensions/lore-memory.ts", "export default function") {
+		t.Fatalf("validateRenderedPiFiles error = %v, want default factory rejection", err)
+	}
+	if _, statErr := os.Stat(layout.AgentDir); !os.IsNotExist(statErr) {
+		t.Fatalf("agent dir stat error = %v, want no writes before validation failure", statErr)
+	}
+}
+
+func TestInstallPiRejectsInvalidRenderedExtensionShapeBeforeAnyWrite(t *testing.T) {
+	homeDir := t.TempDir()
+	layout := ResolvePiLayout(homeDir)
+
+	original := append([]string(nil), managedPiExtensionRelativePaths...)
+	managedPiExtensionRelativePaths = append(managedPiExtensionRelativePaths, filepath.Join("extensions", "unexpected-extra.ts"))
+	defer func() {
+		managedPiExtensionRelativePaths = original
+	}()
+
+	_, err := Service{}.InstallPi(PiInstallRequest{
+		HomeDir:        homeDir,
+		ServerURL:      "https://lore.example",
+		LoreBinaryPath: "/usr/local/bin/lore",
+		LoreConfigDir:  "/tmp/lore-config",
+		LoreCLIVersion: "v1.2.3",
+		Now:            time.Date(2026, 5, 18, 20, 30, 0, 0, time.UTC),
+	})
+	if err == nil || !containsAll(err.Error(), "validate rendered Pi assets", "extensions/unexpected-extra.ts", "missing") {
+		t.Fatalf("InstallPi error = %v, want preflight rendered-asset rejection", err)
+	}
+	if _, statErr := os.Stat(layout.AgentDir); !os.IsNotExist(statErr) {
+		t.Fatalf("agent dir stat error = %v, want no writes when preflight fails", statErr)
+	}
+	if _, statErr := os.Stat(layout.ManifestPath); !os.IsNotExist(statErr) {
+		t.Fatalf("manifest stat error = %v, want no manifest on preflight failure", statErr)
 	}
 }
 
@@ -374,7 +556,7 @@ func TestInstallPiReportsValidationFailuresAndSummary(t *testing.T) {
 		LoreBinaryPath: "/usr/local/bin/lore",
 		LoreConfigDir:  "/tmp/lore-config",
 		LoreCLIVersion: "v1.2.3",
-		SavedToken:     "lore api request",
+		SavedToken:     "export default function",
 		Now:            time.Date(2026, 5, 18, 20, 0, 0, 0, time.UTC),
 	})
 	if err != nil {
@@ -389,7 +571,7 @@ func TestInstallPiReportsValidationFailuresAndSummary(t *testing.T) {
 		}
 	}
 	for _, entry := range result.Summary.Failed {
-		if strings.Contains(entry, "lore api request") {
+		if strings.Contains(entry, "export default function") {
 			t.Fatalf("Failed = %v, want no raw token echo", result.Summary.Failed)
 		}
 	}
@@ -402,6 +584,10 @@ func TestInstallPiReportsValidationFailuresAndSummary(t *testing.T) {
 }
 
 func containsSummaryEntry(entries []string, wants ...string) bool {
+	return containsAny(entries, wants...)
+}
+
+func containsAny(entries []string, wants ...string) bool {
 	for _, entry := range entries {
 		if containsAll(entry, wants...) {
 			return true

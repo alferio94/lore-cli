@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/alferio94/lore-cli/internal/auth"
 	"github.com/alferio94/lore-cli/internal/config"
 	"github.com/alferio94/lore-cli/internal/httpclient"
 	"github.com/alferio94/lore-cli/internal/output"
@@ -46,8 +47,11 @@ func TestLoginActionMatchesCLIMessageAndTrimsInput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loginAction() error = %v", err)
 	}
-	if store.saved.ServerURL != "https://example.test" || store.saved.APIToken != "secret-token" {
-		t.Fatalf("saved config = %+v, want trimmed values", store.saved)
+	if store.saved.ServerURL != "https://example.test" || store.saved.APIToken != "" || store.saved.CredentialAccount == "" {
+		t.Fatalf("saved config = %+v, want metadata-only saved state", store.saved)
+	}
+	if got := app.Auth.(*fakeAuthManager).savedToken; got != "secret-token" {
+		t.Fatalf("savedToken = %q, want secret-token", got)
 	}
 	if client.meToken != "secret-token" {
 		t.Fatalf("Me token = %q, want trimmed token", client.meToken)
@@ -123,6 +127,56 @@ func TestParseMetadataJSONAndLoadAuthenticatedClientValidation(t *testing.T) {
 	}
 }
 
+func TestStatusActionMigratesLegacyConfigViaAuthManager(t *testing.T) {
+	store := &fakeStore{path: "/tmp/lore/config.json", loaded: config.Config{ServerURL: "https://example.test", APIToken: "legacy-token"}}
+	client := &fakeClient{subject: httpclient.Subject{UserID: "user-1", Kind: "user"}}
+	creds := &fakeCredentialStore{}
+	app, _, _ := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
+	app.Auth = auth.Manager{ConfigStore: store, Credentials: creds}
+
+	status := app.statusAction(context.Background())
+	if status.ExitCode != 0 {
+		t.Fatalf("statusAction() = %+v, want successful migrated status", status)
+	}
+	if store.saved.APIToken != "" || store.saved.CredentialAccount == "" {
+		t.Fatalf("saved config = %+v, want scrubbed metadata-only config", store.saved)
+	}
+	if client.meToken != "legacy-token" {
+		t.Fatalf("Me token = %q, want migrated legacy token", client.meToken)
+	}
+	if len(creds.secrets) != 1 {
+		t.Fatalf("credential writes = %v, want 1 migrated secret", creds.secrets)
+	}
+	assertNoTokenLeak(t, output.RenderChecks(status.Title, status.Checks), "", "legacy-token")
+}
+
+func TestStatusActionFailsClosedWhenLegacyMigrationCredentialBackendUnavailable(t *testing.T) {
+	store := &fakeStore{path: "/tmp/lore/config.json", loaded: config.Config{ServerURL: "https://example.test", APIToken: "legacy-token"}}
+	client := &fakeClient{}
+	creds := &fakeCredentialStore{setErr: errors.New("keychain locked")}
+	app, _, _ := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
+	app.Auth = auth.Manager{ConfigStore: store, Credentials: creds}
+
+	status := app.statusAction(context.Background())
+	if status.ExitCode != 1 {
+		t.Fatalf("statusAction() exit = %d, want 1", status.ExitCode)
+	}
+	assertCheckNames(t, status.Checks, "config", "auth")
+	if got := status.Checks[1].Detail; !containsAll(got, "secure credential storage", "run lore login again") {
+		t.Fatalf("auth detail = %q, want keychain remediation", got)
+	}
+	if got := status.Checks[1].Action; !containsAll(got, "OS keychain", "gnome-keyring", "lore login") {
+		t.Fatalf("auth action = %q, want unavailable credential action", got)
+	}
+	if store.saved.APIToken != "" || store.saved.CredentialAccount == "" {
+		t.Fatalf("saved config = %+v, want scrubbed metadata-only rewrite", store.saved)
+	}
+	if client.meToken != "" {
+		t.Fatalf("Me token = %q, want no authenticated request on failed migration", client.meToken)
+	}
+	assertNoTokenLeak(t, output.RenderChecks(status.Title, status.Checks), "", "legacy-token")
+}
+
 func TestStatusAndDoctorActionsPreserveDiagnosticSemantics(t *testing.T) {
 	store := &fakeStore{path: "/tmp/lore/config.json", loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token"}}
 	client := &fakeClient{
@@ -152,14 +206,14 @@ func TestRunAPIRequestUsesSavedAuthAndReturnsSuccessEnvelope(t *testing.T) {
 	client := &fakeClient{requestJSONResult: httpclient.RequestJSONResult{StatusCode: 200, RequestID: "req-context", Data: json.RawMessage(`{"project":"lore-cli"}`)}}
 	app, stdout, _ := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
 
-	exitCode := app.runAPIRequest(apiRequestOptions{JSONOutput: true, Method: "get", Path: "/v1/context?project=lore-cli"})
+	exitCode := app.runAPIRequest(apiRequestOptions{JSONOutput: true, Method: "get", Path: "/v1/memories?project_id=lore-cli"})
 	if exitCode != 0 {
 		t.Fatalf("runAPIRequest() exitCode = %d, want 0", exitCode)
 	}
 	if client.requestJSONToken != "secret-token" || client.requestJSONMethod != "GET" {
 		t.Fatalf("requestJSON call = token=%q method=%q", client.requestJSONToken, client.requestJSONMethod)
 	}
-	if client.requestJSONPath != "/v1/context?project=lore-cli" {
+	if client.requestJSONPath != "/v1/memories?project_id=lore-cli" {
 		t.Fatalf("requestJSON path = %q", client.requestJSONPath)
 	}
 	if got := stdout.String(); !strings.Contains(got, `"ok":true`) || !strings.Contains(got, `"request_id":"req-context"`) {
@@ -178,4 +232,13 @@ func assertCheckNames(t *testing.T, checks []output.Check, want ...string) {
 			t.Fatalf("checks[%d].Name = %q, want %q", i, got, name)
 		}
 	}
+}
+
+func containsAll(value string, wants ...string) bool {
+	for _, want := range wants {
+		if !strings.Contains(value, want) {
+			return false
+		}
+	}
+	return true
 }

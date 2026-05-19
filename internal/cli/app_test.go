@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alferio94/lore-cli/internal/auth"
 	"github.com/alferio94/lore-cli/internal/config"
 	"github.com/alferio94/lore-cli/internal/httpclient"
 	"github.com/alferio94/lore-cli/internal/version"
@@ -31,8 +32,11 @@ func TestLoginSavesValidatedSession(t *testing.T) {
 	if exitCode != 0 {
 		t.Fatalf("Run() exitCode = %d, want 0, stderr=%q", exitCode, stderr.String())
 	}
-	if store.saved.ServerURL != "https://example.test/" || store.saved.APIToken != "secret-token" {
-		t.Fatalf("saved config = %+v, want trimmed values passed to store", store.saved)
+	if store.saved.ServerURL != "https://example.test/" || store.saved.APIToken != "" || store.saved.CredentialAccount == "" {
+		t.Fatalf("saved config = %+v, want metadata-only saved state", store.saved)
+	}
+	if got := app.Auth.(*fakeAuthManager).savedToken; got != "secret-token" {
+		t.Fatalf("savedToken = %q, want secret-token", got)
 	}
 	if client.meToken != "secret-token" {
 		t.Fatalf("Me token = %q, want trimmed token", client.meToken)
@@ -59,6 +63,26 @@ func TestLoginRejectsUnauthorizedWithoutSaving(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "normal user API token required") {
 		t.Fatalf("stderr = %q, want actionable unauthorized guidance", stderr.String())
+	}
+	assertNoTokenLeak(t, stdout.String(), stderr.String(), "secret-token")
+}
+
+func TestLoginExplainsUnavailableKeychainWithoutLeakingToken(t *testing.T) {
+	store := &fakeStore{path: "/tmp/lore/config.json", loadErr: config.ErrNotFound}
+	client := &fakeClient{subject: httpclient.Subject{UserID: "user-1", Kind: "user"}}
+	app, stdout, stderr := newTestApp(store, func(baseURL string) (httpclient.Client, error) {
+		return client, nil
+	})
+	app.Auth.(*fakeAuthManager).saveErr = &auth.Error{Code: auth.ErrCredentialUnavailable, Op: "store credential", Err: errors.New("keychain locked")}
+
+	exitCode := app.Run([]string{"login", "--server", "https://example.test", "--token", "secret-token"})
+	if exitCode != 1 {
+		t.Fatalf("Run() exitCode = %d, want 1", exitCode)
+	}
+	for _, want := range []string{"OS keychain", "headless Linux", "gnome-keyring", "run lore login again"} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("stderr = %q, want substring %q", stderr.String(), want)
+		}
 	}
 	assertNoTokenLeak(t, stdout.String(), stderr.String(), "secret-token")
 }
@@ -154,6 +178,22 @@ func TestStatusReportsHealthReadinessAndIdentity(t *testing.T) {
 	assertNoTokenLeak(t, out, stderr.String(), "secret-token")
 }
 
+func TestStatusWithMissingCredentialReportsSharedRemediation(t *testing.T) {
+	store := &fakeStore{path: "/tmp/lore/config.json", loaded: config.Config{ServerURL: "https://example.test", CredentialAccount: "acct-test"}}
+	app, stdout, stderr := newTestApp(store, nil)
+
+	exitCode := app.Run([]string{"status"})
+	if exitCode != 1 {
+		t.Fatalf("Run() exitCode = %d, want 1, stderr=%q", exitCode, stderr.String())
+	}
+	out := stdout.String()
+	for _, want := range []string{"[OK] config", "[FAIL] auth", "saved login state is incomplete", "Run lore login again with a valid normal user API token."} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("stdout = %q, want substring %q", out, want)
+		}
+	}
+}
+
 func TestDoctorReportsFailuresAndPiAvailability(t *testing.T) {
 	store := &fakeStore{path: "/tmp/lore/config.json", loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token"}}
 	client := &fakeClient{
@@ -177,22 +217,11 @@ func TestDoctorReportsFailuresAndPiAvailability(t *testing.T) {
 }
 
 func TestLogoutClearsExistingConfigAndRemainsIdempotent(t *testing.T) {
-	store := config.NewStore(t.TempDir())
-	if err := store.Save(config.Config{ServerURL: "https://example.test", APIToken: "secret-token"}); err != nil {
-		t.Fatalf("Save() error = %v", err)
-	}
-
-	stdout := &strings.Builder{}
-	stderr := &strings.Builder{}
-	app := &App{
-		Stdout: stdout,
-		Stderr: stderr,
-		Store:  store,
-		ClientFactory: func(baseURL string) (httpclient.Client, error) {
-			return &fakeClient{}, nil
-		},
-		LookPath: func(name string) (string, error) { return "/usr/bin/pi", nil },
-	}
+	store := &fakeStore{path: "/tmp/lore/config.json", loaded: config.Config{ServerURL: "https://example.test", CredentialAccount: "acct-test"}}
+	app, stdout, stderr := newTestApp(store, func(baseURL string) (httpclient.Client, error) {
+		return &fakeClient{}, nil
+	})
+	app.Auth.(*fakeAuthManager).session = auth.Session{ServerURL: "https://example.test", Token: "secret-token", ConfigPath: store.path, CredentialAccount: "acct-test"}
 
 	exitCode := app.Run([]string{"logout"})
 	if exitCode != 0 {
@@ -480,8 +509,10 @@ func TestHelpAndUnknownCommand(t *testing.T) {
 	if exitCode := app.Run([]string{"--help"}); exitCode != 0 {
 		t.Fatalf("help exitCode = %d, want 0", exitCode)
 	}
-	if !strings.Contains(stdout.String(), "Commands:") || !strings.Contains(stdout.String(), "version") || !strings.Contains(stdout.String(), "api request") || !strings.Contains(stdout.String(), "install") {
-		t.Fatalf("stdout = %q, want root help with install and hidden broker hint", stdout.String())
+	for _, want := range []string{"Commands:", "version", "api request", "install", "OS keychain-backed login metadata"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout = %q, want substring %q", stdout.String(), want)
+		}
 	}
 
 	stdout.Reset()
@@ -495,19 +526,22 @@ func TestHelpAndUnknownCommand(t *testing.T) {
 }
 
 func TestInstallCommandRunsPiInstallAndPrintsSummary(t *testing.T) {
-	homeDir := t.TempDir()
+	homeDir, piAgentDir := setIsolatedPiHome(t)
 	store := &fakeStore{path: "/tmp/lore/config/config.json", loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token"}}
 	client := &fakeClient{subject: httpclient.Subject{UserID: "user-1", Kind: "user"}}
 	app, stdout, stderr := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
-	app.UserHomeDir = func() (string, error) { return homeDir, nil }
 	app.ExecutablePath = func() (string, error) { return "/usr/local/bin/lore", nil }
 	app.BuildInfo = version.Info{Version: "v1.2.3"}
 
 	if exitCode := app.Run([]string{"install"}); exitCode != 0 {
 		t.Fatalf("install exitCode = %d, want 0, stderr=%q", exitCode, stderr.String())
 	}
+	manifestPath := filepath.Join(piAgentDir, "lore-install.json")
+	if _, err := os.Stat(manifestPath); err != nil {
+		t.Fatalf("manifest stat err = %v, want manifest created in isolated PI_CODING_AGENT_DIR=%q (home=%q)", err, piAgentDir, homeDir)
+	}
 	out := stdout.String()
-	for _, want := range []string{"Lore install", "[OK] healthz", "[OK] install", "created=4", "manifest", "lore-install.json"} {
+	for _, want := range []string{"Lore install", "[OK] healthz", "[OK] install", "created=4", "manifest", manifestPath} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("stdout = %q, want substring %q", out, want)
 		}
@@ -516,32 +550,34 @@ func TestInstallCommandRunsPiInstallAndPrintsSummary(t *testing.T) {
 }
 
 func TestInstallCommandPassesSavedTokenToValidationWithoutLeakingIt(t *testing.T) {
-	homeDir := t.TempDir()
-	store := &fakeStore{path: "/tmp/lore/config/config.json", loaded: config.Config{ServerURL: "https://example.test", APIToken: "lore api request"}}
+	homeDir, piAgentDir := setIsolatedPiHome(t)
+	store := &fakeStore{path: "/tmp/lore/config/config.json", loaded: config.Config{ServerURL: "https://example.test", APIToken: "export default function"}}
 	client := &fakeClient{subject: httpclient.Subject{UserID: "user-1", Kind: "user"}}
 	app, stdout, stderr := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
-	app.UserHomeDir = func() (string, error) { return homeDir, nil }
 	app.ExecutablePath = func() (string, error) { return "/usr/local/bin/lore", nil }
 	app.BuildInfo = version.Info{Version: "v1.2.3"}
 
 	if exitCode := app.Run([]string{"install"}); exitCode != 1 {
 		t.Fatalf("install exitCode = %d, want 1 for validation failure, stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
 	}
+	manifestPath := filepath.Join(piAgentDir, "lore-install.json")
+	if _, err := os.Stat(manifestPath); err != nil {
+		t.Fatalf("manifest stat err = %v, want manifest retained for validation summary in isolated PI_CODING_AGENT_DIR=%q (home=%q)", err, piAgentDir, homeDir)
+	}
 	out := stdout.String()
 	if !strings.Contains(out, "contains saved auth material") {
 		t.Fatalf("stdout = %q, want secret-safe validation finding", out)
 	}
-	if !strings.Contains(out, "extensions/lore-memory.ts") {
+	if !strings.Contains(out, "extensions/lore-") {
 		t.Fatalf("stdout = %q, want managed file validation detail", out)
 	}
-	assertNoTokenLeak(t, out, stderr.String(), "lore api request")
+	assertNoTokenLeak(t, out, stderr.String(), "export default function")
 }
 
 func TestInstallCommandBlocksWhenLoginIsRequired(t *testing.T) {
-	homeDir := t.TempDir()
+	homeDir, piAgentDir := setIsolatedPiHome(t)
 	store := &fakeStore{path: "/tmp/lore/config/config.json", loadErr: config.ErrNotFound}
 	app, stdout, stderr := newTestApp(store, nil)
-	app.UserHomeDir = func() (string, error) { return homeDir, nil }
 	app.ExecutablePath = func() (string, error) { return "/usr/local/bin/lore", nil }
 
 	if exitCode := app.Run([]string{"install"}); exitCode != 1 {
@@ -550,8 +586,11 @@ func TestInstallCommandBlocksWhenLoginIsRequired(t *testing.T) {
 	if got := stdout.String(); !strings.Contains(got, "Run lore login") && !strings.Contains(got, "run lore login") {
 		t.Fatalf("stdout = %q, want login remediation", got)
 	}
-	if _, err := os.Stat(filepath.Join(homeDir, ".pi", "agent", "lore-install.json")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("manifest stat err = %v, want not exist", err)
+	if _, err := os.Stat(filepath.Join(piAgentDir, "lore-install.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("manifest stat err = %v, want not exist on preflight validation failure (PI_CODING_AGENT_DIR=%q home=%q)", err, piAgentDir, homeDir)
+	}
+	if _, err := os.Stat(piAgentDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("pi agent dir stat err = %v, want no partial install state on preflight validation failure", err)
 	}
 	if stderr.Len() != 0 {
 		t.Fatalf("stderr = %q, want empty", stderr.String())
@@ -569,6 +608,7 @@ func TestInstallUsageIncludesPiFirstGuidance(t *testing.T) {
 		"Usage: lore install",
 		"Pi-first managed runtime",
 		"saved Lore login state",
+		"OS keychain-backed login metadata",
 		"Claude Code, OpenCode, Codex, and Antigravity remain Coming soon",
 	} {
 		if !strings.Contains(stderr.String(), want) {
@@ -582,7 +622,7 @@ func TestAPIRequestCommandReturnsMachineReadableExitCodes(t *testing.T) {
 	client := &fakeClient{}
 	app, stdout, stderr := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
 
-	if exitCode := app.Run([]string{"api", "request", "--json", "--method", "GET", "--path", "https://example.test/v1/context"}); exitCode != 2 {
+	if exitCode := app.Run([]string{"api", "request", "--json", "--method", "GET", "--path", "https://example.test/v1/memories?project_id=lore-cli"}); exitCode != 2 {
 		t.Fatalf("validation exitCode = %d, want 2", exitCode)
 	}
 	if got := stdout.String(); !strings.Contains(got, `"ok":false`) || !strings.Contains(got, `"code":"invalid_request"`) {
@@ -594,7 +634,7 @@ func TestAPIRequestCommandReturnsMachineReadableExitCodes(t *testing.T) {
 
 	stdout.Reset()
 	store.loadErr = config.ErrNotFound
-	if exitCode := app.Run([]string{"api", "request", "--json", "--method", "GET", "--path", "/v1/context"}); exitCode != 3 {
+	if exitCode := app.Run([]string{"api", "request", "--json", "--method", "GET", "--path", "/v1/memories?project_id=lore-cli"}); exitCode != 3 {
 		t.Fatalf("missing-config exitCode = %d, want 3", exitCode)
 	}
 	if got := stdout.String(); !strings.Contains(got, `"code":"missing_config"`) {
@@ -605,12 +645,67 @@ func TestAPIRequestCommandReturnsMachineReadableExitCodes(t *testing.T) {
 	store.loadErr = nil
 	store.loaded = config.Config{ServerURL: "https://example.test", APIToken: "secret-token"}
 	client.requestJSONErr = &httpclient.UnauthorizedError{APIError: httpclient.APIError{StatusCode: 401, Code: "unauthorized", Message: "login required", RequestID: "req-auth"}}
-	if exitCode := app.Run([]string{"api", "request", "--json", "--method", "GET", "--path", "/v1/context"}); exitCode != 4 {
+	if exitCode := app.Run([]string{"api", "request", "--json", "--method", "GET", "--path", "/v1/memories?project_id=lore-cli"}); exitCode != 4 {
 		t.Fatalf("auth exitCode = %d, want 4", exitCode)
 	}
 	if got := stdout.String(); !strings.Contains(got, `"request_id":"req-auth"`) || strings.Contains(got, "secret-token") {
 		t.Fatalf("stdout = %q, want auth envelope without token leak", got)
 	}
+}
+
+func TestAPIMCPCallCommandUsesSavedAuthAndJSONEnvelope(t *testing.T) {
+	store := &fakeStore{path: "/tmp/lore/config.json", loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token"}}
+	client := &fakeClient{mcpResult: httpclient.RequestJSONResult{StatusCode: 200, RequestID: "req-mcp", Data: json.RawMessage(`{"ok":"context"}`)}}
+	app, stdout, stderr := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
+
+	args := `{"project_id":"00000000-0000-0000-0000-000000000001","memory_limit":3}`
+	if exitCode := app.Run([]string{"api", "mcp-call", "--json", "--tool", "lore_project_context", "--args-json", args}); exitCode != 0 {
+		t.Fatalf("mcp-call exitCode = %d, want 0 stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+	if client.mcpToken != "secret-token" || client.mcpTool != "lore_project_context" || string(client.mcpArgs) != args {
+		t.Fatalf("MCPCall token/tool/args = %q/%q/%s", client.mcpToken, client.mcpTool, client.mcpArgs)
+	}
+	if got := stdout.String(); !strings.Contains(got, `"ok":true`) || !strings.Contains(got, `"request_id":"req-mcp"`) || strings.Contains(got, "secret-token") {
+		t.Fatalf("stdout = %q, want JSON envelope without token leak", got)
+	}
+}
+
+func TestAPIMCPCallRejectsNonAllowlistedToolBeforeAuth(t *testing.T) {
+	store := &fakeStore{path: "/tmp/lore/config.json", loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token"}}
+	client := &fakeClient{}
+	app, stdout, stderr := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
+
+	if exitCode := app.Run([]string{"api", "mcp-call", "--json", "--tool", "lore_delete", "--args-json", `{}`}); exitCode != 2 {
+		t.Fatalf("mcp-call exitCode = %d, want 2 stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+	if client.mcpTool != "" {
+		t.Fatalf("MCPCall was invoked for rejected tool %q", client.mcpTool)
+	}
+	if got := stdout.String(); !strings.Contains(got, `"code":"invalid_request"`) || !strings.Contains(got, "not allowlisted") {
+		t.Fatalf("stdout = %q, want allowlist error envelope", got)
+	}
+}
+
+func TestAPIMCPCallReportsJSONRPCError(t *testing.T) {
+	store := &fakeStore{path: "/tmp/lore/config.json", loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token"}}
+	client := &fakeClient{mcpErr: &httpclient.APIError{StatusCode: 200, Code: "-32602", Message: "bad args", RequestID: "req-mcp"}}
+	app, stdout, stderr := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
+
+	if exitCode := app.Run([]string{"api", "mcp-call", "--json", "--tool", "lore_project_context", "--args-json", `{}`}); exitCode != 5 {
+		t.Fatalf("mcp-call exitCode = %d, want 5 stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+	if got := stdout.String(); !strings.Contains(got, `"ok":false`) || !strings.Contains(got, `"code":"-32602"`) || !strings.Contains(got, `"request_id":"req-mcp"`) {
+		t.Fatalf("stdout = %q, want JSON-RPC error envelope", got)
+	}
+}
+
+func setIsolatedPiHome(t *testing.T) (homeDir string, piAgentDir string) {
+	t.Helper()
+	homeDir = t.TempDir()
+	piAgentDir = filepath.Join(homeDir, ".pi", "agent")
+	t.Setenv("HOME", homeDir)
+	t.Setenv("PI_CODING_AGENT_DIR", piAgentDir)
+	return homeDir, piAgentDir
 }
 
 func newTestApp(store *fakeStore, factory ClientFactory) (*App, *strings.Builder, *strings.Builder) {
@@ -621,7 +716,7 @@ func newTestApp(store *fakeStore, factory ClientFactory) (*App, *strings.Builder
 			return &fakeClient{}, nil
 		}
 	}
-	return &App{Stdout: stdout, Stderr: stderr, Store: store, ClientFactory: factory, LookPath: func(name string) (string, error) { return "/usr/bin/pi", nil }}, stdout, stderr
+	return &App{Stdout: stdout, Stderr: stderr, Store: store, Auth: &fakeAuthManager{store: store}, ClientFactory: factory, LookPath: func(name string) (string, error) { return "/usr/bin/pi", nil }}, stdout, stderr
 }
 
 func newVersionOnlyApp(buildInfo version.Info) (*App, *strings.Builder, *strings.Builder) {
@@ -637,6 +732,19 @@ type fakeStore struct {
 	saved       config.Config
 	saveCalls   int
 	deleteCalls int
+}
+
+type fakeAuthManager struct {
+	store       *fakeStore
+	session     auth.Session
+	loadErr     error
+	saveErr     error
+	logoutErr   error
+	savedServer string
+	savedToken  string
+	saveCalls   int
+	loadCalls   int
+	logoutCalls int
 }
 
 func (s *fakeStore) Load() (config.Config, error) {
@@ -665,6 +773,105 @@ func (s *fakeStore) Path() (string, error) {
 	return s.path, nil
 }
 
+func (m *fakeAuthManager) Save(serverURL, token string) error {
+	m.saveCalls++
+	if m.saveErr != nil {
+		return m.saveErr
+	}
+	m.savedServer = strings.TrimSpace(serverURL)
+	m.savedToken = strings.TrimSpace(token)
+	account := "acct-test"
+	configPath := ""
+	if m.store != nil {
+		configPath = m.store.path
+		_ = m.store.Save(config.Config{ServerURL: m.savedServer, CredentialAccount: account})
+	}
+	m.session = auth.Session{ServerURL: m.savedServer, Token: m.savedToken, ConfigPath: configPath, CredentialAccount: account}
+	return nil
+}
+
+func (m *fakeAuthManager) Load() (auth.Session, error) {
+	m.loadCalls++
+	if m.loadErr != nil {
+		return auth.Session{}, m.loadErr
+	}
+	if m.session.ServerURL != "" || m.session.Token != "" || m.session.ConfigPath != "" {
+		return m.session, nil
+	}
+	if m.store == nil {
+		return auth.Session{}, &auth.Error{Code: auth.ErrConfigNotFound, Op: "load config", Err: config.ErrNotFound}
+	}
+	cfg, err := m.store.Load()
+	if err != nil {
+		if errors.Is(err, config.ErrNotFound) {
+			return auth.Session{}, &auth.Error{Code: auth.ErrConfigNotFound, Op: "load config", Err: err}
+		}
+		return auth.Session{}, &auth.Error{Code: auth.ErrInvalidConfig, Op: "load config", Err: err}
+	}
+	if strings.TrimSpace(cfg.ServerURL) == "" {
+		return auth.Session{}, &auth.Error{Code: auth.ErrInvalidConfig, Op: "normalize server url", Err: errors.New("server URL is required")}
+	}
+	token := strings.TrimSpace(cfg.APIToken)
+	if token == "" {
+		return auth.Session{}, &auth.Error{Code: auth.ErrCredentialMissing, Op: "load credential", Err: auth.ErrCredentialNotFound}
+	}
+	return auth.Session{ServerURL: strings.TrimSpace(cfg.ServerURL), Token: token, ConfigPath: m.store.path, CredentialAccount: cfg.CredentialAccount}, nil
+}
+
+func (m *fakeAuthManager) Logout() error {
+	m.logoutCalls++
+	if m.logoutErr != nil {
+		return m.logoutErr
+	}
+	m.session = auth.Session{}
+	if m.store != nil {
+		return m.store.Delete()
+	}
+	return nil
+}
+
+type fakeCredentialStore struct {
+	secrets map[string]string
+	setErr  error
+	getErr  error
+	delErr  error
+}
+
+func (s *fakeCredentialStore) Set(service, account, secret string) error {
+	if s.setErr != nil {
+		return s.setErr
+	}
+	if s.secrets == nil {
+		s.secrets = map[string]string{}
+	}
+	s.secrets[service+":"+account] = secret
+	return nil
+}
+
+func (s *fakeCredentialStore) Get(service, account string) (string, error) {
+	if s.getErr != nil {
+		return "", s.getErr
+	}
+	if s.secrets == nil {
+		return "", auth.ErrCredentialNotFound
+	}
+	secret, ok := s.secrets[service+":"+account]
+	if !ok {
+		return "", auth.ErrCredentialNotFound
+	}
+	return secret, nil
+}
+
+func (s *fakeCredentialStore) Delete(service, account string) error {
+	if s.delErr != nil {
+		return s.delErr
+	}
+	if s.secrets != nil {
+		delete(s.secrets, service+":"+account)
+	}
+	return nil
+}
+
 type fakeClient struct {
 	healthErr         error
 	readyErr          error
@@ -687,6 +894,11 @@ type fakeClient struct {
 	requestJSONBody   json.RawMessage
 	requestJSONResult httpclient.RequestJSONResult
 	requestJSONErr    error
+	mcpToken          string
+	mcpTool           string
+	mcpArgs           json.RawMessage
+	mcpResult         httpclient.RequestJSONResult
+	mcpErr            error
 }
 
 func (c *fakeClient) Health(_ context.Context) error { return c.healthErr }
@@ -726,6 +938,16 @@ func (c *fakeClient) RequestJSON(_ context.Context, method, path, token string, 
 		return httpclient.RequestJSONResult{}, c.requestJSONErr
 	}
 	return c.requestJSONResult, nil
+}
+
+func (c *fakeClient) MCPCall(_ context.Context, token, toolName string, arguments json.RawMessage) (httpclient.RequestJSONResult, error) {
+	c.mcpToken = token
+	c.mcpTool = toolName
+	c.mcpArgs = arguments
+	if c.mcpErr != nil {
+		return httpclient.RequestJSONResult{}, c.mcpErr
+	}
+	return c.mcpResult, nil
 }
 
 func assertNoTokenLeak(t *testing.T, stdout, stderr, token string) {

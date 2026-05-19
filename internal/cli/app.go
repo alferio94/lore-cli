@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/alferio94/lore-cli/internal/auth"
 	"github.com/alferio94/lore-cli/internal/config"
 	"github.com/alferio94/lore-cli/internal/httpclient"
 	"github.com/alferio94/lore-cli/internal/output"
@@ -27,11 +28,18 @@ type ConfigStore interface {
 // ClientFactory creates an API client for a normalized server URL.
 type ClientFactory func(baseURL string) (httpclient.Client, error)
 
+type AuthManager interface {
+	Save(serverURL, token string) error
+	Load() (auth.Session, error)
+	Logout() error
+}
+
 // App wires command IO and dependencies.
 type App struct {
 	Stdout         io.Writer
 	Stderr         io.Writer
 	Store          ConfigStore
+	Auth           AuthManager
 	ClientFactory  ClientFactory
 	LookPath       func(string) (string, error)
 	UserHomeDir    func() (string, error)
@@ -42,10 +50,12 @@ type App struct {
 
 // New returns a CLI app with production defaults.
 func New(configDir string, stdout, stderr io.Writer, buildInfo version.Info) *App {
+	store := config.NewStore(configDir)
 	return &App{
 		Stdout: stdout,
 		Stderr: stderr,
-		Store:  config.NewStore(configDir),
+		Store:  store,
+		Auth:   auth.Manager{ConfigStore: store},
 		ClientFactory: func(baseURL string) (httpclient.Client, error) {
 			return httpclient.New(baseURL, 0)
 		},
@@ -152,7 +162,7 @@ func (a *App) runLogin(actions InteractiveActions, args []string) int {
 	token := fs.String("token", "", "User API token")
 	fs.Usage = func() {
 		fmt.Fprintln(a.Stderr, "Usage: lore login --server <url> --token <token>")
-		fmt.Fprintln(a.Stderr, "Validate a normal user API token with /v1/me before saving local config.")
+		fmt.Fprintln(a.Stderr, "Validate a normal user API token with /v1/me before saving OS keychain-backed login metadata.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -188,7 +198,7 @@ func (a *App) runStatus(actions InteractiveActions, args []string) int {
 	fs := newFlagSet("status", a.Stderr)
 	fs.Usage = func() {
 		fmt.Fprintln(a.Stderr, "Usage: lore status")
-		fmt.Fprintln(a.Stderr, "Show local config, server health/readiness, and auth identity state.")
+		fmt.Fprintln(a.Stderr, "Show local login metadata, server health/readiness, and auth identity state.")
 	}
 	if err := fs.Parse(args); err != nil {
 		return 1
@@ -207,7 +217,7 @@ func (a *App) runLogout(actions InteractiveActions, args []string) int {
 	fs := newFlagSet("logout", a.Stderr)
 	fs.Usage = func() {
 		fmt.Fprintln(a.Stderr, "Usage: lore logout")
-		fmt.Fprintln(a.Stderr, "Remove local config only; no server-side token revocation is performed.")
+		fmt.Fprintln(a.Stderr, "Remove local login metadata and matching OS keychain credential only; no server-side token revocation is performed.")
 	}
 	if err := fs.Parse(args); err != nil {
 		return 1
@@ -251,7 +261,7 @@ func (a *App) runInstall(actions InteractiveActions, args []string) int {
 	fs.Usage = func() {
 		fmt.Fprintln(a.Stderr, "Usage: lore install")
 		fmt.Fprintln(a.Stderr, "Install the Pi-first managed runtime using saved Lore login state.")
-		fmt.Fprintln(a.Stderr, "Healthy saved config is reused automatically; Claude Code, OpenCode, Codex, and Antigravity remain Coming soon.")
+		fmt.Fprintln(a.Stderr, "Healthy saved OS keychain-backed login metadata is reused automatically; Claude Code, OpenCode, Codex, and Antigravity remain Coming soon.")
 	}
 	if err := fs.Parse(args); err != nil {
 		return 1
@@ -267,24 +277,43 @@ func (a *App) runInstall(actions InteractiveActions, args []string) int {
 }
 
 func (a *App) runAPI(_ InteractiveActions, args []string) int {
-	if len(args) == 0 || args[0] != "request" {
-		fmt.Fprintln(a.Stderr, "Usage: lore api request --json --method <METHOD> --path <PATH> [--body-json <JSON>]")
+	if len(args) == 0 {
+		fmt.Fprintln(a.Stderr, "Usage: lore api <request|mcp-call>")
 		return 1
 	}
 
-	fs := flag.NewFlagSet("api request", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	jsonOutput := fs.Bool("json", false, "Print machine-readable JSON output")
-	method := fs.String("method", "", "HTTP method")
-	path := fs.String("path", "", "Relative API path")
-	bodyJSON := fs.String("body-json", "", "Optional JSON object/array request body")
-	if err := fs.Parse(args[1:]); err != nil {
-		return a.writeBrokerError(2, 400, "invalid_request", "invalid lore api request arguments", "")
+	switch args[0] {
+	case "request":
+		fs := flag.NewFlagSet("api request", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		jsonOutput := fs.Bool("json", false, "Print machine-readable JSON output")
+		method := fs.String("method", "", "HTTP method")
+		path := fs.String("path", "", "Relative API path")
+		bodyJSON := fs.String("body-json", "", "Optional JSON object/array request body")
+		if err := fs.Parse(args[1:]); err != nil {
+			return a.writeBrokerError(2, 400, "invalid_request", "invalid lore api request arguments", "")
+		}
+		if fs.NArg() != 0 {
+			return a.writeBrokerError(2, 400, "invalid_request", "unexpected positional arguments", "")
+		}
+		return a.runAPIRequest(apiRequestOptions{JSONOutput: *jsonOutput, Method: *method, Path: *path, BodyJSON: *bodyJSON})
+	case "mcp-call":
+		fs := flag.NewFlagSet("api mcp-call", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		jsonOutput := fs.Bool("json", false, "Print machine-readable JSON output")
+		tool := fs.String("tool", "", "Allowlisted MCP tool name")
+		argsJSON := fs.String("args-json", "{}", "JSON object MCP tool arguments")
+		if err := fs.Parse(args[1:]); err != nil {
+			return a.writeBrokerError(2, 400, "invalid_request", "invalid lore api mcp-call arguments", "")
+		}
+		if fs.NArg() != 0 {
+			return a.writeBrokerError(2, 400, "invalid_request", "unexpected positional arguments", "")
+		}
+		return a.runAPIMCPCall(apiMCPCallOptions{JSONOutput: *jsonOutput, Tool: *tool, ArgsJSON: *argsJSON})
+	default:
+		fmt.Fprintln(a.Stderr, "Usage: lore api <request|mcp-call>")
+		return 1
 	}
-	if fs.NArg() != 0 {
-		return a.writeBrokerError(2, 400, "invalid_request", "unexpected positional arguments", "")
-	}
-	return a.runAPIRequest(apiRequestOptions{JSONOutput: *jsonOutput, Method: *method, Path: *path, BodyJSON: *bodyJSON})
 }
 
 func (a *App) parseRemember(args []string) int {
@@ -298,7 +327,7 @@ func (a *App) parseRemember(args []string) int {
 	jsonOutput := fs.Bool("json", false, "Print server-shaped JSON output")
 	fs.Usage = func() {
 		fmt.Fprintln(a.Stderr, "Usage: lore remember --project-id <id> --type <type> --title <title> --content <text> [--scope project] [--metadata-json <json-object>] [--json]")
-		fmt.Fprintln(a.Stderr, "Create one Lore memory via POST /v1/memories using saved login config.")
+		fmt.Fprintln(a.Stderr, "Create one Lore memory via POST /v1/memories using saved login state.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -399,15 +428,17 @@ func (a *App) printRootHelpTo(w io.Writer) {
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "Commands:")
 	fmt.Fprintln(w, "  tui       Start the interactive TUI explicitly")
-	fmt.Fprintln(w, "  login     Validate a user API token with /v1/me and save local config")
-	fmt.Fprintln(w, "  status    Show config, health, readiness, and auth status")
-	fmt.Fprintln(w, "  logout    Remove local config only; no remote revocation")
+	fmt.Fprintln(w, "  login     Validate a user API token with /v1/me and save OS keychain-backed login metadata")
+	fmt.Fprintln(w, "  status    Show login metadata, health, readiness, and auth status")
+	fmt.Fprintln(w, "  logout    Remove local login metadata and matching OS keychain credential only")
 	fmt.Fprintln(w, "  doctor    Run actionable diagnostics, including optional Pi availability")
 	fmt.Fprintln(w, "  install   Install the Pi-first managed runtime using saved Lore auth")
 	fmt.Fprintln(w, "  remember  Create one memory via authenticated REST")
 	fmt.Fprintln(w, "  api request  Hidden machine broker for allowlisted authenticated API calls")
+	fmt.Fprintln(w, "  api mcp-call Hidden machine broker for allowlisted authenticated MCP tool calls")
 	fmt.Fprintln(w, "  recall    List memories by explicit authenticated filters")
 	fmt.Fprintln(w, "  version   Print build metadata for humans or scripts")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "Use explicit subcommands for automation and scripts.")
+	fmt.Fprintln(w, "Saved login state uses OS keychain-backed login metadata; raw API tokens are not written to config.json.")
 }

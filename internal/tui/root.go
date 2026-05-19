@@ -88,7 +88,7 @@ func newModel(actions cli.InteractiveActions) model {
 		actions: actions,
 		items: []menuItem{
 			{key: "status", title: "Status", description: "Inspect config, health, readiness, and authenticated identity."},
-			{key: "login", title: "Login", description: "Save a validated session with your server URL and user API token."},
+			{key: "login", title: "Login", description: "Validate a user API token, store it in secure credential storage, and save login metadata locally."},
 			{key: "logout", title: "Logout", description: "Remove the local session only. Safe to repeat."},
 			{key: "doctor", title: "Doctor", description: "Run actionable diagnostics, including Pi availability."},
 			{key: "install", title: "Install", description: "Pi is recommended today; Claude Code, OpenCode, Codex, and Antigravity remain Coming soon."},
@@ -299,7 +299,7 @@ func (m model) activateSelection() (tea.Model, tea.Cmd) {
 		m.loginInputs[1].Blur()
 		m.loginError = ""
 		m.statusTitle = "Login"
-		m.statusBody = "Enter your server URL and a normal user API token. The token stays masked and is validated before being saved locally."
+		m.statusBody = "Enter your server URL and a normal user API token. The token stays masked, is validated first, and is stored in secure credential storage while only login metadata is saved locally."
 		m.statusTone = toneInfo
 		return m, nil
 	case "install":
