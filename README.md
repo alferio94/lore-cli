@@ -143,7 +143,13 @@ The GitHub Actions workflow then:
 3. validates installer syntax and runs Unix installer smoke tests;
 4. builds platform archives with injected version metadata;
 5. renders `install.sh` and `install.ps1` with the tag embedded as their default version;
-6. publishes archives, installer scripts, and `SHA256SUMS` to the GitHub Release.
+6. publishes archives, installer scripts, and `SHA256SUMS` to the GitHub Release;
+7. uses `docs/releases/<tag>.md` as the GitHub Release body when that file exists, otherwise falls back to generated release notes.
+
+Release notes convention:
+- add an optional file at `docs/releases/vX.Y.Z.md` before pushing the annotated tag;
+- example: `docs/releases/v0.2.5.md` will become the Release body for tag `v0.2.5`;
+- if the file is absent, the workflow still succeeds and GitHub auto-generates the notes.
 
 ### Asset naming
 Supported targets are published as:

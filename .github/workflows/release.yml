@@ -186,7 +186,38 @@ jobs:
             fi
           done
 
-      - name: Publish GitHub Release
+      - name: Detect release notes file
+        id: release_notes
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          NOTES_FILE="docs/releases/${TAG}.md"
+          if [[ -f "$NOTES_FILE" ]]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "path=${NOTES_FILE}" >> "$GITHUB_OUTPUT"
+            echo "Using release notes from ${NOTES_FILE}"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "path=${NOTES_FILE}" >> "$GITHUB_OUTPUT"
+            echo "No release notes file at ${NOTES_FILE}; falling back to generated release notes"
+          fi
+
+      - name: Publish GitHub Release from notes file
+        if: steps.release_notes.outputs.found == 'true'
+        uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            dist/lore-cli_*.tar.gz
+            dist/lore-cli_*.zip
+            dist/SHA256SUMS
+            dist/install.sh
+            dist/install.ps1
+          fail_on_unmatched_files: true
+          body_path: ${{ steps.release_notes.outputs.path }}
+
+      - name: Publish GitHub Release with generated notes
+        if: steps.release_notes.outputs.found != 'true'
         uses: softprops/action-gh-release@v3
         with:
           files: |
