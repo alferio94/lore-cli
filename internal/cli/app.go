@@ -14,6 +14,7 @@ import (
 	"github.com/alferio94/lore-cli/internal/config"
 	"github.com/alferio94/lore-cli/internal/httpclient"
 	"github.com/alferio94/lore-cli/internal/output"
+	cliupdate "github.com/alferio94/lore-cli/internal/update"
 	"github.com/alferio94/lore-cli/internal/version"
 )
 
@@ -36,16 +37,17 @@ type AuthManager interface {
 
 // App wires command IO and dependencies.
 type App struct {
-	Stdout         io.Writer
-	Stderr         io.Writer
-	Store          ConfigStore
-	Auth           AuthManager
-	ClientFactory  ClientFactory
-	LookPath       func(string) (string, error)
-	UserHomeDir    func() (string, error)
-	ExecutablePath func() (string, error)
-	TUIRunner      func(context.Context, InteractiveActions) error
-	BuildInfo      version.Info
+	Stdout               io.Writer
+	Stderr               io.Writer
+	Store                ConfigStore
+	Auth                 AuthManager
+	ClientFactory        ClientFactory
+	LookPath             func(string) (string, error)
+	UserHomeDir          func() (string, error)
+	ExecutablePath       func() (string, error)
+	TUIRunner            func(context.Context, InteractiveActions) error
+	UpdateServiceFactory func() (cliupdate.Service, error)
+	BuildInfo            version.Info
 }
 
 // New returns a CLI app with production defaults.
@@ -143,6 +145,8 @@ func (a *App) Run(args []string) int {
 		return a.runDoctor(actions, args[1:])
 	case "install":
 		return a.runInstall(actions, args[1:])
+	case "update":
+		return a.runUpdate(args[1:])
 	case "api":
 		return a.runAPI(actions, args[1:])
 	case "remember":
@@ -274,6 +278,29 @@ func (a *App) runInstall(_ InteractiveActions, args []string) int {
 	}
 
 	report := a.installActionWithOptions(context.Background(), installCommandOptions{DryRun: *dryRun, Yes: *yes})
+	fmt.Fprint(a.Stdout, output.RenderChecks(report.Title, report.Checks))
+	return report.ExitCode
+}
+
+func (a *App) runUpdate(args []string) int {
+	fs := newFlagSet("update", a.Stderr)
+	dryRun := fs.Bool("dry-run", false, "Show the binary-only update plan without replacing the lore executable")
+	yes := fs.Bool("yes", false, "Skip the interactive confirmation prompt after all safety checks pass")
+	fs.Usage = func() {
+		fmt.Fprintln(a.Stderr, "Usage: lore update [--dry-run] [--yes]")
+		fmt.Fprintln(a.Stderr, "Update only the active Lore CLI binary; Pi runtime and ~/.pi remain untouched.")
+		fmt.Fprintln(a.Stderr, "The command fails closed for unsafe targets and preserves the same safety checks in dry-run and --yes modes.")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return 1
+	}
+	if fs.NArg() != 0 {
+		fs.Usage()
+		return 1
+	}
+
+	report := a.updateActionWithOptions(context.Background(), updateCommandOptions{DryRun: *dryRun, Yes: *yes})
 	fmt.Fprint(a.Stdout, output.RenderChecks(report.Title, report.Checks))
 	return report.ExitCode
 }
@@ -435,6 +462,7 @@ func (a *App) printRootHelpTo(w io.Writer) {
 	fmt.Fprintln(w, "  logout    Remove local login metadata and matching OS keychain credential only")
 	fmt.Fprintln(w, "  doctor    Run actionable diagnostics, including optional Pi availability")
 	fmt.Fprintln(w, "  install   Install the Pi-first managed runtime using saved Lore auth")
+	fmt.Fprintln(w, "  update    Check or apply a binary-only Lore CLI update without touching ~/.pi")
 	fmt.Fprintln(w, "  remember  Create one memory via authenticated REST")
 	fmt.Fprintln(w, "  api request  Hidden machine broker for allowlisted authenticated API calls")
 	fmt.Fprintln(w, "  api mcp-call Hidden machine broker for allowlisted authenticated MCP tool calls")

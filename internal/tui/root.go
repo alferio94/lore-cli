@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/user"
 	"strings"
+	"time"
 
 	"github.com/alferio94/lore-cli/internal/cli"
 	"github.com/alferio94/lore-cli/internal/install"
@@ -31,6 +32,8 @@ const (
 	focusLogin
 )
 
+const backgroundUpdateCheckTimeout = 1500 * time.Millisecond
+
 type actionKind string
 
 const (
@@ -39,6 +42,7 @@ const (
 	actionLogout  actionKind = "logout"
 	actionDoctor  actionKind = "doctor"
 	actionInstall actionKind = "install"
+	actionUpdate  actionKind = "update"
 )
 
 type actionMsg struct {
@@ -46,6 +50,10 @@ type actionMsg struct {
 	title   string
 	body    string
 	isError bool
+}
+
+type updateCheckMsg struct {
+	availability cli.UpdateAvailability
 }
 
 type model struct {
@@ -66,6 +74,12 @@ type model struct {
 	installSelectionPending      bool
 	installBackupDecisionPending bool
 	installPlan                  *install.PiInstallPlan
+	updateChecked                bool
+	updateAvailable              bool
+	updateCurrentVersion         string
+	updateLatestVersion          string
+	updateNotice                 string
+	updateConfirmationPending    bool
 	spinner                      spinner.Model
 	help                         help.Model
 }
@@ -96,6 +110,7 @@ func newModel(actions cli.InteractiveActions) model {
 			{key: "logout", title: "Logout", description: "Remove the local session only. Safe to repeat."},
 			{key: "doctor", title: "Doctor", description: "Run actionable diagnostics, including Pi availability."},
 			{key: "install", title: "Install", description: "Pi is recommended today; Claude Code, OpenCode, Codex, and Antigravity remain Coming soon."},
+			{key: "update", title: "Update", description: "Check or apply a binary-only Lore CLI update; Pi runtime and ~/.pi stay untouched."},
 			{key: "quit", title: "Quit", description: "Leave the interactive shell."},
 		},
 		focus:       focusMenu,
@@ -110,7 +125,16 @@ func newModel(actions cli.InteractiveActions) model {
 	return m
 }
 
-func (m model) Init() tea.Cmd { return nil }
+func (m model) Init() tea.Cmd {
+	if m.actions.CheckForUpdate == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), backgroundUpdateCheckTimeout)
+		defer cancel()
+		return updateCheckMsg{availability: m.actions.CheckForUpdate(ctx)}
+	}
+}
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -167,6 +191,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.installBackupDecisionPending = false
 			m.installPlan = nil
 		}
+		if msg.kind == actionUpdate {
+			m.updateConfirmationPending = false
+		}
+		return m, nil
+	case updateCheckMsg:
+		m.updateChecked = msg.availability.Checked
+		m.updateAvailable = msg.availability.Available
+		m.updateCurrentVersion = msg.availability.CurrentVersion
+		m.updateLatestVersion = msg.availability.LatestVersion
+		m.updateNotice = msg.availability.Detail
 		return m, nil
 	}
 	return m, nil
@@ -202,6 +236,18 @@ func (m model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.confirmInstallBackupDecision(true)
 		case "n", "no":
 			return m.confirmInstallBackupDecision(false)
+		case "ctrl+c", "q":
+			m.quitting = true
+			return m, tea.Quit
+		}
+		return m, nil
+	}
+	if m.updateConfirmationPending {
+		switch strings.ToLower(msg.String()) {
+		case "y", "yes":
+			return m.confirmUpdateDecision(true)
+		case "n", "no":
+			return m.confirmUpdateDecision(false)
 		case "ctrl+c", "q":
 			m.quitting = true
 			return m, tea.Quit
@@ -291,18 +337,21 @@ func (m model) activateSelection() (tea.Model, tea.Cmd) {
 	switch item.key {
 	case "status":
 		m.installSelectionPending = false
+		m.updateConfirmationPending = false
 		return m.runAsync(actionStatus, "Checking status", func(ctx context.Context) actionMsg {
 			report := m.actions.Status(ctx)
 			return actionMsg{kind: actionStatus, title: report.Title, body: renderReport(report), isError: report.ExitCode != 0}
 		})
 	case "doctor":
 		m.installSelectionPending = false
+		m.updateConfirmationPending = false
 		return m.runAsync(actionDoctor, "Running doctor", func(ctx context.Context) actionMsg {
 			report := m.actions.Doctor(ctx)
 			return actionMsg{kind: actionDoctor, title: report.Title, body: renderReport(report), isError: report.ExitCode != 0}
 		})
 	case "logout":
 		m.installSelectionPending = false
+		m.updateConfirmationPending = false
 		return m.runAsync(actionLogout, "Removing local session", func(ctx context.Context) actionMsg {
 			result, err := m.actions.Logout(ctx)
 			if err != nil {
@@ -312,6 +361,7 @@ func (m model) activateSelection() (tea.Model, tea.Cmd) {
 		})
 	case "login":
 		m.installSelectionPending = false
+		m.updateConfirmationPending = false
 		m.focus = focusLogin
 		m.loginInputs[0].Focus()
 		m.loginInputs[1].Blur()
@@ -321,6 +371,7 @@ func (m model) activateSelection() (tea.Model, tea.Cmd) {
 		m.statusTone = toneInfo
 		return m, nil
 	case "install":
+		m.updateConfirmationPending = false
 		if !m.installSelectionPending {
 			m.installSelectionPending = true
 			m.focus = focusDetail
@@ -331,8 +382,34 @@ func (m model) activateSelection() (tea.Model, tea.Cmd) {
 		}
 		m.installSelectionPending = false
 		return m.startInstallFlow()
+	case "update":
+		m.installSelectionPending = false
+		if m.actions.Update == nil {
+			return m, nil
+		}
+		if !m.updateChecked {
+			m.focus = focusDetail
+			m.statusTitle = "Checking for updates"
+			m.statusBody = "A background binary-only update check is still in progress. Pi runtime and ~/.pi remain untouched."
+			m.statusTone = toneInfo
+			return m, nil
+		}
+		if !m.updateAvailable {
+			m.focus = focusDetail
+			m.statusTitle = "Lore CLI update"
+			m.statusBody = fallbackUpdateDetail(m.updateNotice, "Lore CLI is already current. Pi runtime and ~/.pi remain untouched.")
+			m.statusTone = toneInfo
+			return m, nil
+		}
+		m.updateConfirmationPending = true
+		m.focus = focusDetail
+		m.statusTitle = "Confirm Lore CLI update"
+		m.statusBody = fmt.Sprintf("Update only the Lore CLI binary from %s to %s? Press y to continue or n to cancel. Pi runtime and ~/.pi remain untouched.", fallbackUpdateValue(m.updateCurrentVersion, "current"), fallbackUpdateValue(m.updateLatestVersion, "latest"))
+		m.statusTone = toneInfo
+		return m, nil
 	case "quit":
 		m.installSelectionPending = false
+		m.updateConfirmationPending = false
 		m.quitting = true
 		return m, tea.Quit
 	default:
@@ -405,6 +482,21 @@ func (m model) confirmInstallBackupDecision(includeBackup bool) (tea.Model, tea.
 	})
 }
 
+func (m model) confirmUpdateDecision(confirmed bool) (tea.Model, tea.Cmd) {
+	m.updateConfirmationPending = false
+	if !confirmed {
+		m.focus = focusDetail
+		m.statusTitle = "Lore CLI update cancelled"
+		m.statusBody = "Binary-only update cancelled. Pi runtime and ~/.pi remain untouched."
+		m.statusTone = toneInfo
+		return m, nil
+	}
+	return m.runAsync(actionUpdate, "Updating Lore CLI", func(ctx context.Context) actionMsg {
+		report := m.actions.Update(ctx)
+		return actionMsg{kind: actionUpdate, title: report.Title, body: renderReport(report), isError: report.ExitCode != 0}
+	})
+}
+
 func (m model) runInstallWithPlan(plan install.PiInstallPlan) (tea.Model, tea.Cmd) {
 	if m.actions.ExecutePiInstall != nil {
 		return m.runAsync(actionInstall, "Install Lore for Pi", func(ctx context.Context) actionMsg {
@@ -453,6 +545,20 @@ func (m model) runAsync(kind actionKind, title string, fn func(context.Context) 
 
 func renderReport(report cli.ActionReport) string {
 	return output.RenderChecks(report.Title, report.Checks)
+}
+
+func fallbackUpdateDetail(detail, fallback string) string {
+	if strings.TrimSpace(detail) == "" {
+		return fallback
+	}
+	return detail
+}
+
+func fallbackUpdateValue(value, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
 }
 
 func (m model) View() string {

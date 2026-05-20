@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -16,6 +17,8 @@ import (
 	"github.com/alferio94/lore-cli/internal/httpclient"
 	"github.com/alferio94/lore-cli/internal/install"
 	"github.com/alferio94/lore-cli/internal/output"
+	cliupdate "github.com/alferio94/lore-cli/internal/update"
+	"github.com/alferio94/lore-cli/internal/version"
 )
 
 // ActionMessage carries token-safe success output for interactive and CLI actions.
@@ -66,6 +69,19 @@ type installCommandOptions struct {
 	Yes    bool
 }
 
+type updateCommandOptions struct {
+	DryRun bool
+	Yes    bool
+}
+
+type UpdateAvailability struct {
+	Checked        bool
+	Available      bool
+	CurrentVersion string
+	LatestVersion  string
+	Detail         string
+}
+
 type authConfigError struct {
 	Code    string
 	Message string
@@ -87,6 +103,8 @@ type InteractiveActions struct {
 	Install          func(ctx context.Context) ActionReport
 	PlanPiInstall    func(ctx context.Context) (install.PiInstallPlan, ActionReport, bool)
 	ExecutePiInstall func(ctx context.Context, plan install.PiInstallPlan) ActionReport
+	CheckForUpdate   func(ctx context.Context) UpdateAvailability
+	Update           func(ctx context.Context) ActionReport
 }
 
 // InteractiveActions returns the shared action set used by the CLI and future TUI.
@@ -99,6 +117,8 @@ func (a *App) InteractiveActions() InteractiveActions {
 		Install:          a.installAction,
 		PlanPiInstall:    a.planPiInstallAction,
 		ExecutePiInstall: a.executePiInstallAction,
+		CheckForUpdate:   a.checkForUpdateAction,
+		Update:           a.updateApplyAction,
 	}
 }
 
@@ -337,6 +357,139 @@ func (a *App) doctorAction(ctx context.Context) ActionReport {
 
 func (a *App) installAction(ctx context.Context) ActionReport {
 	return a.installActionWithOptions(ctx, installCommandOptions{})
+}
+
+func (a *App) checkForUpdateAction(ctx context.Context) UpdateAvailability {
+	current := a.BuildInfo.Normalized()
+	execPath, err := a.resolveExecutablePath()
+	if err != nil {
+		return UpdateAvailability{Checked: true, CurrentVersion: current.Version, Detail: fmt.Sprintf("Update check unavailable: %v", err)}
+	}
+
+	pathPath := execPath
+	if a.LookPath != nil {
+		if lookedUp, lookErr := a.LookPath("lore"); lookErr == nil && strings.TrimSpace(lookedUp) != "" {
+			pathPath = lookedUp
+		}
+	}
+	if reason, unsafe := localUpdateSafetyReason(current.Version, execPath, pathPath); unsafe {
+		return UpdateAvailability{Checked: true, CurrentVersion: current.Version, Detail: fmt.Sprintf("Update check unavailable: %s. Pi runtime and ~/.pi remain untouched.", reason)}
+	}
+
+	svc, err := a.updateService()
+	if err != nil {
+		return UpdateAvailability{Checked: true, CurrentVersion: current.Version, Detail: fmt.Sprintf("Update check unavailable: %v", err)}
+	}
+	plan, err := svc.Check(ctx, cliupdate.CheckOptions{})
+	if err != nil {
+		return UpdateAvailability{Checked: true, CurrentVersion: current.Version, Detail: fmt.Sprintf("Update check unavailable: %s", explainEndpointError(err))}
+	}
+	info := UpdateAvailability{Checked: true, CurrentVersion: plan.Current.Version, LatestVersion: fallbackUpdateValue(plan.LatestTag, plan.Current.Version)}
+	if plan.Target.Status != cliupdate.TargetStatusOK || plan.Status == cliupdate.StatusDevBuild || plan.Status == cliupdate.StatusUnsupported {
+		info.Detail = updatePlanAction(plan)
+		return info
+	}
+	if plan.Status == cliupdate.StatusAvailable {
+		info.Available = true
+		info.Detail = fmt.Sprintf("Binary-only update available: %s → %s. Pi runtime and ~/.pi remain untouched.", plan.Current.Version, plan.LatestTag)
+		return info
+	}
+	info.Detail = fmt.Sprintf("Lore CLI is current at %s. Pi runtime and ~/.pi remain untouched.", plan.Current.Version)
+	return info
+}
+
+func (a *App) updateApplyAction(ctx context.Context) ActionReport {
+	return a.updateActionWithOptions(ctx, updateCommandOptions{Yes: true})
+}
+
+func (a *App) updateActionWithOptions(ctx context.Context, opts updateCommandOptions) ActionReport {
+	report := ActionReport{Title: "Lore update"}
+	report.Checks = append(report.Checks, output.Check{Name: "scope", Status: output.StatusOK, Detail: "updates only the Lore CLI binary; Pi runtime and ~/.pi remain untouched"})
+
+	current := a.BuildInfo.Normalized()
+	execPath, err := a.resolveExecutablePath()
+	if err != nil {
+		report.Checks = append(report.Checks, output.Check{Name: "update", Status: output.StatusFail, Detail: fmt.Sprintf("current=%s latest=unresolved target=unknown: %v", current.Version, err), Action: "Retry from a normal Lore CLI binary context so the update target can be resolved safely."})
+		report.ExitCode = 1
+		return report
+	}
+
+	pathPath := execPath
+	if a.LookPath != nil {
+		if lookedUp, lookErr := a.LookPath("lore"); lookErr == nil && strings.TrimSpace(lookedUp) != "" {
+			pathPath = lookedUp
+		}
+	}
+
+	if reason, unsafe := localUpdateSafetyReason(current.Version, execPath, pathPath); unsafe {
+		mode := "check"
+		if opts.DryRun {
+			mode = "dry-run"
+		} else if opts.Yes {
+			mode = "yes"
+		}
+		report.Checks = append(report.Checks, output.Check{Name: "update", Status: output.StatusFail, Detail: fmt.Sprintf("mode=%s current=%s latest=unresolved target=%s unsafe=%s", mode, current.Version, execPath, reason), Action: "Install a released Lore CLI binary on PATH and rerun lore update after the unsafe target is resolved."})
+		report.ExitCode = 1
+		return report
+	}
+
+	svc, err := a.updateService()
+	if err != nil {
+		report.Checks = append(report.Checks, output.Check{Name: "update", Status: output.StatusFail, Detail: fmt.Sprintf("current=%s latest=unresolved target=%s: %v", current.Version, execPath, err), Action: "Fix the local Lore config directory so update cache metadata can be stored safely."})
+		report.ExitCode = 1
+		return report
+	}
+
+	plan, err := svc.Check(ctx, cliupdate.CheckOptions{})
+	if err != nil {
+		report.Checks = append(report.Checks, output.Check{Name: "update", Status: output.StatusFail, Detail: fmt.Sprintf("current=%s latest=unresolved target=%s: %s", current.Version, execPath, explainEndpointError(err)), Action: "Retry later or verify GitHub release availability and local binary permissions."})
+		report.ExitCode = 1
+		return report
+	}
+
+	planDetail := formatUpdatePlanSummary(plan, opts.DryRun)
+	if plan.Target.Status != cliupdate.TargetStatusOK || plan.Status == cliupdate.StatusDevBuild || plan.Status == cliupdate.StatusUnsupported {
+		report.Checks = append(report.Checks, output.Check{Name: "update", Status: output.StatusFail, Detail: planDetail, Action: updatePlanAction(plan)})
+		report.ExitCode = 1
+		return report
+	}
+	if opts.DryRun || plan.Status == cliupdate.StatusUpToDate {
+		report.Checks = append(report.Checks, output.Check{Name: "update", Status: output.StatusOK, Detail: planDetail})
+		return report
+	}
+
+	if !opts.Yes {
+		confirmed, confirmErr := a.confirmBinaryUpdate(plan)
+		if confirmErr != nil {
+			report.Checks = append(report.Checks, output.Check{Name: "update", Status: output.StatusFail, Detail: fmt.Sprintf("current=%s latest=%s target=%s: %v", plan.Current.Version, plan.LatestTag, plan.Target.ExecutablePath, confirmErr), Action: "Re-run lore update --yes to skip the interactive prompt once you trust the target binary path."})
+			report.ExitCode = 1
+			return report
+		}
+		if !confirmed {
+			report.Checks = append(report.Checks, output.Check{Name: "update", Status: output.StatusWarn, Detail: fmt.Sprintf("current=%s latest=%s target=%s update cancelled before mutation", plan.Current.Version, plan.LatestTag, plan.Target.ExecutablePath)})
+			return report
+		}
+	}
+
+	result, err := svc.Apply(ctx, plan)
+	if err != nil {
+		report.Checks = append(report.Checks, output.Check{Name: "update", Status: output.StatusFail, Detail: fmt.Sprintf("current=%s latest=%s target=%s: %s", plan.Current.Version, plan.LatestTag, plan.Target.ExecutablePath, explainEndpointError(err)), Action: "Inspect the reported target path, keep the current binary, and retry only after the failure cause is understood."})
+		report.ExitCode = 1
+		return report
+	}
+
+	status := output.StatusOK
+	if result.Status == cliupdate.ResultStatusUnsupported {
+		status = output.StatusFail
+		report.ExitCode = 1
+	}
+	detail := formatUpdateResultSummary(plan, result)
+	action := ""
+	if result.ManualRecovery != "" {
+		action = result.ManualRecovery
+	}
+	report.Checks = append(report.Checks, output.Check{Name: "update", Status: status, Detail: detail, Action: action})
+	return report
 }
 
 func (a *App) installActionWithOptions(ctx context.Context, opts installCommandOptions) ActionReport {
@@ -593,6 +746,58 @@ func (a *App) confirmFullBackup(plan install.PiInstallPlan) (bool, error) {
 	return !strings.EqualFold(answer, "n") && !strings.EqualFold(answer, "no"), nil
 }
 
+func (a *App) confirmBinaryUpdate(plan cliupdate.Plan) (bool, error) {
+	if _, err := fmt.Fprintf(a.Stdout, "Update lore binary at %s from %s to %s? [y/N]: ", plan.Target.ExecutablePath, plan.Current.Version, plan.LatestTag); err != nil {
+		return false, err
+	}
+	answer, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return false, err
+	}
+	answer = strings.TrimSpace(answer)
+	return strings.EqualFold(answer, "y") || strings.EqualFold(answer, "yes"), nil
+}
+
+func (a *App) updateService() (cliupdate.Service, error) {
+	if a.UpdateServiceFactory != nil {
+		return a.UpdateServiceFactory()
+	}
+	configPath, err := a.Store.Path()
+	if err != nil {
+		return cliupdate.Service{}, err
+	}
+	return cliupdate.Service{
+		ExecPath:         a.resolveExecutablePath,
+		LookPath:         a.LookPath,
+		ConfigDir:        func() (string, error) { return filepath.Dir(configPath), nil },
+		CandidateVersion: probeBinaryVersion,
+		BuildInfo:        a.BuildInfo.Normalized(),
+	}, nil
+}
+
+func probeBinaryVersion(ctx context.Context, path string) (version.Info, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return version.Info{}, fmt.Errorf("candidate binary path is empty")
+	}
+	out, err := exec.CommandContext(ctx, path, "version", "--json").Output()
+	if err != nil {
+		return version.Info{}, fmt.Errorf("probe %s version --json: %w", path, err)
+	}
+	var info version.Info
+	if err := json.Unmarshal(out, &info); err != nil {
+		return version.Info{}, fmt.Errorf("probe %s version --json: decode output: %w", path, err)
+	}
+	info = info.Normalized()
+	if info.Version == "dev" {
+		return version.Info{}, fmt.Errorf("probe %s version --json: reported dev build metadata", path)
+	}
+	if info.Commit == "none" {
+		return version.Info{}, fmt.Errorf("probe %s version --json: reported empty commit metadata", path)
+	}
+	return info, nil
+}
+
 func (a *App) resolveUserHomeDir() (string, error) {
 	if a.UserHomeDir != nil {
 		return a.UserHomeDir()
@@ -612,6 +817,95 @@ func (a *App) piCheck() output.Check {
 		return output.Check{Name: "pi", Status: output.StatusWarn, Detail: "pi binary not found on PATH", Action: "Install Pi or add it to PATH if Pi automation is expected on this machine."}
 	}
 	return output.Check{Name: "pi", Status: output.StatusOK, Detail: "pi binary available on PATH"}
+}
+
+func localUpdateSafetyReason(currentVersion, execPath, pathPath string) (string, bool) {
+	currentVersion = strings.TrimSpace(currentVersion)
+	execPath = filepath.Clean(strings.TrimSpace(execPath))
+	pathPath = filepath.Clean(strings.TrimSpace(pathPath))
+	if currentVersion == "dev" {
+		return "dev build refuses automatic self-update", true
+	}
+	if execPath != "" && pathPath != "" && execPath != pathPath {
+		return fmt.Sprintf("PATH mismatch (running %s, PATH resolves %s)", execPath, pathPath), true
+	}
+	return "", false
+}
+
+func formatUpdatePlanSummary(plan cliupdate.Plan, dryRun bool) string {
+	mode := "apply"
+	if dryRun {
+		mode = "dry-run"
+	}
+	parts := []string{
+		fmt.Sprintf("mode=%s", mode),
+		fmt.Sprintf("current=%s", plan.Current.Version),
+		fmt.Sprintf("latest=%s", fallbackUpdateValue(plan.LatestTag, "unresolved")),
+		fmt.Sprintf("target=%s", plan.Target.ExecutablePath),
+		fmt.Sprintf("status=%s", plan.Status),
+		fmt.Sprintf("cache=%s", plan.CacheSource),
+		fmt.Sprintf("asset=%s", fallbackUpdateValue(plan.Asset.Name, "unresolved")),
+		"scope=binary-only",
+		"pi_runtime=untouched",
+		"pi_dir=~/.pi untouched",
+	}
+	if reason := updatePlanReason(plan); reason != "" {
+		parts = append(parts, fmt.Sprintf("unsafe=%s", reason))
+	}
+	return strings.Join(parts, " ")
+}
+
+func formatUpdateResultSummary(plan cliupdate.Plan, result cliupdate.Result) string {
+	parts := []string{
+		fmt.Sprintf("current=%s", plan.Current.Version),
+		fmt.Sprintf("latest=%s", fallbackUpdateValue(plan.LatestTag, "unresolved")),
+		fmt.Sprintf("target=%s", plan.Target.ExecutablePath),
+		fmt.Sprintf("status=%s", result.Status),
+		"scope=binary-only",
+		"pi_runtime=untouched",
+		"pi_dir=~/.pi untouched",
+	}
+	if result.BackupPath != "" {
+		parts = append(parts, fmt.Sprintf("backup=%s", result.BackupPath))
+	}
+	if result.Installed.Version != "" {
+		parts = append(parts, fmt.Sprintf("installed=%s", result.Installed.Version))
+	}
+	return strings.Join(parts, " ")
+}
+
+func updatePlanReason(plan cliupdate.Plan) string {
+	if plan.Target.Status != cliupdate.TargetStatusOK {
+		switch plan.Target.Reason {
+		case cliupdate.ReasonPathMismatch:
+			return "path mismatch"
+		case cliupdate.ReasonSymlinkedTarget:
+			return "symlinked target"
+		default:
+			return string(plan.Target.Reason)
+		}
+	}
+	if plan.Status == cliupdate.StatusDevBuild {
+		return "dev build refuses automatic self-update"
+	}
+	if plan.Status == cliupdate.StatusUnsupported {
+		return "unsafe target"
+	}
+	return ""
+}
+
+func updatePlanAction(plan cliupdate.Plan) string {
+	if reason := updatePlanReason(plan); reason != "" {
+		return fmt.Sprintf("Resolve the %s condition before retrying lore update; Pi runtime and ~/.pi remain untouched.", reason)
+	}
+	return "Resolve the reported update precondition before retrying; Pi runtime and ~/.pi remain untouched."
+}
+
+func fallbackUpdateValue(value, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
 }
 
 func explainLoginError(err error) string {

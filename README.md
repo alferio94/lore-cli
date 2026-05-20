@@ -8,7 +8,7 @@ Thin Go CLI for Lore server authentication, diagnostics, a default interactive T
 - `lore --help` stays non-interactive.
 - Use explicit subcommands for automation and scripts.
 
-The root TUI offers `Status`, `Login`, `Logout`, `Doctor`, `Install`, and `Quit`. `Install` is Pi-first: Pi is selectable and recommended, while Claude Code, OpenCode, Codex, and Antigravity stay visible as non-selectable `Coming soon` targets. Version reporting is intentionally CLI-only in this slice.
+The root TUI offers `Status`, `Login`, `Logout`, `Doctor`, `Install`, `Update`, and `Quit`. `Install` is Pi-first: Pi is selectable and recommended, while Claude Code, OpenCode, Codex, and Antigravity stay visible as non-selectable `Coming soon` targets. `Update` can surface binary update availability in the background and asks for confirmation before running the binary-only CLI updater.
 
 ## Explicit commands
 - `lore login --server https://example.test --token "$LORE_API_TOKEN"`
@@ -20,6 +20,9 @@ The root TUI offers `Status`, `Login`, `Logout`, `Doctor`, `Install`, and `Quit`
 - `lore recall --project-id <project-id> --type decision --limit 10`
 - `lore version`
 - `lore version --json`
+- `lore update`
+- `lore update --dry-run`
+- `lore update --yes`
 
 `login` validates the provided normal user API token with `GET /v1/me` before saving metadata-only local config plus the token in the OS keychain.
 `status` reports saved login metadata presence plus `/healthz`, `/readyz`, and `/v1/me` state.
@@ -29,6 +32,7 @@ The root TUI offers `Status`, `Login`, `Logout`, `Doctor`, `Install`, and `Quit`
 `remember` creates one memory with explicit REST fields only; `--project-id`, `--type`, `--title`, and `--content` are required, `--scope` defaults to `project`, `--metadata-json` must be a JSON object, and `--json` prints `{\"data\": {...}}`.
 `recall` lists memories by explicit filters only; `--project-id` is required, optional filters are `--type`, `--scope`, and `--limit`, semantic/full-text search is out of scope, and `--json` prints `{\"data\": [...]}`.
 `version` prints build metadata without requiring config, auth, or network access.
+`update` checks GitHub Releases for the latest matching Lore CLI archive and updates only the active Lore CLI binary. It does not mutate the Pi runtime (`~/.pi`), extensions, settings, skills, themes, or model/provider config. `--dry-run` prints the plan without mutation, and `--yes` skips the interactive confirmation prompt after the same safety checks pass.
 
 Default local `version` output:
 - `lore version dev commit=none buildDate=unknown`
@@ -74,7 +78,7 @@ Notes:
 - Human output is concise and omits raw `content`, `metadata`, and secrets.
 - Request failures surface request IDs when the server provides them.
 - `lore api request` is a hidden machine broker for allowlisted authenticated API calls used by the managed Pi runtime.
-- Single-memory fetch, non-`--body-json` broker body input modes, project lookup UX, MCP transport, semantic search, and `lore update` are intentionally out of scope for this MVP.
+- Single-memory fetch, non-`--body-json` broker body input modes, project lookup UX, MCP transport, and semantic search are intentionally out of scope for this MVP.
 
 ## Releases
 
@@ -124,6 +128,16 @@ After install:
 - if you skipped PATH opt-in, rerun the installer with the flag later or add the printed path yourself
 
 The installers always re-download the selected release, verify checksums, replace the target binary idempotently, and run `lore version` / `lore.exe version` before reporting success.
+
+### Binary-only self-update
+- `lore update` updates only the active Lore CLI binary.
+- It does not touch Pi runtime files under `~/.pi`, extensions, settings, skills, themes, or model/provider config.
+- `lore update --dry-run` shows the current/latest/target plan without mutating the binary.
+- `lore update --yes` stays non-interactive after safety checks pass; it does not bypass refusal conditions.
+- The TUI can show update availability in the background and lets you select `Update`, then confirm before the updater runs.
+- Safety checks fail closed on GitHub release lookup errors, unsupported/dev versions, PATH mismatches, symlinked or otherwise unsafe targets, missing release assets, checksum mismatches, and Windows self-update.
+- On supported Unix targets, the updater verifies the selected release archive against `SHA256SUMS` before any replacement attempt. Backup/rollback details are surfaced only when the updater reports a backup path.
+- On Windows, automatic self-update is intentionally unsupported in this slice; download the matching release archive and replace `lore.exe` manually after exiting Lore CLI.
 
 ### Manual uninstall and config retention
 - macOS/Linux: delete `~/.local/bin/lore` or your custom `--bin-dir` target.
@@ -180,12 +194,12 @@ Local builds keep the defaults:
 ### Security notes
 - Remote script execution is a convenience tradeoff; pinned URLs are preferred over mutable branch-tip URLs.
 - `SHA256SUMS` verification provides release-asset integrity checks but does not replace signing or notarization.
-- `lore update`, package managers, code signing, and notarization remain out of scope for this slice.
+- Package managers, code signing, notarization, and automatic Windows self-update remain out of scope for this slice.
 
 ## Out of scope
 This slice intentionally excludes:
-- `lore update` or any self-update network logic;
 - runtime-agent installation flows beyond the Pi-first managed install path and visible `Coming soon` placeholders for other clients;
 - code signing, notarization, provenance attestation, MSI/installer packaging, or other signing/distribution automation beyond SHA256 checksums;
+- automatic Windows self-update and package-manager integration;
 - renaming existing macOS/Linux release assets;
 - keychain/SSO/browser auth, multi-profile storage, admin token issuance or revocation UX, and remote logout.

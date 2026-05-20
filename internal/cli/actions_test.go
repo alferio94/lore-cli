@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -11,6 +14,7 @@ import (
 	"github.com/alferio94/lore-cli/internal/config"
 	"github.com/alferio94/lore-cli/internal/httpclient"
 	"github.com/alferio94/lore-cli/internal/output"
+	"github.com/alferio94/lore-cli/internal/version"
 )
 
 func TestInteractiveActionsExposeAppHelpers(t *testing.T) {
@@ -220,6 +224,37 @@ func TestRunAPIRequestUsesSavedAuthAndReturnsSuccessEnvelope(t *testing.T) {
 		t.Fatalf("stdout = %q, want success envelope", got)
 	}
 	assertNoTokenLeak(t, stdout.String(), "", "secret-token")
+}
+
+func TestUpdateServiceWiresProductionCandidateProbe(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell probe fixture is unix-only")
+	}
+
+	store := &fakeStore{path: filepath.Join(t.TempDir(), "config.json")}
+	app, _, _ := newTestApp(store, nil)
+
+	svc, err := app.updateService()
+	if err != nil {
+		t.Fatalf("updateService() error = %v", err)
+	}
+	if svc.CandidateVersion == nil {
+		t.Fatal("updateService().CandidateVersion = nil, want production post-install probe")
+	}
+
+	probePath := filepath.Join(t.TempDir(), "lore")
+	if err := os.WriteFile(probePath, []byte("#!/bin/sh\nprintf '{\"version\":\"v1.2.3\",\"commit\":\"abc1234\",\"buildDate\":\"2026-05-20T00:00:00Z\"}'\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(probe fixture) error = %v", err)
+	}
+
+	got, err := svc.CandidateVersion(context.Background(), probePath)
+	if err != nil {
+		t.Fatalf("CandidateVersion() error = %v", err)
+	}
+	want := (version.Info{Version: "v1.2.3", Commit: "abc1234", BuildDate: "2026-05-20T00:00:00Z"}).Normalized()
+	if got != want {
+		t.Fatalf("CandidateVersion() = %+v, want %+v", got, want)
+	}
 }
 
 func assertCheckNames(t *testing.T, checks []output.Check, want ...string) {

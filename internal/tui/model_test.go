@@ -1,16 +1,30 @@
 package tui
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/alferio94/lore-cli/internal/cli"
 	"github.com/alferio94/lore-cli/internal/install"
 	"github.com/alferio94/lore-cli/internal/output"
+	cliupdate "github.com/alferio94/lore-cli/internal/update"
+	"github.com/alferio94/lore-cli/internal/version"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -403,6 +417,226 @@ func TestStatusAndDoctorResultsRenderInDetailPane(t *testing.T) {
 	}
 }
 
+func TestInitStartsNonBlockingUpdateCheckAndRendersAvailabilityBanner(t *testing.T) {
+	calls := 0
+	m := newModel(cli.InteractiveActions{CheckForUpdate: func(context.Context) cli.UpdateAvailability {
+		calls++
+		return cli.UpdateAvailability{Checked: true, Available: true, CurrentVersion: "v1.0.0", LatestVersion: "v1.1.0", Detail: "Binary-only update available: v1.0.0 → v1.1.0. Pi runtime and ~/.pi remain untouched."}
+	}})
+	cmd := m.Init()
+	if cmd == nil {
+		t.Fatal("Init should start a background update check when the shared updater boundary is available")
+	}
+	if m.loading {
+		t.Fatal("background update check must not flip the main loading state")
+	}
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = updated.(model)
+	if got := m.items[m.selected].key; got != "login" {
+		t.Fatalf("selected key = %q, want login while update check is pending", got)
+	}
+	updated, _ = m.Update(cmd())
+	m = updated.(model)
+	if calls != 1 {
+		t.Fatalf("update check calls = %d, want 1", calls)
+	}
+	view := m.View()
+	for _, want := range []string{"Update available", "v1.0.0", "v1.1.0", "Pi runtime untouched"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("view missing %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestUpdateSelectionPromptsThenRunsBinaryOnlyApply(t *testing.T) {
+	calls := 0
+	m := newModel(cli.InteractiveActions{Update: func(context.Context) cli.ActionReport {
+		calls++
+		return cli.ActionReport{Title: "Lore update", ExitCode: 0, Checks: []output.Check{{Name: "update", Status: output.StatusOK, Detail: "current=v1.0.0 latest=v1.1.0 status=applied scope=binary-only pi_runtime=untouched pi_dir=~/.pi untouched"}}}
+	}})
+	updated, _ := m.Update(updateCheckMsg{availability: cli.UpdateAvailability{Checked: true, Available: true, CurrentVersion: "v1.0.0", LatestVersion: "v1.1.0", Detail: "Binary-only update available: v1.0.0 → v1.1.0. Pi runtime and ~/.pi remain untouched."}})
+	m = updated.(model)
+	m = moveSelectionToUpdate(t, m)
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	if cmd != nil {
+		t.Fatal("selecting update should prompt for explicit confirmation before mutation")
+	}
+	if !m.updateConfirmationPending {
+		t.Fatal("update confirmation should be pending after selecting an available update")
+	}
+	for _, want := range []string{"Update only the Lore CLI binary", "v1.0.0", "v1.1.0", "~/.pi remain untouched"} {
+		if !strings.Contains(m.statusBody, want) {
+			t.Fatalf("statusBody missing %q:\n%s", want, m.statusBody)
+		}
+	}
+
+	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	m = updated.(model)
+	if cmd == nil || !m.loading {
+		t.Fatal("confirming update should enter async progress state")
+	}
+	updated, _ = m.Update(cmd())
+	m = updated.(model)
+	if calls != 1 {
+		t.Fatalf("update calls = %d, want 1", calls)
+	}
+	if got := m.statusTitle; got != "Lore update" {
+		t.Fatalf("statusTitle = %q, want Lore update", got)
+	}
+	for _, want := range []string{"scope=binary-only", "pi_runtime=untouched", "~/.pi untouched"} {
+		if !strings.Contains(m.statusBody, want) {
+			t.Fatalf("statusBody missing %q:\n%s", want, m.statusBody)
+		}
+	}
+	if got := m.statusTone; got != toneSuccess {
+		t.Fatalf("statusTone = %q, want success", got)
+	}
+}
+
+func TestUpdateFlowUsesSharedUpdaterWithRealisticService(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix self-update test fixture requires shell execution")
+	}
+
+	const (
+		currentVersion = "v1.0.0"
+		latestVersion  = "v1.1.0"
+	)
+
+	targetDir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("EvalSymlinks(targetDir) error = %v", err)
+	}
+	targetPath := filepath.Join(targetDir, "lore")
+	if err := os.WriteFile(targetPath, []byte(fakeVersionBinaryScript(currentVersion, "cur1234")), 0o755); err != nil {
+		t.Fatalf("WriteFile(current lore) error = %v", err)
+	}
+
+	cacheRoot, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("EvalSymlinks(cacheRoot) error = %v", err)
+	}
+	cacheDir := filepath.Join(cacheRoot, "config")
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(cacheDir) error = %v", err)
+	}
+
+	assetName := fmt.Sprintf("lore-cli_%s_%s_%s.tar.gz", latestVersion, runtime.GOOS, runtime.GOARCH)
+	archiveBytes := mustUnixArchive(t, "lore", []byte(fakeVersionBinaryScript(latestVersion, "next5678")), 0o755)
+	checksum := sha256Hex(archiveBytes)
+
+	checkRequests := 0
+	assetRequests := 0
+	serverURL := ""
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/alferio94/lore-cli/releases/latest":
+			checkRequests++
+			w.Header().Set("ETag", `"etag-v1.1.0"`)
+			_, _ = fmt.Fprintf(w, `{"tag_name":%q,"assets":[{"name":%q,"browser_download_url":%q},{"name":"SHA256SUMS","browser_download_url":%q}]}`,
+				latestVersion,
+				assetName,
+				serverURL+"/downloads/"+assetName,
+				serverURL+"/downloads/SHA256SUMS",
+			)
+		case "/downloads/" + assetName:
+			assetRequests++
+			_, _ = w.Write(archiveBytes)
+		case "/downloads/SHA256SUMS":
+			_, _ = w.Write([]byte(checksum + "  " + assetName + "\n"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	serverURL = server.URL
+	defer server.Close()
+
+	probed := []string{}
+	app := &cli.App{
+		LookPath:       func(string) (string, error) { return targetPath, nil },
+		ExecutablePath: func() (string, error) { return targetPath, nil },
+		BuildInfo:      version.Info{Version: currentVersion, Commit: "cur1234", BuildDate: "2026-05-20T00:00:00Z"},
+		UpdateServiceFactory: func() (cliupdate.Service, error) {
+			return cliupdate.Service{
+				HTTP:      server.Client(),
+				Now:       func() time.Time { return time.Date(2026, 5, 20, 22, 0, 0, 0, time.UTC) },
+				ExecPath:  func() (string, error) { return targetPath, nil },
+				LookPath:  func(string) (string, error) { return targetPath, nil },
+				ConfigDir: func() (string, error) { return cacheDir, nil },
+				CandidateVersion: func(ctx context.Context, path string) (version.Info, error) {
+					probed = append(probed, path)
+					return probeTestBinaryVersion(ctx, path)
+				},
+				GitHubBaseURL: serverURL,
+				GOOS:          runtime.GOOS,
+				GOARCH:        runtime.GOARCH,
+				BuildInfo:     version.Info{Version: currentVersion, Commit: "cur1234", BuildDate: "2026-05-20T00:00:00Z"},
+			}, nil
+		},
+	}
+
+	m := newModel(app.InteractiveActions())
+	cmd := m.Init()
+	if cmd == nil {
+		t.Fatal("Init should start a real update check")
+	}
+	updated, _ := m.Update(cmd())
+	m = updated.(model)
+	if !m.updateAvailable {
+		t.Fatalf("updateAvailable = %v, want true", m.updateAvailable)
+	}
+	m = moveSelectionToUpdate(t, m)
+
+	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	if cmd != nil || !m.updateConfirmationPending {
+		t.Fatal("selecting update should open confirmation without starting apply")
+	}
+	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	m = updated.(model)
+	if cmd == nil || !m.loading {
+		t.Fatal("confirming update should enter async progress state")
+	}
+	updated, _ = m.Update(cmd())
+	m = updated.(model)
+
+	if got := m.statusTitle; got != "Lore update" {
+		t.Fatalf("statusTitle = %q, want Lore update", got)
+	}
+	if got := m.statusTone; got != toneSuccess {
+		t.Fatalf("statusTone = %q, want success", got)
+	}
+	for _, want := range []string{"status=applied", "installed=v1.1.0", "scope=binary-only", "~/.pi untouched"} {
+		if !strings.Contains(m.statusBody, want) {
+			t.Fatalf("statusBody missing %q:\n%s", want, m.statusBody)
+		}
+	}
+	if checkRequests < 2 {
+		t.Fatalf("release checks = %d, want at least 2 (background availability + apply preflight)", checkRequests)
+	}
+	if assetRequests != 1 {
+		t.Fatalf("asset downloads = %d, want 1", assetRequests)
+	}
+	if len(probed) != 2 {
+		t.Fatalf("CandidateVersion calls = %d, want 2", len(probed))
+	}
+	if probed[0] == targetPath {
+		t.Fatalf("first probe path = %q, want extracted candidate path", probed[0])
+	}
+	if got := probed[1]; got != targetPath {
+		t.Fatalf("second probe path = %q, want %q", got, targetPath)
+	}
+	installed, err := probeTestBinaryVersion(context.Background(), targetPath)
+	if err != nil {
+		t.Fatalf("probe installed lore error = %v", err)
+	}
+	if got := installed.Version; got != latestVersion {
+		t.Fatalf("installed version = %q, want %q", got, latestVersion)
+	}
+}
+
 func TestLoginSuccessAndFailureStates(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		actions := cli.InteractiveActions{
@@ -470,4 +704,57 @@ func moveSelectionToInstall(t *testing.T, m model) model {
 		t.Fatalf("selected key = %q, want install", got)
 	}
 	return m
+}
+
+func moveSelectionToUpdate(t *testing.T, m model) model {
+	t.Helper()
+	for i := 0; i < 5; i++ {
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		m = updated.(model)
+	}
+	if got := m.items[m.selected].key; got != "update" {
+		t.Fatalf("selected key = %q, want update", got)
+	}
+	return m
+}
+
+func fakeVersionBinaryScript(versionValue, commit string) string {
+	return fmt.Sprintf("#!/bin/sh\nif [ \"$1\" = \"version\" ] && [ \"$2\" = \"--json\" ]; then\n  printf '{\"version\":\"%s\",\"commit\":\"%s\",\"buildDate\":\"2026-05-20T00:00:00Z\"}'\n  exit 0\nfi\nprintf 'unexpected args: %s %s\\n' \"$1\" \"$2\" >&2\nexit 1\n", versionValue, commit, "%s", "%s")
+}
+
+func probeTestBinaryVersion(ctx context.Context, path string) (version.Info, error) {
+	out, err := exec.CommandContext(ctx, path, "version", "--json").Output()
+	if err != nil {
+		return version.Info{}, err
+	}
+	var info version.Info
+	if err := json.Unmarshal(out, &info); err != nil {
+		return version.Info{}, err
+	}
+	return info.Normalized(), nil
+}
+
+func mustUnixArchive(t *testing.T, name string, data []byte, mode int64) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	if err := tw.WriteHeader(&tar.Header{Name: name, Mode: mode, Size: int64(len(data))}); err != nil {
+		t.Fatalf("WriteHeader() error = %v", err)
+	}
+	if _, err := tw.Write(data); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("tar.Close() error = %v", err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatalf("gzip.Close() error = %v", err)
+	}
+	return buf.Bytes()
+}
+
+func sha256Hex(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
 }

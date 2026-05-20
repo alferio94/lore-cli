@@ -511,7 +511,7 @@ func TestHelpAndUnknownCommand(t *testing.T) {
 	if exitCode := app.Run([]string{"--help"}); exitCode != 0 {
 		t.Fatalf("help exitCode = %d, want 0", exitCode)
 	}
-	for _, want := range []string{"Commands:", "version", "api request", "install", "OS keychain-backed login metadata"} {
+	for _, want := range []string{"Commands:", "version", "api request", "install", "update", "OS keychain-backed login metadata"} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("stdout = %q, want substring %q", stdout.String(), want)
 		}
@@ -757,6 +757,90 @@ func TestInstallCommandYesModeBacksUpExistingPiWithoutPrompt(t *testing.T) {
 		}
 	}
 	assertNoTokenLeak(t, out, stderr.String(), "secret-token=yes")
+}
+
+func TestUpdateCommandDryRunReportsBinaryOnlyPlanWithoutPiMutation(t *testing.T) {
+	homeDir, _ := setIsolatedPiHome(t)
+	piRoot := filepath.Join(homeDir, ".pi")
+	if err := os.MkdirAll(piRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll piRoot: %v", err)
+	}
+	legacyPath := filepath.Join(piRoot, "legacy.txt")
+	if err := os.WriteFile(legacyPath, []byte("keep-me"), 0o600); err != nil {
+		t.Fatalf("WriteFile legacyPath: %v", err)
+	}
+
+	store := &fakeStore{path: filepath.Join(t.TempDir(), "config.json"), loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token=update-dry-run"}}
+	app, stdout, stderr := newTestApp(store, nil)
+	app.ExecutablePath = func() (string, error) { return "/tmp/lore", nil }
+	app.LookPath = func(name string) (string, error) { return "/tmp/other-lore", nil }
+	app.BuildInfo = version.Info{Version: "v0.2.5"}
+
+	if exitCode := app.Run([]string{"update", "--dry-run"}); exitCode != 1 {
+		t.Fatalf("update --dry-run exitCode = %d, want 1, stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+	if got, err := os.ReadFile(legacyPath); err != nil || string(got) != "keep-me" {
+		t.Fatalf("legacyPath after update dry-run = %q err=%v, want unchanged", string(got), err)
+	}
+	combined := strings.ToLower(stdout.String() + "\n" + stderr.String())
+	for _, want := range []string{"latest", "dry-run", "untouched", "~/.pi", "path mismatch"} {
+		if !strings.Contains(combined, strings.ToLower(want)) {
+			t.Fatalf("combined output = %q, want substring %q", combined, want)
+		}
+	}
+	assertNoTokenLeak(t, stdout.String(), stderr.String(), "secret-token=update-dry-run")
+}
+
+func TestUpdateCommandYesModeFailsClosedOnUnsafeTargetWithoutPiMutation(t *testing.T) {
+	homeDir, _ := setIsolatedPiHome(t)
+	piRoot := filepath.Join(homeDir, ".pi")
+	if err := os.MkdirAll(piRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll piRoot: %v", err)
+	}
+	legacyPath := filepath.Join(piRoot, "legacy.txt")
+	if err := os.WriteFile(legacyPath, []byte("keep-me"), 0o600); err != nil {
+		t.Fatalf("WriteFile legacyPath: %v", err)
+	}
+
+	store := &fakeStore{path: filepath.Join(t.TempDir(), "config.json"), loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token=update-yes"}}
+	app, stdout, stderr := newTestApp(store, nil)
+	app.ExecutablePath = func() (string, error) { return "/tmp/link/lore", nil }
+	app.LookPath = func(name string) (string, error) { return "/tmp/link/lore", nil }
+	app.BuildInfo = version.Info{Version: "dev"}
+
+	if exitCode := app.Run([]string{"update", "--yes"}); exitCode != 1 {
+		t.Fatalf("update --yes exitCode = %d, want 1, stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+	if got, err := os.ReadFile(legacyPath); err != nil || string(got) != "keep-me" {
+		t.Fatalf("legacyPath after update --yes = %q err=%v, want unchanged", string(got), err)
+	}
+	combined := strings.ToLower(stdout.String() + "\n" + stderr.String())
+	for _, want := range []string{"dev", "unsafe", "untouched", "~/.pi"} {
+		if !strings.Contains(combined, strings.ToLower(want)) {
+			t.Fatalf("combined output = %q, want substring %q", combined, want)
+		}
+	}
+	assertNoTokenLeak(t, stdout.String(), stderr.String(), "secret-token=update-yes")
+}
+
+func TestUpdateUsageIncludesBinaryOnlyGuidance(t *testing.T) {
+	store := &fakeStore{path: "/tmp/lore/config.json", loadErr: config.ErrNotFound}
+	app, _, stderr := newTestApp(store, nil)
+
+	if exitCode := app.Run([]string{"update", "unexpected"}); exitCode != 1 {
+		t.Fatalf("update exitCode = %d, want 1", exitCode)
+	}
+	for _, want := range []string{
+		"Usage: lore update",
+		"Pi runtime",
+		"~/.pi",
+		"--dry-run",
+		"--yes",
+	} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("stderr = %q, want substring %q", stderr.String(), want)
+		}
+	}
 }
 
 func TestInstallCommandPromptsForFullBackupAndAllowsExplicitDecline(t *testing.T) {

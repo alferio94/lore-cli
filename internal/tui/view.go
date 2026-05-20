@@ -32,7 +32,14 @@ var (
 func renderView(m model) string {
 	menu := renderMenuPanel(m)
 	detail := renderDetailPanel(m)
-	header := titleStyle.Render("Lore") + "\n" + subtitleStyle.Render("Interactive shell for status, login, logout, and diagnostics")
+	headerLines := []string{
+		titleStyle.Render("Lore"),
+		subtitleStyle.Render("Interactive shell for status, login, logout, diagnostics, install, and binary-only updates"),
+	}
+	if banner := renderUpdateBanner(m); banner != "" {
+		headerLines = append(headerLines, banner)
+	}
+	header := strings.Join(headerLines, "\n")
 	body := lipgloss.JoinHorizontal(lipgloss.Top, menu, detail)
 	footer := hintStyle.Render(renderFooter(m))
 	return appStyle.Render(lipgloss.JoinVertical(lipgloss.Left, header, "", body, "", footer))
@@ -104,10 +111,27 @@ func currentModeLabel(m model) string {
 	switch {
 	case m.focus == focusLogin:
 		return "Secure login form"
+	case m.updateConfirmationPending:
+		return "Update confirmation"
+	case m.installBackupDecisionPending:
+		return "Install confirmation"
 	case m.loading:
 		return "Running action"
 	default:
 		return "Action details"
+	}
+}
+
+func renderUpdateBanner(m model) string {
+	switch {
+	case m.updateAvailable:
+		return successStyle.Render(fmt.Sprintf("Update available: %s → %s • select Update to continue • binary-only, Pi runtime untouched", fallbackUpdateValue(m.updateCurrentVersion, "current"), fallbackUpdateValue(m.updateLatestVersion, "latest")))
+	case !m.updateChecked && m.actions.CheckForUpdate != nil:
+		return mutedStyle.Render("Checking for Lore CLI updates in the background…")
+	case m.updateNotice != "":
+		return mutedStyle.Render(m.updateNotice)
+	default:
+		return ""
 	}
 }
 
