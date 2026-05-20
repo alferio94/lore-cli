@@ -16,6 +16,7 @@ const SDD_MODELS_FILE = path.join(AGENT_DIR, "sdd-models.json");
 const SETTINGS_FILE = path.join(AGENT_DIR, "settings.json");
 
 const SDD_PHASES = [
+  "sdd-init",
   "sdd-explore",
   "sdd-propose",
   "sdd-spec",
@@ -48,6 +49,8 @@ interface PiSettingsConfig {
   defaultThinkingLevel?: ThinkingLevel;
   [key: string]: unknown;
 }
+
+type LoreModelsContext = ExtensionContext & Partial<Pick<ExtensionCommandContext, "waitForIdle">>;
 
 type LoreWorkerSpecialization = "general" | "research" | "review" | "docs";
 
@@ -412,6 +415,56 @@ async function loadPiSettings(): Promise<PiSettingsConfig> {
   return readJsonFile<PiSettingsConfig>(SETTINGS_FILE, {});
 }
 
+function hasModelRef(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function settingsDefaultModelRef(settings: PiSettingsConfig): string | undefined {
+  return hasModelRef(settings.defaultProvider) && hasModelRef(settings.defaultModel)
+    ? `${settings.defaultProvider}/${settings.defaultModel}`
+    : undefined;
+}
+
+function activeMainModelRef(ctx: ExtensionContext, settings: PiSettingsConfig): string | undefined {
+  if (ctx.model) return `${ctx.model.provider}/${ctx.model.id}`;
+  return settingsDefaultModelRef(settings);
+}
+
+interface AvailableModelDescriptor {
+  provider: string;
+  id: string;
+  name?: string;
+  reasoning?: boolean;
+}
+
+async function getAvailableModelsSafe(ctx: { modelRegistry?: { getAvailable?: (() => unknown) | undefined } | undefined }): Promise<AvailableModelDescriptor[]> {
+  const registry = ctx.modelRegistry;
+  if (!registry?.getAvailable) return [];
+  try {
+    const available = await Promise.resolve(registry.getAvailable.call(registry));
+    return Array.isArray(available) ? available as AvailableModelDescriptor[] : [];
+  } catch {
+    return [];
+  }
+}
+
+function findModelSafe(ctx: { modelRegistry?: { find?: ((provider: string, id: string) => unknown) | undefined } | undefined }, provider: string, id: string): any {
+  const registry = ctx.modelRegistry;
+  if (!registry?.find) return undefined;
+  try {
+    return registry.find.call(registry, provider, id);
+  } catch {
+    return undefined;
+  }
+}
+
+function hasConfiguredDelegationModels(ctx: ExtensionContext, settings: PiSettingsConfig, config: SddModelsConfig): boolean {
+  if (activeMainModelRef(ctx, settings)) return true;
+  if (hasModelRef(config.default?.model) || hasModelRef(config.nonSddDefault?.model)) return true;
+  if (Object.values(config.agents ?? {}).some((choice) => hasModelRef(choice?.model))) return true;
+  return Object.values(config.workers ?? {}).some((choice) => hasModelRef(choice?.model));
+}
+
 function splitModelRef(ref: string): { provider: string; id: string } | undefined {
   const slash = ref.indexOf("/");
   if (slash <= 0 || slash === ref.length - 1) return undefined;
@@ -519,7 +572,16 @@ class DelegationManager {
     const route = normalizeDelegationRoute(input.agent);
     const modelChoice = await resolveDelegationModel(route);
     const settings = await loadPiSettings();
-    const fallbackModel = settings.defaultProvider && settings.defaultModel ? `${settings.defaultProvider}/${settings.defaultModel}` : "default";
+    const fallbackModel = modelChoice?.model ?? activeMainModelRef(ctx, settings);
+    const fallbackThinking = modelChoice?.thinking ?? pi.getThinkingLevel() ?? normalizeThinking(settings.defaultThinkingLevel);
+    if (!fallbackModel) {
+      const availableModels = await getAvailableModelsSafe(ctx);
+      if (availableModels.length === 0) {
+        throw new Error("No available Pi models detected for delegation. Configure/login to a provider and API key, then use /lore-models once models appear.");
+      }
+      const routingTarget = route.kind === "sdd" ? `${route.canonicalAgent} or default-sdd` : `${formatDelegationAgent(route.canonicalAgent, route.specialization)} or default-non-sdd`;
+      throw new Error(`No model configured for delegation. Use /lore-models to set ${routingTarget}, or choose a main default model first.`);
+    }
     const outputFile = path.join(dir, `${id}.md`);
     const traceFile = path.join(dir, `${id}.jsonl`);
     await fs.writeFile(traceFile, "", "utf8").catch(() => {});
@@ -537,8 +599,8 @@ class DelegationManager {
       startedAt: new Date().toISOString(),
       outputFile,
       traceFile,
-      modelRef: modelChoice?.model ?? fallbackModel,
-      thinking: modelChoice?.thinking ?? normalizeThinking(settings.defaultThinkingLevel),
+      modelRef: fallbackModel,
+      thinking: fallbackThinking,
     };
     this.delegations.set(id, d);
     this.updateStatus(ctx);
@@ -561,8 +623,8 @@ class DelegationManager {
       LORE_DELEGATION_EXTENSION,
     ];
 
-    if (modelChoice?.model) args.push("--model", modelChoice.model);
-    if (modelChoice?.thinking) args.push("--thinking", modelChoice.thinking);
+    args.push("--model", fallbackModel);
+    if (fallbackThinking) args.push("--thinking", fallbackThinking);
     args.push(childPrompt);
 
     const child = spawn(PI_BIN, args, {
@@ -979,303 +1041,328 @@ export default function loreDelegation(pi: ExtensionAPI) {
     }, { triggerTurn: true, deliverAs: "followUp" });
   };
 
-  pi.on("session_start", async (_event, ctx) => manager.setContext(ctx));
+  const noModelGuidanceShown = new Set<string>();
+  const noModelGuidanceMessage = "No model configured for Pi delegations. Use /lore-models to select a default or phase model.";
+  const noProviderGuidanceMessage = "No available models detected. Configure/login to a Pi provider and API key, then use /lore-models.";
+
+  const showOverlaySelect = async (
+    ctx: LoreModelsContext,
+    title: string,
+    items: SelectItem[],
+    options?: { subtitle?: string; width?: number | string; minWidth?: number; maxHeight?: number | string },
+  ) => ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
+    const titleText = new Text(theme.fg("accent", theme.bold(title)), 1, 0);
+    const subtitleText = options?.subtitle ? new Text(theme.fg("muted", options.subtitle), 1, 0) : undefined;
+    const footerText = new Text(theme.fg("dim", "↑↓/jk navegar • enter seleccionar • esc regresar"), 1, 0);
+
+    const selectList = new SelectList(items, Math.min(Math.max(items.length, 6), 14), {
+      selectedPrefix: (text) => theme.fg("accent", text),
+      selectedText: (text) => theme.fg("accent", text),
+      description: (text) => theme.fg("muted", text),
+      scrollInfo: (text) => theme.fg("dim", text),
+      noMatch: (text) => theme.fg("warning", text),
+    });
+    selectList.onSelect = (item) => done(item.value);
+    selectList.onCancel = () => done(null);
+
+    const padLine = (line: string, width: number) => {
+      const padding = Math.max(0, width - visibleWidth(line));
+      return line + " ".repeat(padding);
+    };
+
+    const withSideBorders = (line: string, innerWidth: number) =>
+      theme.fg("accent", "│") + padLine(line, innerWidth) + theme.fg("accent", "│");
+
+    return {
+      render(width: number) {
+        const innerWidth = Math.max(20, width - 2);
+        const lines: string[] = [];
+        const topBorder = theme.fg("accent", `╭${"─".repeat(innerWidth)}╮`);
+        const bottomBorder = theme.fg("accent", `╰${"─".repeat(innerWidth)}╯`);
+
+        lines.push(topBorder);
+        for (const line of titleText.render(innerWidth)) lines.push(withSideBorders(line, innerWidth));
+        if (subtitleText) {
+          for (const line of subtitleText.render(innerWidth)) lines.push(withSideBorders(line, innerWidth));
+        }
+        lines.push(withSideBorders("", innerWidth));
+        for (const line of selectList.render(innerWidth)) lines.push(withSideBorders(line, innerWidth));
+        lines.push(withSideBorders("", innerWidth));
+        for (const line of footerText.render(innerWidth)) lines.push(withSideBorders(line, innerWidth));
+        lines.push(bottomBorder);
+        return lines;
+      },
+      invalidate() {
+        titleText.invalidate();
+        subtitleText?.invalidate();
+        footerText.invalidate();
+        selectList.invalidate();
+      },
+      handleInput(data: string) {
+        let nextData = data;
+        if (matchesKey(data, "j")) nextData = "\x1b[B";
+        else if (matchesKey(data, "k")) nextData = "\x1b[A";
+        selectList.handleInput(nextData);
+        tui.requestRender();
+      },
+    };
+  }, {
+    overlay: true,
+    overlayOptions: {
+      anchor: "center",
+      width: options?.width ?? "70%",
+      minWidth: options?.minWidth ?? 60,
+      maxHeight: options?.maxHeight ?? "75%",
+      margin: 1,
+    },
+  });
+
+  const openLoreModelsOverlay = async (ctx: LoreModelsContext, options?: { startupGuidance?: boolean }) => {
+    if (typeof ctx.waitForIdle === "function") await ctx.waitForIdle();
+    if (!ctx.hasUI) return;
+
+    const availableModels = await getAvailableModelsSafe(ctx);
+    if (availableModels.length === 0) {
+      ctx.ui.notify(noProviderGuidanceMessage, options?.startupGuidance ? "warning" : "error");
+      return;
+    }
+
+    const modelItems = availableModels
+      .map((model) => ({
+        value: `${model.provider}/${model.id}`,
+        label: `${model.provider}/${model.id}`,
+        description: [
+          model.name && model.name !== model.id ? model.name : undefined,
+          model.reasoning ? "thinking supported" : "thinking off only",
+        ].filter(Boolean).join(" • "),
+      }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+
+    const chooseModel = async (
+      key: string,
+      current?: string,
+      inheritDescription?: string,
+      inheritLabel?: string,
+    ) => {
+      const items: SelectItem[] = [];
+      if (inheritDescription && inheritLabel) {
+        items.push({
+          value: "__inherit__",
+          label: inheritLabel,
+          description: inheritDescription,
+        });
+      }
+      items.push(...modelItems.map((item) => ({
+        ...item,
+        description: item.value === current
+          ? [item.description, "current"].filter(Boolean).join(" • ")
+          : item.description,
+      })));
+      return showOverlaySelect(ctx, `Model for ${key}`, items, {
+        subtitle: current ? `Current: ${current}` : "Pick a model",
+        width: "78%",
+        minWidth: 72,
+        maxHeight: "80%",
+      });
+    };
+
+    const chooseThinking = async (key: string, current?: ThinkingLevel) => {
+      const items: SelectItem[] = THINKING_LEVELS.map((level) => ({
+        value: level,
+        label: level,
+        description: level === current ? "current" : undefined,
+      }));
+      return showOverlaySelect(ctx, `Thinking for ${key}`, items, {
+        subtitle: current ? `Current: ${current}` : "Pick a thinking level",
+        width: 42,
+        minWidth: 42,
+        maxHeight: 16,
+      }) as Promise<ThinkingLevel | null>;
+    };
+
+    let mainModelOverride: string | undefined;
+    let mainThinkingOverride: ThinkingLevel | undefined;
+
+    while (true) {
+      const settings = await loadPiSettings();
+      const sddConfig = await loadSddModelsConfig();
+      const mainModel = mainModelOverride ?? activeMainModelRef(ctx, settings) ?? "unset";
+      const mainThinking = mainThinkingOverride ?? pi.getThinkingLevel() ?? settings.defaultThinkingLevel ?? "unset";
+      const defaultSdd = sddConfig.default ?? {};
+      const defaultNonSdd = sddConfig.nonSddDefault ?? {};
+      const loreWorkerKeys = [
+        "lore-worker/general",
+        "lore-worker/research",
+        "lore-worker/review",
+        "lore-worker/docs",
+      ] as const;
+
+      const menuItems: SelectItem[] = [
+        {
+          value: "main-agent",
+          label: "Main agent",
+          description: `${mainModel} · ${mainThinking}`,
+        },
+        {
+          value: "default-non-sdd",
+          label: "Default non-SDD routing",
+          description: `${defaultNonSdd.model ?? "unset"} · ${defaultNonSdd.thinking ?? "unset"}`,
+        },
+        ...loreWorkerKeys.map((workerKey) => {
+          const choice = sddConfig.workers?.[workerKey] ?? {};
+          const inheritedModel = choice.model ?? defaultNonSdd.model ?? "unset";
+          const inheritedThinking = choice.thinking ?? defaultNonSdd.thinking ?? "unset";
+          const mode = choice.model || choice.thinking ? "custom" : "inherits default-non-sdd";
+          return {
+            value: workerKey,
+            label: workerKey,
+            description: `${inheritedModel} · ${inheritedThinking} • ${mode}`,
+          };
+        }),
+        {
+          value: "default-sdd",
+          label: "Default SDD routing",
+          description: `${defaultSdd.model ?? "unset"} · ${defaultSdd.thinking ?? "unset"}`,
+        },
+        ...SDD_PHASES.map((phase) => {
+          const choice = sddConfig.agents?.[phase] ?? {};
+          const inheritedModel = choice.model ?? defaultSdd.model ?? "unset";
+          const inheritedThinking = choice.thinking ?? defaultSdd.thinking ?? "unset";
+          const mode = choice.model || choice.thinking ? "custom" : "inherits default-sdd";
+          return {
+            value: phase,
+            label: phase,
+            description: `${inheritedModel} · ${inheritedThinking} • ${mode}`,
+          };
+        }),
+        {
+          value: "__close__",
+          label: "Close",
+          description: "Exit the model routing panel",
+        },
+      ];
+
+      const selected = await showOverlaySelect(ctx, "Model Routing", menuItems, {
+        subtitle: options?.startupGuidance
+          ? "No model is configured yet. Pick one to enable delegations."
+          : "Main agent + LoreWorker + SDD phases in one place",
+        width: "74%",
+        minWidth: 68,
+        maxHeight: "80%",
+      });
+      if (!selected || selected === "__close__") return;
+
+      const currentChoice = selected === "main-agent"
+        ? { model: mainModel === "unset" ? undefined : mainModel, thinking: normalizeThinking(mainThinking) }
+        : selected === "default-sdd"
+          ? defaultSdd
+          : selected === "default-non-sdd"
+            ? defaultNonSdd
+            : selected.startsWith("lore-worker/")
+              ? sddConfig.workers?.[selected] ?? {}
+              : sddConfig.agents?.[selected] ?? {};
+
+      const inheritDescription = selected !== "main-agent" && selected !== "default-sdd" && selected !== "default-non-sdd"
+        ? selected.startsWith("lore-worker/")
+          ? `${defaultNonSdd.model ?? "unset"} · ${defaultNonSdd.thinking ?? "unset"}`
+          : `${defaultSdd.model ?? "unset"} · ${defaultSdd.thinking ?? "unset"}`
+        : undefined;
+      const inheritLabel = selected !== "main-agent" && selected !== "default-sdd" && selected !== "default-non-sdd"
+        ? selected.startsWith("lore-worker/") ? "Use default-non-sdd" : "Use default-sdd"
+        : undefined;
+
+      const model = await chooseModel(selected, currentChoice.model, inheritDescription, inheritLabel);
+      if (!model) continue;
+
+      if (model === "__inherit__") {
+        const nextConfig = await loadSddModelsConfig();
+        if (selected.startsWith("lore-worker/")) {
+          if (nextConfig.workers?.[selected]) {
+            delete nextConfig.workers[selected];
+            await saveSddModelsConfig(nextConfig);
+          }
+          ctx.ui.notify(`${selected} now inherits default-non-sdd`, "info");
+        } else {
+          if (nextConfig.agents?.[selected]) {
+            delete nextConfig.agents[selected];
+            await saveSddModelsConfig(nextConfig);
+          }
+          ctx.ui.notify(`${selected} now inherits default-sdd`, "info");
+        }
+        continue;
+      }
+
+      const thinking = await chooseThinking(selected, currentChoice.thinking);
+      if (!thinking) continue;
+
+      if (selected === "main-agent") {
+        const parsed = splitModelRef(model);
+        if (!parsed) {
+          ctx.ui.notify(`Invalid model reference: ${model}`, "error");
+          continue;
+        }
+        const modelObject = findModelSafe(ctx, parsed.provider, parsed.id);
+        if (!modelObject) {
+          ctx.ui.notify(`Model not found: ${model}`, "error");
+          continue;
+        }
+        const success = await pi.setModel(modelObject);
+        if (!success) {
+          ctx.ui.notify(`No API key available for ${model}`, "error");
+          continue;
+        }
+        pi.setThinkingLevel(thinking);
+        await writeJsonFile(SETTINGS_FILE, { ...settings, defaultProvider: parsed.provider, defaultModel: parsed.id, defaultThinkingLevel: thinking });
+        mainModelOverride = model;
+        mainThinkingOverride = thinking;
+        ctx.ui.notify(`Main agent set to ${model} · ${thinking}`, "info");
+        continue;
+      }
+
+      const nextConfig = await loadSddModelsConfig();
+      if (selected === "default-sdd") {
+        nextConfig.default = { model, thinking };
+      } else if (selected === "default-non-sdd") {
+        nextConfig.nonSddDefault = { model, thinking };
+      } else if (selected.startsWith("lore-worker/")) {
+        nextConfig.workers = { ...(nextConfig.workers ?? {}), [selected]: { model, thinking } };
+      } else {
+        nextConfig.agents = { ...(nextConfig.agents ?? {}), [selected]: { model, thinking } };
+      }
+      await saveSddModelsConfig(nextConfig);
+      ctx.ui.notify(`${selected} set to ${model} · ${thinking}`, "info");
+    }
+  };
+
+  const maybeShowNoModelGuidance = async (ctx: ExtensionContext) => {
+    if (process.env.PI_DELEGATION_CHILD === "1" || !ctx.hasUI) return;
+    const sid = sessionId(ctx);
+    if (noModelGuidanceShown.has(sid)) return;
+
+    const settings = await loadPiSettings();
+    const sddConfig = await loadSddModelsConfig();
+    if (hasConfiguredDelegationModels(ctx, settings, sddConfig)) return;
+
+    noModelGuidanceShown.add(sid);
+    try {
+      await openLoreModelsOverlay(ctx, { startupGuidance: true });
+    } catch {
+      ctx.ui.notify(noModelGuidanceMessage, "warning");
+    }
+  };
+
+  pi.on("session_start", async (_event, ctx) => {
+    manager.setContext(ctx);
+    await maybeShowNoModelGuidance(ctx);
+  });
   pi.on("before_agent_start", async (event, ctx) => {
     manager.setContext(ctx);
     return { systemPrompt: `${event.systemPrompt}\n\n---\n\n${DELEGATION_PROTOCOL}` };
   });
 
-  const openLoreModels = async (_args: string, ctx: ExtensionCommandContext) => {
-      await ctx.waitForIdle();
-      if (!ctx.hasUI) return;
-
-      const availableModels = await ctx.modelRegistry.getAvailable();
-      if (availableModels.length === 0) {
-        ctx.ui.notify("No available models. Configure/login to a provider first.", "error");
-        return;
-      }
-
-      const showOverlaySelect = async (
-        title: string,
-        items: SelectItem[],
-        options?: { subtitle?: string; width?: number | string; minWidth?: number; maxHeight?: number | string },
-      ) => ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
-        const titleText = new Text(theme.fg("accent", theme.bold(title)), 1, 0);
-        const subtitleText = options?.subtitle ? new Text(theme.fg("muted", options.subtitle), 1, 0) : undefined;
-        const footerText = new Text(theme.fg("dim", "↑↓/jk navegar • enter seleccionar • esc regresar"), 1, 0);
-
-        const selectList = new SelectList(items, Math.min(Math.max(items.length, 6), 14), {
-          selectedPrefix: (text) => theme.fg("accent", text),
-          selectedText: (text) => theme.fg("accent", text),
-          description: (text) => theme.fg("muted", text),
-          scrollInfo: (text) => theme.fg("dim", text),
-          noMatch: (text) => theme.fg("warning", text),
-        });
-        selectList.onSelect = (item) => done(item.value);
-        selectList.onCancel = () => done(null);
-
-        const padLine = (line: string, width: number) => {
-          const padding = Math.max(0, width - visibleWidth(line));
-          return line + " ".repeat(padding);
-        };
-
-        const withSideBorders = (line: string, innerWidth: number) =>
-          theme.fg("accent", "│") + padLine(line, innerWidth) + theme.fg("accent", "│");
-
-        return {
-          render(width: number) {
-            const innerWidth = Math.max(20, width - 2);
-            const lines: string[] = [];
-            const topBorder = theme.fg("accent", `╭${"─".repeat(innerWidth)}╮`);
-            const bottomBorder = theme.fg("accent", `╰${"─".repeat(innerWidth)}╯`);
-
-            lines.push(topBorder);
-            for (const line of titleText.render(innerWidth)) lines.push(withSideBorders(line, innerWidth));
-            if (subtitleText) {
-              for (const line of subtitleText.render(innerWidth)) lines.push(withSideBorders(line, innerWidth));
-            }
-            lines.push(withSideBorders("", innerWidth));
-            for (const line of selectList.render(innerWidth)) lines.push(withSideBorders(line, innerWidth));
-            lines.push(withSideBorders("", innerWidth));
-            for (const line of footerText.render(innerWidth)) lines.push(withSideBorders(line, innerWidth));
-            lines.push(bottomBorder);
-            return lines;
-          },
-          invalidate() {
-            titleText.invalidate();
-            subtitleText?.invalidate();
-            footerText.invalidate();
-            selectList.invalidate();
-          },
-          handleInput(data: string) {
-            let nextData = data;
-            if (matchesKey(data, "j")) nextData = "\x1b[B";
-            else if (matchesKey(data, "k")) nextData = "\x1b[A";
-            selectList.handleInput(nextData);
-            tui.requestRender();
-          },
-        };
-      }, {
-        overlay: true,
-        overlayOptions: {
-          anchor: "center",
-          width: options?.width ?? "70%",
-          minWidth: options?.minWidth ?? 60,
-          maxHeight: options?.maxHeight ?? "75%",
-          margin: 1,
-        },
-      });
-
-      const modelItems = availableModels
-        .map((model) => ({
-          value: `${model.provider}/${model.id}`,
-          label: `${model.provider}/${model.id}`,
-          description: [
-            model.name && model.name !== model.id ? model.name : undefined,
-            model.reasoning ? "thinking supported" : "thinking off only",
-          ].filter(Boolean).join(" • "),
-        }))
-        .sort((a, b) => a.label.localeCompare(b.label));
-
-      const chooseModel = async (
-        key: string,
-        current?: string,
-        inheritDescription?: string,
-      ) => {
-        const items: SelectItem[] = [];
-        if (inheritDescription) {
-          items.push({
-            value: "__inherit__",
-            label: "Use default-sdd",
-            description: inheritDescription,
-          });
-        }
-        items.push(...modelItems.map((item) => ({
-          ...item,
-          description: item.value === current
-            ? [item.description, "current"].filter(Boolean).join(" • ")
-            : item.description,
-        })));
-        return showOverlaySelect(`Model for ${key}`, items, {
-          subtitle: current ? `Current: ${current}` : "Pick a model",
-          width: "78%",
-          minWidth: 72,
-          maxHeight: "80%",
-        });
-      };
-
-      const chooseThinking = async (key: string, current?: ThinkingLevel) => {
-        const items: SelectItem[] = THINKING_LEVELS.map((level) => ({
-          value: level,
-          label: level,
-          description: level === current ? "current" : undefined,
-        }));
-        return showOverlaySelect(`Thinking for ${key}`, items, {
-          subtitle: current ? `Current: ${current}` : "Pick a thinking level",
-          width: 42,
-          minWidth: 42,
-          maxHeight: 16,
-        }) as Promise<ThinkingLevel | null>;
-      };
-
-      let mainModelOverride: string | undefined;
-      let mainThinkingOverride: ThinkingLevel | undefined;
-
-      while (true) {
-        const settings = await loadPiSettings();
-        const sddConfig = await loadSddModelsConfig();
-        const activeMainModel = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
-        const mainModel = mainModelOverride ?? activeMainModel ?? (settings.defaultProvider && settings.defaultModel ? `${settings.defaultProvider}/${settings.defaultModel}` : "unset");
-        const mainThinking = mainThinkingOverride ?? pi.getThinkingLevel() ?? settings.defaultThinkingLevel ?? "unset";
-        const defaultSdd = sddConfig.default ?? {};
-        const defaultNonSdd = sddConfig.nonSddDefault ?? {};
-        const loreWorkerKeys = [
-          "lore-worker/general",
-          "lore-worker/research",
-          "lore-worker/review",
-          "lore-worker/docs",
-        ] as const;
-
-        const menuItems: SelectItem[] = [
-          {
-            value: "main-agent",
-            label: "Main agent",
-            description: `${mainModel} · ${mainThinking}`,
-          },
-          {
-            value: "default-non-sdd",
-            label: "Default non-SDD routing",
-            description: `${defaultNonSdd.model ?? "unset"} · ${defaultNonSdd.thinking ?? "unset"}`,
-          },
-          ...loreWorkerKeys.map((workerKey) => {
-            const choice = sddConfig.workers?.[workerKey] ?? {};
-            const inheritedModel = choice.model ?? defaultNonSdd.model ?? "unset";
-            const inheritedThinking = choice.thinking ?? defaultNonSdd.thinking ?? "unset";
-            const mode = choice.model || choice.thinking ? "custom" : "inherits default-non-sdd";
-            return {
-              value: workerKey,
-              label: workerKey,
-              description: `${inheritedModel} · ${inheritedThinking} • ${mode}`,
-            };
-          }),
-          {
-            value: "default-sdd",
-            label: "Default SDD routing",
-            description: `${defaultSdd.model ?? "unset"} · ${defaultSdd.thinking ?? "unset"}`,
-          },
-          ...SDD_PHASES.map((phase) => {
-            const choice = sddConfig.agents?.[phase] ?? {};
-            const inheritedModel = choice.model ?? defaultSdd.model ?? "unset";
-            const inheritedThinking = choice.thinking ?? defaultSdd.thinking ?? "unset";
-            const mode = choice.model || choice.thinking ? "custom" : "inherits default-sdd";
-            return {
-              value: phase,
-              label: phase,
-              description: `${inheritedModel} · ${inheritedThinking} • ${mode}`,
-            };
-          }),
-          {
-            value: "__close__",
-            label: "Close",
-            description: "Exit the model routing panel",
-          },
-        ];
-
-        const selected = await showOverlaySelect("Model Routing", menuItems, {
-          subtitle: "Main agent + LoreWorker + SDD phases in one place",
-          width: "74%",
-          minWidth: 68,
-          maxHeight: "80%",
-        });
-        if (!selected || selected === "__close__") return;
-
-        const currentChoice = selected === "main-agent"
-          ? { model: mainModel === "unset" ? undefined : mainModel, thinking: normalizeThinking(mainThinking) }
-          : selected === "default-sdd"
-            ? defaultSdd
-            : selected === "default-non-sdd"
-              ? defaultNonSdd
-              : selected.startsWith("lore-worker/")
-                ? sddConfig.workers?.[selected] ?? {}
-                : sddConfig.agents?.[selected] ?? {};
-
-        const inheritDescription = selected !== "main-agent" && selected !== "default-sdd" && selected !== "default-non-sdd"
-          ? selected.startsWith("lore-worker/")
-            ? `${defaultNonSdd.model ?? "unset"} · ${defaultNonSdd.thinking ?? "unset"}`
-            : `${defaultSdd.model ?? "unset"} · ${defaultSdd.thinking ?? "unset"}`
-          : undefined;
-
-        const model = await chooseModel(selected, currentChoice.model, inheritDescription);
-        if (!model) continue;
-
-        if (model === "__inherit__") {
-          const nextConfig = await loadSddModelsConfig();
-          if (selected.startsWith("lore-worker/")) {
-            if (nextConfig.workers?.[selected]) {
-              delete nextConfig.workers[selected];
-              await saveSddModelsConfig(nextConfig);
-            }
-            ctx.ui.notify(`${selected} now inherits default-non-sdd`, "info");
-          } else {
-            if (nextConfig.agents?.[selected]) {
-              delete nextConfig.agents[selected];
-              await saveSddModelsConfig(nextConfig);
-            }
-            ctx.ui.notify(`${selected} now inherits default-sdd`, "info");
-          }
-          continue;
-        }
-
-        const thinking = await chooseThinking(selected, currentChoice.thinking);
-        if (!thinking) continue;
-
-        if (selected === "main-agent") {
-          const parsed = splitModelRef(model);
-          if (!parsed) {
-            ctx.ui.notify(`Invalid model reference: ${model}`, "error");
-            continue;
-          }
-          const modelObject = ctx.modelRegistry.find(parsed.provider, parsed.id);
-          if (!modelObject) {
-            ctx.ui.notify(`Model not found: ${model}`, "error");
-            continue;
-          }
-          const success = await pi.setModel(modelObject);
-          if (!success) {
-            ctx.ui.notify(`No API key available for ${model}`, "error");
-            continue;
-          }
-          pi.setThinkingLevel(thinking);
-          await writeJsonFile(SETTINGS_FILE, { ...settings, defaultProvider: parsed.provider, defaultModel: parsed.id, defaultThinkingLevel: thinking });
-          mainModelOverride = model;
-          mainThinkingOverride = thinking;
-          ctx.ui.notify(`Main agent set to ${model} · ${thinking}`, "info");
-          continue;
-        }
-
-        const nextConfig = await loadSddModelsConfig();
-        if (selected === "default-sdd") {
-          nextConfig.default = { model, thinking };
-        } else if (selected === "default-non-sdd") {
-          nextConfig.nonSddDefault = { model, thinking };
-        } else if (selected.startsWith("lore-worker/")) {
-          nextConfig.workers = { ...(nextConfig.workers ?? {}), [selected]: { model, thinking } };
-        } else {
-          nextConfig.agents = { ...(nextConfig.agents ?? {}), [selected]: { model, thinking } };
-        }
-        await saveSddModelsConfig(nextConfig);
-        ctx.ui.notify(`${selected} set to ${model} · ${thinking}`, "info");
-      }
-  };
-
   pi.registerCommand("lore-models", {
     description: "Configure model routing for the main agent, LoreWorker, and SDD phases",
-    handler: openLoreModels,
-  });
-
-  pi.registerCommand("sdd-models", {
-    description: "Alias for /lore-models",
-    handler: openLoreModels,
+    handler: async (_args, ctx) => openLoreModelsOverlay(ctx),
   });
 
   pi.registerShortcut("ctrl+space", {
@@ -1301,14 +1388,18 @@ export default function loreDelegation(pi: ExtensionAPI) {
     promptSnippet: "delegate: run independent background work with a Pi worker",
     parameters: Type.Object({
       prompt: Type.String({ description: "Detailed prompt for the background worker. Prefer English for technical artifact work." }),
-      agent: Type.Optional(Type.String({ description: "Worker kind. Non-SDD aliases normalize to lore-worker (e.g. reviewer, researcher, scribe, general). SDD phases use sdd-explore, sdd-propose, sdd-spec, sdd-design, sdd-tasks, sdd-apply, sdd-verify, sdd-archive." })),
+      agent: Type.Optional(Type.String({ description: "Worker kind. Non-SDD aliases normalize to lore-worker (e.g. reviewer, researcher, scribe, general). SDD phases use sdd-init, sdd-explore, sdd-propose, sdd-spec, sdd-design, sdd-tasks, sdd-apply, sdd-verify, sdd-archive." })),
     }),
     async execute(_id, params, _signal, _update, ctx) {
-      const d = await manager.delegate(ctx, params);
-      return textResult(
-        `Delegation started: ${d.id}\nAgent: ${formatDelegationAgent(d.agent, d.specialization)}\nStatus: running\nUse delegation_read({"id":"${d.id}"}) when it completes.`,
-        { id: d.id, status: d.status, outputFile: d.outputFile, traceFile: d.traceFile, requestedAgent: d.requestedAgent, agent: d.agent, specialization: d.specialization, normalizationNote: d.normalizationNote },
-      );
+      try {
+        const d = await manager.delegate(ctx, params);
+        return textResult(
+          `Delegation started: ${d.id}\nAgent: ${formatDelegationAgent(d.agent, d.specialization)}\nStatus: running\nUse delegation_read({"id":"${d.id}"}) when it completes.`,
+          { id: d.id, status: d.status, outputFile: d.outputFile, traceFile: d.traceFile, requestedAgent: d.requestedAgent, agent: d.agent, specialization: d.specialization, normalizationNote: d.normalizationNote },
+        );
+      } catch (err) {
+        return textResult(err instanceof Error ? err.message : String(err), { error: true });
+      }
     },
   });
 

@@ -317,7 +317,13 @@ func TestInstallPiWritesManagedFilesBackupsAndManifest(t *testing.T) {
 	if got := string(delegationContent); !containsAll(got,
 		"export default function",
 		"ExtensionAPI",
-		"pi.registerCommand(\"sdd-models\"",
+		"pi.registerCommand(\"lore-models\"",
+		"sdd-init",
+		"No model configured for Pi delegations. Use /lore-models to select a default or phase model.",
+		"No available models detected. Configure/login to a Pi provider and API key, then use /lore-models.",
+		"getAvailableModelsSafe(",
+		"Promise.resolve(registry.getAvailable.call(registry))",
+		"findModelSafe(ctx, parsed.provider, parsed.id)",
 		"pi.registerShortcut(\"ctrl+space\"",
 		"name: \"delegate\"",
 		"name: \"delegation_read\"",
@@ -325,6 +331,8 @@ func TestInstallPiWritesManagedFilesBackupsAndManifest(t *testing.T) {
 		t.Fatalf("lore-delegation.ts missing local delegation/model-routing markers: %q", got)
 	} else if strings.Contains(got, "lore_delegate") || strings.Contains(got, "/v1/sessions") {
 		t.Fatalf("lore-delegation.ts contains unsupported remote delegation contract: %q", got)
+	} else if strings.Contains(got, "pi.registerCommand(\"sdd-models\"") {
+		t.Fatalf("lore-delegation.ts still contains removed /sdd-models alias: %q", got)
 	} else if !strings.Contains(got, "anchor: \"center\",\n      width: \"96%\",\n      minWidth: 72,\n      maxHeight: \"80%\",") {
 		t.Fatalf("lore-delegation.ts missing centered subagents overlay marker: %q", got)
 	}
