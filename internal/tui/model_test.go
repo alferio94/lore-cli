@@ -3,10 +3,13 @@ package tui
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/alferio94/lore-cli/internal/cli"
+	"github.com/alferio94/lore-cli/internal/install"
 	"github.com/alferio94/lore-cli/internal/output"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -124,6 +127,172 @@ func TestInstallTargetSelectionListsOnlyPiAsSelectable(t *testing.T) {
 	}
 	if strings.Contains(m.statusBody, "Claude Code — Recommended") {
 		t.Fatalf("statusBody = %q, did not expect non-Pi targets to be marked recommended", m.statusBody)
+	}
+}
+
+func TestInstallDetectsExistingPiAndPromptsForFullBackupBeforeMutation(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	if err := os.MkdirAll(filepath.Join(homeDir, ".pi"), 0o755); err != nil {
+		t.Fatalf("MkdirAll ~/.pi: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(homeDir, ".pi", "legacy.txt"), []byte("legacy"), 0o600); err != nil {
+		t.Fatalf("WriteFile ~/.pi/legacy.txt: %v", err)
+	}
+
+	calls := 0
+	m := newModel(cli.InteractiveActions{Install: func(context.Context) cli.ActionReport {
+		calls++
+		return cli.ActionReport{Title: "Lore install", ExitCode: 0}
+	}})
+	m = moveSelectionToInstall(t, m)
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	if cmd != nil {
+		t.Fatal("first install enter unexpectedly started async install")
+	}
+
+	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	if cmd != nil {
+		t.Fatal("second install enter should prompt for full-backup decision before install mutation")
+	}
+	if calls != 0 {
+		t.Fatalf("install calls = %d, want 0 before deciding how to handle existing ~/.pi", calls)
+	}
+	combined := strings.ToLower(m.statusTitle + "\n" + m.statusBody)
+	for _, want := range []string{"full backup", ".pi", "existing"} {
+		if !strings.Contains(combined, want) {
+			t.Fatalf("backup decision UI missing %q in title/body:\n%s", want, combined)
+		}
+	}
+}
+
+func TestInstallBackupDecisionDeclineContinuesWithoutFullBackup(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	if err := os.MkdirAll(filepath.Join(homeDir, ".pi"), 0o755); err != nil {
+		t.Fatalf("MkdirAll ~/.pi: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(homeDir, ".pi", "legacy.txt"), []byte("legacy"), 0o600); err != nil {
+		t.Fatalf("WriteFile ~/.pi/legacy.txt: %v", err)
+	}
+
+	calls := 0
+	m := newModel(cli.InteractiveActions{Install: func(context.Context) cli.ActionReport {
+		calls++
+		return cli.ActionReport{Title: "Lore install", ExitCode: 0, Checks: []output.Check{{Name: "install", Status: output.StatusOK, Detail: "full-backup=skipped by user choice"}}}
+	}})
+	m = moveSelectionToInstall(t, m)
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	m = updated.(model)
+	if cmd == nil {
+		t.Fatal("declining full backup should continue install with an explicit skip summary")
+	}
+	updated, _ = m.Update(cmd())
+	m = updated.(model)
+	if calls != 1 {
+		t.Fatalf("install calls = %d, want 1 after explicit full-backup decline", calls)
+	}
+	if got := strings.ToLower(m.statusBody); !strings.Contains(got, "full-backup=skipped") {
+		t.Fatalf("statusBody = %q, want skipped-backup summary after decline", m.statusBody)
+	}
+}
+
+func TestInstallBackupDecisionAcceptContinuesInstall(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	if err := os.MkdirAll(filepath.Join(homeDir, ".pi"), 0o755); err != nil {
+		t.Fatalf("MkdirAll ~/.pi: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(homeDir, ".pi", "legacy.txt"), []byte("legacy"), 0o600); err != nil {
+		t.Fatalf("WriteFile ~/.pi/legacy.txt: %v", err)
+	}
+
+	calls := 0
+	m := newModel(cli.InteractiveActions{Install: func(context.Context) cli.ActionReport {
+		calls++
+		return cli.ActionReport{Title: "Lore install", ExitCode: 0, Checks: []output.Check{{Name: "install", Status: output.StatusOK, Detail: "full-backup=scheduled"}}}
+	}})
+	m = moveSelectionToInstall(t, m)
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	m = updated.(model)
+	if cmd == nil {
+		t.Fatal("accepting full backup should continue install")
+	}
+	updated, _ = m.Update(cmd())
+	m = updated.(model)
+	if calls != 1 {
+		t.Fatalf("install calls = %d, want 1 after accepting full backup", calls)
+	}
+	if got := strings.ToLower(m.statusBody); !strings.Contains(got, "full-backup=scheduled") {
+		t.Fatalf("statusBody = %q, want scheduled-backup summary after acceptance", m.statusBody)
+	}
+}
+
+func TestInstallBackupDecisionUsesSharedPlanExecutePath(t *testing.T) {
+	plan := install.PiInstallPlan{
+		Layout:     install.ResolvePiLayout(t.TempDir()),
+		ExistingPi: install.ExistingPiState{Exists: true, Path: "/tmp/test-home/.pi", Kind: "directory"},
+		FullBackup: &install.FullPiBackupPlan{BackupPath: "/tmp/test-backup", ManifestPath: "/tmp/test-backup/lore-pi-backup.json"},
+	}
+	planCalls := 0
+	execCalls := 0
+	legacyCalls := 0
+	var executedPlan install.PiInstallPlan
+	m := newModel(cli.InteractiveActions{
+		Install: func(context.Context) cli.ActionReport {
+			legacyCalls++
+			return cli.ActionReport{Title: "legacy install", ExitCode: 0}
+		},
+		PlanPiInstall: func(context.Context) (install.PiInstallPlan, cli.ActionReport, bool) {
+			planCalls++
+			return plan, cli.ActionReport{Title: "Lore install"}, true
+		},
+		ExecutePiInstall: func(_ context.Context, got install.PiInstallPlan) cli.ActionReport {
+			execCalls++
+			executedPlan = got
+			return cli.ActionReport{Title: "Lore install", ExitCode: 0, Checks: []output.Check{{Name: "install", Status: output.StatusOK, Detail: "shared-plan-execute-path-used"}}}
+		},
+	})
+	m = moveSelectionToInstall(t, m)
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	if cmd != nil {
+		t.Fatal("shared plan with existing ~/.pi should prompt before execution")
+	}
+	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	m = updated.(model)
+	if cmd == nil {
+		t.Fatal("declining full backup should continue through shared execute path")
+	}
+	updated, _ = m.Update(cmd())
+	m = updated.(model)
+	if planCalls != 1 || execCalls != 1 {
+		t.Fatalf("planCalls=%d execCalls=%d, want 1 each", planCalls, execCalls)
+	}
+	if legacyCalls != 0 {
+		t.Fatalf("legacy install calls = %d, want 0", legacyCalls)
+	}
+	if executedPlan.FullBackup != nil {
+		t.Fatalf("executed plan full backup = %+v, want nil after explicit decline", executedPlan.FullBackup)
+	}
+	if !strings.Contains(m.statusBody, "shared-plan-execute-path-used") {
+		t.Fatalf("statusBody = %q, want shared plan/execute evidence", m.statusBody)
 	}
 }
 
@@ -289,4 +458,16 @@ func TestLoginSuccessAndFailureStates(t *testing.T) {
 			t.Fatalf("statusTone = %q, want error", got)
 		}
 	})
+}
+
+func moveSelectionToInstall(t *testing.T, m model) model {
+	t.Helper()
+	for i := 0; i < 4; i++ {
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		m = updated.(model)
+	}
+	if got := m.items[m.selected].key; got != "install" {
+		t.Fatalf("selected key = %q, want install", got)
+	}
+	return m
 }

@@ -583,6 +583,177 @@ func TestInstallPiReportsValidationFailuresAndSummary(t *testing.T) {
 	}
 }
 
+func TestPlanPiInstallReportsNoExistingPi(t *testing.T) {
+	homeDir := t.TempDir()
+	now := time.Date(2026, 5, 19, 0, 0, 0, 0, time.UTC)
+
+	plan, err := Service{}.PlanPiInstall(PiInstallRequest{
+		HomeDir:        homeDir,
+		ServerURL:      "https://lore.example",
+		LoreBinaryPath: "/usr/local/bin/lore",
+		LoreConfigDir:  filepath.Join(homeDir, ".lore"),
+		LoreCLIVersion: "v1.2.3",
+		Now:            now,
+	})
+	if err != nil {
+		t.Fatalf("PlanPiInstall error: %v", err)
+	}
+	if plan.ExistingPi.Exists {
+		t.Fatalf("ExistingPi.Exists = true, want false")
+	}
+	if plan.FullBackup != nil {
+		t.Fatalf("FullBackup = %+v, want nil when ~/.pi does not exist", plan.FullBackup)
+	}
+	if plan.Snapshot == "" {
+		t.Fatalf("Snapshot = %q, want non-empty drift token", plan.Snapshot)
+	}
+}
+
+func TestPlanPiInstallReportsExistingPiAndBackupPathOutsidePiDir(t *testing.T) {
+	homeDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(homeDir, ".pi", "nested"), 0o755); err != nil {
+		t.Fatalf("MkdirAll ~/.pi: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(homeDir, ".pi", "nested", "marker.txt"), []byte("existing"), 0o644); err != nil {
+		t.Fatalf("WriteFile marker: %v", err)
+	}
+
+	plan, err := Service{}.PlanPiInstall(PiInstallRequest{
+		HomeDir:        homeDir,
+		ServerURL:      "https://lore.example",
+		LoreBinaryPath: "/usr/local/bin/lore",
+		LoreConfigDir:  filepath.Join(homeDir, ".lore"),
+		LoreCLIVersion: "v1.2.3",
+		Now:            time.Date(2026, 5, 19, 0, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("PlanPiInstall error: %v", err)
+	}
+	if !plan.ExistingPi.Exists {
+		t.Fatalf("ExistingPi.Exists = false, want true")
+	}
+	if plan.FullBackup == nil {
+		t.Fatal("FullBackup = nil, want scheduled full backup for existing ~/.pi")
+	}
+	piRoot := filepath.Join(homeDir, ".pi")
+	if plan.FullBackup.BackupPath == piRoot || strings.HasPrefix(plan.FullBackup.BackupPath, piRoot+string(os.PathSeparator)) {
+		t.Fatalf("FullBackup.BackupPath = %q, want path outside %q", plan.FullBackup.BackupPath, piRoot)
+	}
+}
+
+func TestPlanPiInstallReportsManagedFileActions(t *testing.T) {
+	homeDir := t.TempDir()
+	req := PiInstallRequest{
+		HomeDir:        homeDir,
+		ServerURL:      "https://lore.example",
+		LoreBinaryPath: "/usr/local/bin/lore",
+		LoreConfigDir:  filepath.Join(homeDir, ".lore"),
+		LoreCLIVersion: "v1.2.3",
+		Now:            time.Date(2026, 5, 19, 0, 0, 0, 0, time.UTC),
+	}
+	layout := ResolvePiLayout(homeDir)
+	rendered, err := renderPiFiles(layout, req)
+	if err != nil {
+		t.Fatalf("renderPiFiles error: %v", err)
+	}
+	if err := os.MkdirAll(layout.ExtensionsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll extensions: %v", err)
+	}
+	for _, file := range rendered {
+		switch file.relativePath {
+		case filepath.Join("extensions", "lore-memory.ts"):
+			if err := os.WriteFile(file.absolutePath, file.content, 0o600); err != nil {
+				t.Fatalf("WriteFile unchanged fixture: %v", err)
+			}
+		case filepath.Join("extensions", "lore-delegation.ts"):
+			if err := os.WriteFile(file.absolutePath, []byte("legacy-delegation"), 0o600); err != nil {
+				t.Fatalf("WriteFile updated fixture: %v", err)
+			}
+		}
+	}
+
+	plan, err := Service{}.PlanPiInstall(req)
+	if err != nil {
+		t.Fatalf("PlanPiInstall error: %v", err)
+	}
+	if got := len(plan.ManagedFileActions); got != 4 {
+		t.Fatalf("len(ManagedFileActions) = %d, want 4", got)
+	}
+	actions := map[string]ManagedFileAction{}
+	for _, action := range plan.ManagedFileActions {
+		actions[action.RelativePath] = action
+	}
+	if got := actions[filepath.Join("extensions", "lore-memory.ts")].Action; got != "unchanged" {
+		t.Fatalf("lore-memory action = %q, want unchanged", got)
+	}
+	if got := actions[filepath.Join("extensions", "lore-delegation.ts")]; got.Action != "update" || !strings.HasPrefix(got.BackupPath, plan.ManagedBackupRoot) {
+		t.Fatalf("lore-delegation action = %+v, want update under %s", got, plan.ManagedBackupRoot)
+	}
+	for _, relativePath := range []string{filepath.Join("extensions", "lore-footer.ts"), "settings.json"} {
+		if got := actions[relativePath].Action; got != "create" {
+			t.Fatalf("%s action = %q, want create", relativePath, got)
+		}
+	}
+}
+
+func TestExecutePiInstallDryRunDoesNotMutateFilesystem(t *testing.T) {
+	homeDir := t.TempDir()
+	req := PiInstallRequest{
+		HomeDir:        homeDir,
+		ServerURL:      "https://lore.example",
+		LoreBinaryPath: "/usr/local/bin/lore",
+		LoreConfigDir:  filepath.Join(homeDir, ".lore"),
+		LoreCLIVersion: "v1.2.3",
+		Now:            time.Date(2026, 5, 19, 0, 0, 0, 0, time.UTC),
+	}
+
+	plan, err := Service{}.PlanPiInstall(req)
+	if err != nil {
+		t.Fatalf("PlanPiInstall error: %v", err)
+	}
+	if _, err := (Service{}).ExecutePiInstall(plan, InstallCommandOptions{DryRun: true}); err != nil {
+		t.Fatalf("ExecutePiInstall dry-run error: %v", err)
+	}
+
+	layout := ResolvePiLayout(homeDir)
+	if _, statErr := os.Stat(layout.AgentDir); !os.IsNotExist(statErr) {
+		t.Fatalf("AgentDir stat error = %v, want no install writes in dry-run", statErr)
+	}
+	if _, statErr := os.Stat(layout.ManifestPath); !os.IsNotExist(statErr) {
+		t.Fatalf("ManifestPath stat error = %v, want no manifest writes in dry-run", statErr)
+	}
+}
+
+func TestExecutePiInstallAbortsOnPlanApplyDrift(t *testing.T) {
+	homeDir := t.TempDir()
+	req := PiInstallRequest{
+		HomeDir:        homeDir,
+		ServerURL:      "https://lore.example",
+		LoreBinaryPath: "/usr/local/bin/lore",
+		LoreConfigDir:  filepath.Join(homeDir, ".lore"),
+		LoreCLIVersion: "v1.2.3",
+		Now:            time.Date(2026, 5, 19, 0, 0, 0, 0, time.UTC),
+	}
+
+	plan, err := Service{}.PlanPiInstall(req)
+	if err != nil {
+		t.Fatalf("PlanPiInstall error: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(homeDir, ".pi"), 0o755); err != nil {
+		t.Fatalf("MkdirAll drift marker: %v", err)
+	}
+
+	_, err = Service{}.ExecutePiInstall(plan, InstallCommandOptions{AssumeYes: true})
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "drift") {
+		t.Fatalf("ExecutePiInstall error = %v, want drift abort", err)
+	}
+
+	layout := ResolvePiLayout(homeDir)
+	if _, statErr := os.Stat(layout.ManifestPath); !os.IsNotExist(statErr) {
+		t.Fatalf("ManifestPath stat error = %v, want no writes on drift", statErr)
+	}
+}
+
 func containsSummaryEntry(entries []string, wants ...string) bool {
 	return containsAny(entries, wants...)
 }

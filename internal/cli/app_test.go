@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/alferio94/lore-cli/internal/auth"
 	"github.com/alferio94/lore-cli/internal/config"
 	"github.com/alferio94/lore-cli/internal/httpclient"
+	"github.com/alferio94/lore-cli/internal/install"
 	"github.com/alferio94/lore-cli/internal/version"
 )
 
@@ -617,6 +619,182 @@ func TestInstallUsageIncludesPiFirstGuidance(t *testing.T) {
 	}
 }
 
+func TestInstallCommandDryRunReportsPlanWithoutMutation(t *testing.T) {
+	homeDir, piAgentDir := setIsolatedPiHome(t)
+	piRoot := filepath.Join(homeDir, ".pi")
+	if err := os.MkdirAll(piRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll piRoot: %v", err)
+	}
+	legacyPath := filepath.Join(piRoot, "legacy.txt")
+	if err := os.WriteFile(legacyPath, []byte("keep-me"), 0o600); err != nil {
+		t.Fatalf("WriteFile legacyPath: %v", err)
+	}
+
+	configDir := t.TempDir()
+	store := &fakeStore{path: filepath.Join(configDir, "config.json"), loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token=plan"}}
+	client := &fakeClient{subject: httpclient.Subject{UserID: "user-1", Kind: "user"}}
+	app, stdout, stderr := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
+	app.ExecutablePath = func() (string, error) { return "/usr/local/bin/lore", nil }
+	app.BuildInfo = version.Info{Version: "v1.2.3"}
+
+	if exitCode := app.Run([]string{"install", "--dry-run"}); exitCode != 0 {
+		t.Fatalf("install --dry-run exitCode = %d, want 0, stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+	if got, err := os.ReadFile(legacyPath); err != nil || string(got) != "keep-me" {
+		t.Fatalf("legacyPath after dry-run = %q err=%v, want unchanged", string(got), err)
+	}
+	if _, err := os.Stat(filepath.Join(piAgentDir, "lore-install.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("manifest stat err = %v, want not exist after dry-run", err)
+	}
+	if _, err := os.Stat(filepath.Join(configDir, "backups")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("backup root stat err = %v, want not exist after dry-run", err)
+	}
+	out := stdout.String()
+	lowerOut := strings.ToLower(out)
+	for _, want := range []string{"dry-run", "backup", "manifest=", "managed_backup_root=", "full_backup_manifest=", "existing_pi_kind=directory"} {
+		if !strings.Contains(lowerOut, strings.ToLower(want)) {
+			t.Fatalf("stdout = %q, want dry-run plan detail containing %q", out, want)
+		}
+	}
+	assertNoTokenLeak(t, out, stderr.String(), "secret-token=plan")
+}
+
+func TestInstallCommandDryRunSurfacesManagedFileActions(t *testing.T) {
+	homeDir, piAgentDir := setIsolatedPiHome(t)
+	layout := install.ResolvePiLayout(homeDir)
+	if err := os.MkdirAll(layout.ExtensionsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll extensions: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(homeDir, ".pi", "legacy.txt"), []byte("keep-me"), 0o600); err != nil {
+		t.Fatalf("WriteFile legacyPath: %v", err)
+	}
+	configDir := t.TempDir()
+	loreMemory := renderInstallAssetForTest(t, filepath.Join("..", "install", "assets", "pi", "lore-memory.ts"), map[string]string{
+		"{{LORE_SERVER_URL}}":    "https://example.test",
+		"{{LORE_BINARY_PATH}}":   "/usr/local/bin/lore",
+		"{{LORE_CONFIG_DIR}}":    configDir,
+		"{{LORE_CLI_VERSION}}":   "v1.2.3",
+		"{{LORE_SETTINGS_PATH}}": filepath.Join(piAgentDir, "settings.json"),
+	})
+	if err := os.WriteFile(filepath.Join(layout.ExtensionsDir, "lore-memory.ts"), []byte(loreMemory), 0o600); err != nil {
+		t.Fatalf("WriteFile unchanged managed file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(layout.ExtensionsDir, "lore-delegation.ts"), []byte("legacy-delegation"), 0o600); err != nil {
+		t.Fatalf("WriteFile updated managed file: %v", err)
+	}
+
+	store := &fakeStore{path: filepath.Join(configDir, "config.json"), loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token=plan-actions"}}
+	client := &fakeClient{subject: httpclient.Subject{UserID: "user-1", Kind: "user"}}
+	app, stdout, stderr := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
+	app.ExecutablePath = func() (string, error) { return "/usr/local/bin/lore", nil }
+	app.BuildInfo = version.Info{Version: "v1.2.3"}
+
+	if exitCode := app.Run([]string{"install", "--dry-run"}); exitCode != 0 {
+		t.Fatalf("install --dry-run exitCode = %d, want 0, stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+	if _, err := os.Stat(filepath.Join(layout.ExtensionsDir, "lore-footer.ts")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("footer stat err = %v, want no created file in dry-run", err)
+	}
+	if _, err := os.Stat(layout.SettingsPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("settings stat err = %v, want no created settings in dry-run", err)
+	}
+	if _, err := os.Stat(filepath.Join(piAgentDir, "lore-install.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("manifest stat err = %v, want not exist after dry-run", err)
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		"managed_action=unchanged:extensions/lore-memory.ts",
+		"managed_action=update:extensions/lore-delegation.ts",
+		"managed_action=create:extensions/lore-footer.ts",
+		"managed_action=create:settings.json",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("stdout = %q, want action-level dry-run detail %q", out, want)
+		}
+	}
+	assertNoTokenLeak(t, out, stderr.String(), "secret-token=plan-actions")
+}
+
+func TestInstallCommandYesModeBacksUpExistingPiWithoutPrompt(t *testing.T) {
+	homeDir, _ := setIsolatedPiHome(t)
+	piRoot := filepath.Join(homeDir, ".pi")
+	if err := os.MkdirAll(filepath.Join(piRoot, "nested"), 0o755); err != nil {
+		t.Fatalf("MkdirAll nested piRoot: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(piRoot, "nested", "legacy.txt"), []byte("legacy-value"), 0o600); err != nil {
+		t.Fatalf("WriteFile legacy backup source: %v", err)
+	}
+
+	configDir := t.TempDir()
+	store := &fakeStore{path: filepath.Join(configDir, "config.json"), loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token=yes"}}
+	client := &fakeClient{subject: httpclient.Subject{UserID: "user-1", Kind: "user"}}
+	app, stdout, stderr := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
+	app.ExecutablePath = func() (string, error) { return "/usr/local/bin/lore", nil }
+	app.BuildInfo = version.Info{Version: "v1.2.3"}
+
+	if exitCode := app.Run([]string{"install", "--yes"}); exitCode != 0 {
+		t.Fatalf("install --yes exitCode = %d, want 0, stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+	backupDirs, err := filepath.Glob(filepath.Join(configDir, "backups", "pi", "*"))
+	if err != nil {
+		t.Fatalf("Glob backup dirs: %v", err)
+	}
+	if len(backupDirs) != 1 {
+		t.Fatalf("backupDirs = %v, want exactly one full backup dir", backupDirs)
+	}
+	backupCopy := filepath.Join(backupDirs[0], "nested", "legacy.txt")
+	if got, err := os.ReadFile(backupCopy); err != nil || string(got) != "legacy-value" {
+		t.Fatalf("full backup file = %q err=%v, want copied legacy content", string(got), err)
+	}
+	out := stdout.String()
+	lowerOut := strings.ToLower(out)
+	if strings.Contains(lowerOut, "full backup?") {
+		t.Fatalf("stdout = %q, want non-interactive --yes mode without prompt", out)
+	}
+	for _, want := range []string{"full-backup", "manifest=", "lore-pi-backup.json"} {
+		if !strings.Contains(lowerOut, strings.ToLower(want)) {
+			t.Fatalf("stdout = %q, want install reporting containing %q", out, want)
+		}
+	}
+	assertNoTokenLeak(t, out, stderr.String(), "secret-token=yes")
+}
+
+func TestInstallCommandPromptsForFullBackupAndAllowsExplicitDecline(t *testing.T) {
+	homeDir, piAgentDir := setIsolatedPiHome(t)
+	piRoot := filepath.Join(homeDir, ".pi")
+	if err := os.MkdirAll(piRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll piRoot: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(piRoot, "legacy.txt"), []byte("legacy-value"), 0o600); err != nil {
+		t.Fatalf("WriteFile legacy source: %v", err)
+	}
+
+	configDir := t.TempDir()
+	store := &fakeStore{path: filepath.Join(configDir, "config.json"), loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token=decline"}}
+	client := &fakeClient{subject: httpclient.Subject{UserID: "user-1", Kind: "user"}}
+	app, stdout, stderr := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
+	app.ExecutablePath = func() (string, error) { return "/usr/local/bin/lore", nil }
+	app.BuildInfo = version.Info{Version: "v1.2.3"}
+
+	restoreStdin := installTestStdin(t, "n\n")
+	defer restoreStdin()
+
+	if exitCode := app.Run([]string{"install"}); exitCode != 0 {
+		t.Fatalf("interactive install decline exitCode = %d, want 0, stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+	if _, err := os.Stat(filepath.Join(piAgentDir, "lore-install.json")); err != nil {
+		t.Fatalf("manifest stat err = %v, want install to continue after explicit decline", err)
+	}
+	if _, err := os.Stat(filepath.Join(configDir, "backups")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("backup root stat err = %v, want no full backup after explicit decline", err)
+	}
+	combined := strings.ToLower(stdout.String() + "\n" + stderr.String())
+	if !strings.Contains(combined, "full backup") {
+		t.Fatalf("combined output = %q, want explicit full-backup prompt/summary", combined)
+	}
+	assertNoTokenLeak(t, stdout.String(), stderr.String(), "secret-token=decline")
+}
+
 func TestAPIRequestCommandReturnsMachineReadableExitCodes(t *testing.T) {
 	store := &fakeStore{path: "/tmp/lore/config.json", loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token"}}
 	client := &fakeClient{}
@@ -706,6 +884,24 @@ func setIsolatedPiHome(t *testing.T) (homeDir string, piAgentDir string) {
 	t.Setenv("HOME", homeDir)
 	t.Setenv("PI_CODING_AGENT_DIR", piAgentDir)
 	return homeDir, piAgentDir
+}
+
+func renderInstallAssetForTest(t *testing.T, relativePath string, replacements map[string]string) string {
+	t.Helper()
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	assetPath := filepath.Clean(filepath.Join(filepath.Dir(thisFile), relativePath))
+	content, err := os.ReadFile(assetPath)
+	if err != nil {
+		t.Fatalf("ReadFile asset %s: %v", assetPath, err)
+	}
+	rendered := string(content)
+	for placeholder, value := range replacements {
+		rendered = strings.ReplaceAll(rendered, placeholder, value)
+	}
+	return rendered
 }
 
 func newTestApp(store *fakeStore, factory ClientFactory) (*App, *strings.Builder, *strings.Builder) {
@@ -954,5 +1150,25 @@ func assertNoTokenLeak(t *testing.T, stdout, stderr, token string) {
 	t.Helper()
 	if strings.Contains(stdout, token) || strings.Contains(stderr, token) {
 		t.Fatalf("raw token leaked in output: stdout=%q stderr=%q", stdout, stderr)
+	}
+}
+
+func installTestStdin(t *testing.T, input string) func() {
+	t.Helper()
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe() error = %v", err)
+	}
+	if _, err := writer.WriteString(input); err != nil {
+		t.Fatalf("writer.WriteString() error = %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("writer.Close() error = %v", err)
+	}
+	original := os.Stdin
+	os.Stdin = reader
+	return func() {
+		os.Stdin = original
+		_ = reader.Close()
 	}
 }

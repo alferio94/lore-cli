@@ -1,10 +1,12 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -59,6 +61,11 @@ type apiMCPCallOptions struct {
 	ArgsJSON   string
 }
 
+type installCommandOptions struct {
+	DryRun bool
+	Yes    bool
+}
+
 type authConfigError struct {
 	Code    string
 	Message string
@@ -73,21 +80,25 @@ func (e *authConfigError) Error() string {
 
 // InteractiveActions exposes reusable command behavior for the TUI.
 type InteractiveActions struct {
-	Login   func(ctx context.Context, serverURL, token string) (ActionMessage, error)
-	Logout  func(ctx context.Context) (ActionMessage, error)
-	Status  func(ctx context.Context) ActionReport
-	Doctor  func(ctx context.Context) ActionReport
-	Install func(ctx context.Context) ActionReport
+	Login            func(ctx context.Context, serverURL, token string) (ActionMessage, error)
+	Logout           func(ctx context.Context) (ActionMessage, error)
+	Status           func(ctx context.Context) ActionReport
+	Doctor           func(ctx context.Context) ActionReport
+	Install          func(ctx context.Context) ActionReport
+	PlanPiInstall    func(ctx context.Context) (install.PiInstallPlan, ActionReport, bool)
+	ExecutePiInstall func(ctx context.Context, plan install.PiInstallPlan) ActionReport
 }
 
 // InteractiveActions returns the shared action set used by the CLI and future TUI.
 func (a *App) InteractiveActions() InteractiveActions {
 	return InteractiveActions{
-		Login:   a.loginAction,
-		Logout:  a.logoutAction,
-		Status:  a.statusAction,
-		Doctor:  a.doctorAction,
-		Install: a.installAction,
+		Login:            a.loginAction,
+		Logout:           a.logoutAction,
+		Status:           a.statusAction,
+		Doctor:           a.doctorAction,
+		Install:          a.installAction,
+		PlanPiInstall:    a.planPiInstallAction,
+		ExecutePiInstall: a.executePiInstallAction,
 	}
 }
 
@@ -325,42 +336,87 @@ func (a *App) doctorAction(ctx context.Context) ActionReport {
 }
 
 func (a *App) installAction(ctx context.Context) ActionReport {
+	return a.installActionWithOptions(ctx, installCommandOptions{})
+}
+
+func (a *App) installActionWithOptions(ctx context.Context, opts installCommandOptions) ActionReport {
+	plan, report, ok := a.planPiInstallAction(ctx)
+	if !ok {
+		return report
+	}
+	if opts.DryRun {
+		report.Checks = append(report.Checks, output.Check{Name: "install", Status: output.StatusOK, Detail: formatInstallPlanSummary(plan, true)})
+		return report
+	}
+	if plan.ExistingPi.Exists && plan.FullBackup != nil && !opts.Yes {
+		includeBackup, promptErr := a.confirmFullBackup(plan)
+		if promptErr != nil {
+			report.Checks = append(report.Checks, output.Check{Name: "full-backup", Status: output.StatusFail, Detail: promptErr.Error(), Action: "Re-run lore install with --yes to accept the safe backup default non-interactively."})
+			report.ExitCode = 1
+			return report
+		}
+		if !includeBackup {
+			plan.FullBackup = nil
+		}
+	}
+	execReport := a.executePiInstallAction(ctx, plan)
+	execReport.Checks = append(report.Checks, execReport.Checks...)
+	if execReport.ExitCode == 0 && report.ExitCode != 0 {
+		execReport.ExitCode = report.ExitCode
+	}
+	return execReport
+}
+
+func (a *App) planPiInstallAction(ctx context.Context) (install.PiInstallPlan, ActionReport, bool) {
 	service := install.Service{Store: a.Store, Auth: a.authManager(), ClientFactory: install.ClientFactory(a.ClientFactory)}
 	report := ActionReport{Title: "Lore install"}
 	preflight := service.Preflight(ctx)
 	report.Checks = append(report.Checks, preflight.Checks...)
 	if !preflight.CanContinue {
 		report.ExitCode = 1
-		return report
+		return install.PiInstallPlan{}, report, false
 	}
 
 	homeDir, err := a.resolveUserHomeDir()
 	if err != nil {
 		report.Checks = append(report.Checks, output.Check{Name: "install", Status: output.StatusFail, Detail: err.Error(), Action: "Retry after HOME can be resolved for the current user."})
 		report.ExitCode = 1
-		return report
+		return install.PiInstallPlan{}, report, false
 	}
 	binaryPath, err := a.resolveExecutablePath()
 	if err != nil {
 		report.Checks = append(report.Checks, output.Check{Name: "install", Status: output.StatusFail, Detail: err.Error(), Action: "Retry from a normal Lore CLI binary context so the managed Pi manifest can record the CLI path."})
 		report.ExitCode = 1
-		return report
+		return install.PiInstallPlan{}, report, false
 	}
 	configPath, err := a.Store.Path()
 	if err != nil {
 		report.Checks = append(report.Checks, output.Check{Name: "install", Status: output.StatusFail, Detail: err.Error(), Action: "Fix the local config directory permissions or override LORE_CONFIG_DIR."})
 		report.ExitCode = 1
-		return report
+		return install.PiInstallPlan{}, report, false
 	}
 
-	result, err := service.InstallPi(install.PiInstallRequest{
+	req := install.PiInstallRequest{
 		HomeDir:        homeDir,
 		ServerURL:      preflight.ServerURL,
 		LoreBinaryPath: binaryPath,
 		LoreConfigDir:  filepath.Dir(configPath),
 		LoreCLIVersion: a.BuildInfo.Normalized().Version,
 		SavedToken:     preflight.Token,
-	})
+	}
+	plan, err := service.PlanPiInstall(req)
+	if err != nil {
+		report.Checks = append(report.Checks, output.Check{Name: "install", Status: output.StatusFail, Detail: err.Error(), Action: "Inspect the Pi runtime directory and rerun lore install after fixing the reported issue."})
+		report.ExitCode = 1
+		return install.PiInstallPlan{}, report, false
+	}
+	return plan, report, true
+}
+
+func (a *App) executePiInstallAction(ctx context.Context, plan install.PiInstallPlan) ActionReport {
+	service := install.Service{Store: a.Store, Auth: a.authManager(), ClientFactory: install.ClientFactory(a.ClientFactory)}
+	report := ActionReport{Title: "Lore install"}
+	result, err := service.ExecutePiInstall(plan, install.InstallCommandOptions{})
 	if err != nil {
 		report.Checks = append(report.Checks, output.Check{Name: "install", Status: output.StatusFail, Detail: err.Error(), Action: "Inspect the Pi runtime directory and rerun lore install after fixing the reported issue."})
 		report.ExitCode = 1
@@ -374,8 +430,11 @@ func (a *App) installAction(ctx context.Context) ActionReport {
 	}
 	report.Checks = append(report.Checks,
 		output.Check{Name: "install", Status: status, Detail: formatInstallSummary(result)},
-		output.Check{Name: "manifest", Status: output.StatusOK, Detail: fmt.Sprintf("verified %s auth_mode=%s managed_files=%d", result.Layout.ManifestPath, result.Manifest.AuthMode, len(result.Manifest.ManagedFiles))},
 	)
+	if result.FullBackup != nil {
+		report.Checks = append(report.Checks, output.Check{Name: "full-backup", Status: output.StatusOK, Detail: fmt.Sprintf("created path=%s manifest=%s entries=%d files=%d dirs=%d symlinks=%d", result.FullBackup.BackupPath, result.FullBackup.ManifestPath, result.FullBackup.EntriesCopied, result.FullBackup.FilesCopied, result.FullBackup.DirsCopied, result.FullBackup.SymlinksCopied), Action: fmt.Sprintf("To restore, move %s aside, copy %s back to %s, then inspect %s for the captured snapshot and metadata.", result.Layout.PiDir, result.FullBackup.BackupPath, result.Layout.PiDir, result.FullBackup.ManifestPath)})
+	}
+	report.Checks = append(report.Checks, output.Check{Name: "manifest", Status: output.StatusOK, Detail: fmt.Sprintf("verified %s auth_mode=%s managed_files=%d full_pi_backup=%t", result.Layout.ManifestPath, result.Manifest.AuthMode, len(result.Manifest.ManagedFiles), result.Manifest.FullPiBackup != nil)})
 	return report
 }
 
@@ -476,10 +535,62 @@ func (a *App) authManager() AuthManager {
 
 func formatInstallSummary(result install.PiInstallResult) string {
 	summary := fmt.Sprintf("target=%s created=%d updated=%d unchanged=%d backed_up=%d failed=%d", result.Manifest.Target, len(result.Summary.Created), len(result.Summary.Updated), len(result.Summary.Unchanged), len(result.Summary.BackedUp), len(result.Summary.Failed))
-	if len(result.Summary.Failed) == 0 {
-		return summary
+	parts := append([]string{summary}, formatManagedFileSummaryParts(result.Summary.Created, "create")...)
+	parts = append(parts, formatManagedFileSummaryParts(result.Summary.Updated, "update")...)
+	parts = append(parts, formatManagedFileSummaryParts(result.Summary.Unchanged, "unchanged")...)
+	if len(result.Summary.Failed) > 0 {
+		parts = append(parts, fmt.Sprintf("findings=%s", strings.Join(result.Summary.Failed, "; ")))
 	}
-	return fmt.Sprintf("%s findings=%s", summary, strings.Join(result.Summary.Failed, "; "))
+	return strings.Join(parts, " ")
+}
+
+func formatInstallPlanSummary(plan install.PiInstallPlan, dryRun bool) string {
+	parts := []string{
+		fmt.Sprintf("target=%s", plan.Layout.AgentDir),
+		fmt.Sprintf("manifest=%s", plan.Layout.ManifestPath),
+		fmt.Sprintf("managed_backup_root=%s", plan.ManagedBackupRoot),
+		fmt.Sprintf("managed_files=%d", len(plan.Layout.ManagedFiles)),
+	}
+	if dryRun {
+		parts = append(parts, "mode=dry-run")
+	}
+	if plan.ExistingPi.Exists {
+		parts = append(parts, fmt.Sprintf("existing_pi=%s", plan.ExistingPi.Path), fmt.Sprintf("existing_pi_kind=%s", plan.ExistingPi.Kind))
+		if plan.FullBackup != nil {
+			parts = append(parts, fmt.Sprintf("full_backup=%s", plan.FullBackup.BackupPath), fmt.Sprintf("full_backup_manifest=%s", plan.FullBackup.ManifestPath))
+		} else {
+			parts = append(parts, "full_backup=declined")
+		}
+	} else {
+		parts = append(parts, "existing_pi=missing", "full_backup=not-needed")
+	}
+	for _, action := range plan.ManagedFileActions {
+		parts = append(parts, fmt.Sprintf("managed_action=%s:%s", action.Action, action.RelativePath))
+	}
+	return strings.Join(parts, " ")
+}
+
+func formatManagedFileSummaryParts(paths []string, action string) []string {
+	parts := make([]string, 0, len(paths))
+	for _, path := range paths {
+		parts = append(parts, fmt.Sprintf("managed_action=%s:%s", action, path))
+	}
+	return parts
+}
+
+func (a *App) confirmFullBackup(plan install.PiInstallPlan) (bool, error) {
+	if _, err := fmt.Fprintf(a.Stdout, "Existing ~/.pi detected at %s. Create a full backup before install? [Y/n]: ", plan.ExistingPi.Path); err != nil {
+		return false, err
+	}
+	answer, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return false, err
+	}
+	answer = strings.TrimSpace(answer)
+	if answer == "" {
+		return true, nil
+	}
+	return !strings.EqualFold(answer, "n") && !strings.EqualFold(answer, "no"), nil
 }
 
 func (a *App) resolveUserHomeDir() (string, error) {

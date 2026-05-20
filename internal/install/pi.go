@@ -33,6 +33,13 @@ type PiInstallRequest struct {
 	Now            time.Time
 }
 
+type ManagedFileAction struct {
+	RelativePath string `json:"relative_path"`
+	AbsolutePath string `json:"absolute_path"`
+	Action       string `json:"action"`
+	BackupPath   string `json:"backup_path,omitempty"`
+}
+
 type InstallSummary struct {
 	Created   []string
 	Updated   []string
@@ -42,9 +49,10 @@ type InstallSummary struct {
 }
 
 type PiInstallResult struct {
-	Layout   PiLayout
-	Manifest Manifest
-	Summary  InstallSummary
+	Layout     PiLayout
+	Manifest   Manifest
+	Summary    InstallSummary
+	FullBackup *FullPiBackupResult
 }
 
 type renderedPiFile struct {
@@ -123,25 +131,24 @@ func (s Service) InstallPi(req PiInstallRequest) (PiInstallResult, error) {
 		}
 		validatedContents[file.relativePath] = finalContent
 		switch state {
-		case "created":
+		case "create":
 			result.Summary.Created = append(result.Summary.Created, file.relativePath)
-		case "updated":
+		case "update":
 			result.Summary.Updated = append(result.Summary.Updated, file.relativePath)
 		case "unchanged":
 			result.Summary.Unchanged = append(result.Summary.Unchanged, file.relativePath)
 		}
-		if state == "updated" {
+		if state == "update" {
 			if _, err := os.Stat(filepath.Join(backupRoot, file.relativePath)); err == nil {
 				result.Summary.BackedUp = append(result.Summary.BackedUp, file.relativePath)
 			}
 		}
 	}
 
-	manifestBytes, err := json.MarshalIndent(manifest, "", "  ")
+	manifestBytes, err := marshalManifest(manifest)
 	if err != nil {
-		return PiInstallResult{}, fmt.Errorf("encode manifest: %w", err)
+		return PiInstallResult{}, err
 	}
-	manifestBytes = append(manifestBytes, '\n')
 	if err := writeFileAtomic(layout.ManifestPath, manifestBytes, 0o600); err != nil {
 		return PiInstallResult{}, fmt.Errorf("write manifest: %w", err)
 	}
@@ -212,38 +219,69 @@ func validateRenderedPiFiles(files []renderedPiFile) error {
 	return nil
 }
 
-func applyRenderedFile(file renderedPiFile, backupRoot string) ([]byte, string, error) {
+func planRenderedFileAction(file renderedPiFile, backupRoot string) ([]byte, ManagedFileAction, error) {
 	desired := file.content
 	existing, err := os.ReadFile(file.absolutePath)
 	exists := err == nil
 	if err != nil && !os.IsNotExist(err) {
-		return nil, "", fmt.Errorf("read existing file: %w", err)
+		return nil, ManagedFileAction{}, fmt.Errorf("read existing file: %w", err)
 	}
 	if file.mergeJSON {
 		desired, err = mergeJSONAdditive(existing, desired)
 		if err != nil {
-			return nil, "", err
+			return nil, ManagedFileAction{}, err
 		}
 	}
+	action := ManagedFileAction{RelativePath: file.relativePath, AbsolutePath: file.absolutePath}
 	if exists && string(existing) == string(desired) {
-		return desired, "unchanged", nil
+		action.Action = "unchanged"
+		return desired, action, nil
 	}
 	if exists {
-		backupPath := filepath.Join(backupRoot, file.relativePath)
-		if err := os.MkdirAll(filepath.Dir(backupPath), 0o755); err != nil {
+		action.Action = "update"
+		action.BackupPath = filepath.Join(backupRoot, file.relativePath)
+		return desired, action, nil
+	}
+	action.Action = "create"
+	return desired, action, nil
+}
+
+func planManagedFileActions(files []renderedPiFile, backupRoot string) ([]ManagedFileAction, error) {
+	actions := make([]ManagedFileAction, 0, len(files))
+	for _, file := range files {
+		_, action, err := planRenderedFileAction(file, backupRoot)
+		if err != nil {
+			return nil, err
+		}
+		actions = append(actions, action)
+	}
+	return actions, nil
+}
+
+func applyRenderedFile(file renderedPiFile, backupRoot string) ([]byte, string, error) {
+	desired, action, err := planRenderedFileAction(file, backupRoot)
+	if err != nil {
+		return nil, "", err
+	}
+	if action.Action == "unchanged" {
+		return desired, action.Action, nil
+	}
+	if action.Action == "update" {
+		existing, err := os.ReadFile(file.absolutePath)
+		if err != nil {
+			return nil, "", fmt.Errorf("read existing file: %w", err)
+		}
+		if err := os.MkdirAll(filepath.Dir(action.BackupPath), 0o755); err != nil {
 			return nil, "", fmt.Errorf("create backup dir: %w", err)
 		}
-		if err := writeFileAtomic(backupPath, existing, 0o600); err != nil {
+		if err := writeFileAtomic(action.BackupPath, existing, 0o600); err != nil {
 			return nil, "", fmt.Errorf("write backup: %w", err)
 		}
 	}
 	if err := writeFileAtomic(file.absolutePath, desired, 0o600); err != nil {
 		return nil, "", fmt.Errorf("write managed file: %w", err)
 	}
-	if exists {
-		return desired, "updated", nil
-	}
-	return desired, "created", nil
+	return desired, action.Action, nil
 }
 
 func mergeJSONAdditive(existing, desired []byte) ([]byte, error) {

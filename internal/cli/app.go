@@ -256,10 +256,12 @@ func (a *App) runDoctor(actions InteractiveActions, args []string) int {
 	return report.ExitCode
 }
 
-func (a *App) runInstall(actions InteractiveActions, args []string) int {
+func (a *App) runInstall(_ InteractiveActions, args []string) int {
 	fs := newFlagSet("install", a.Stderr)
+	dryRun := fs.Bool("dry-run", false, "Show the Pi install plan without mutating ~/.pi")
+	yes := fs.Bool("yes", false, "Accept the safe default full-backup behavior without prompting")
 	fs.Usage = func() {
-		fmt.Fprintln(a.Stderr, "Usage: lore install")
+		fmt.Fprintln(a.Stderr, "Usage: lore install [--dry-run] [--yes]")
 		fmt.Fprintln(a.Stderr, "Install the Pi-first managed runtime using saved Lore login state.")
 		fmt.Fprintln(a.Stderr, "Healthy saved OS keychain-backed login metadata is reused automatically; Claude Code, OpenCode, Codex, and Antigravity remain Coming soon.")
 	}
@@ -271,7 +273,7 @@ func (a *App) runInstall(actions InteractiveActions, args []string) int {
 		return 1
 	}
 
-	report := actions.Install(context.Background())
+	report := a.installActionWithOptions(context.Background(), installCommandOptions{DryRun: *dryRun, Yes: *yes})
 	fmt.Fprint(a.Stdout, output.RenderChecks(report.Title, report.Checks))
 	return report.ExitCode
 }

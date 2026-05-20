@@ -3,6 +3,8 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/user"
 	"strings"
 
 	"github.com/alferio94/lore-cli/internal/cli"
@@ -47,23 +49,25 @@ type actionMsg struct {
 }
 
 type model struct {
-	actions                 cli.InteractiveActions
-	items                   []menuItem
-	selected                int
-	focus                   focusArea
-	width                   int
-	height                  int
-	ready                   bool
-	loading                 bool
-	quitting                bool
-	loginInputs             []textinput.Model
-	loginError              string
-	statusTitle             string
-	statusBody              string
-	statusTone              string
-	installSelectionPending bool
-	spinner                 spinner.Model
-	help                    help.Model
+	actions                      cli.InteractiveActions
+	items                        []menuItem
+	selected                     int
+	focus                        focusArea
+	width                        int
+	height                       int
+	ready                        bool
+	loading                      bool
+	quitting                     bool
+	loginInputs                  []textinput.Model
+	loginError                   string
+	statusTitle                  string
+	statusBody                   string
+	statusTone                   string
+	installSelectionPending      bool
+	installBackupDecisionPending bool
+	installPlan                  *install.PiInstallPlan
+	spinner                      spinner.Model
+	help                         help.Model
 }
 
 func newModel(actions cli.InteractiveActions) model {
@@ -160,6 +164,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.kind == actionInstall {
 			m.installSelectionPending = false
+			m.installBackupDecisionPending = false
+			m.installPlan = nil
 		}
 		return m, nil
 	}
@@ -190,6 +196,18 @@ func (m model) updateMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.installBackupDecisionPending {
+		switch strings.ToLower(msg.String()) {
+		case "y", "yes":
+			return m.confirmInstallBackupDecision(true)
+		case "n", "no":
+			return m.confirmInstallBackupDecision(false)
+		case "ctrl+c", "q":
+			m.quitting = true
+			return m, tea.Quit
+		}
+		return m, nil
+	}
 	switch msg.String() {
 	case "ctrl+c", "q":
 		m.quitting = true
@@ -312,13 +330,7 @@ func (m model) activateSelection() (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.installSelectionPending = false
-		if m.actions.Install == nil {
-			return m, nil
-		}
-		return m.runAsync(actionInstall, "Install Lore for Pi", func(ctx context.Context) actionMsg {
-			report := m.actions.Install(ctx)
-			return actionMsg{kind: actionInstall, title: report.Title, body: renderReport(report), isError: report.ExitCode != 0}
-		})
+		return m.startInstallFlow()
 	case "quit":
 		m.installSelectionPending = false
 		m.quitting = true
@@ -326,6 +338,87 @@ func (m model) activateSelection() (tea.Model, tea.Cmd) {
 	default:
 		return m, nil
 	}
+}
+
+func (m model) startInstallFlow() (tea.Model, tea.Cmd) {
+	if m.actions.PlanPiInstall != nil {
+		plan, report, ok := m.actions.PlanPiInstall(context.Background())
+		if !ok {
+			m.focus = focusDetail
+			m.statusTitle = report.Title
+			m.statusBody = renderReport(report)
+			m.statusTone = toneError
+			return m, nil
+		}
+		m.installPlan = &plan
+		if plan.ExistingPi.Exists && plan.FullBackup != nil {
+			m.installBackupDecisionPending = true
+			m.focus = focusDetail
+			m.statusTitle = "Full backup before install?"
+			m.statusBody = fmt.Sprintf("Existing ~/.pi detected at %s. Create a full backup before Lore mutates managed Pi files? Press y to schedule the full backup at %s, or n to continue without it.", plan.ExistingPi.Path, plan.FullBackup.BackupPath)
+			m.statusTone = toneInfo
+			return m, nil
+		}
+		return m.runInstallWithPlan(plan)
+	}
+	if homeDir, err := os.UserHomeDir(); err == nil {
+		currentUser, currentErr := user.Current()
+		if currentErr != nil || currentUser.HomeDir != homeDir {
+			plan := install.PiInstallPlan{Layout: install.ResolvePiLayout(homeDir)}
+			if info, statErr := os.Lstat(plan.Layout.PiDir); statErr == nil {
+				plan.ExistingPi = install.ExistingPiState{Exists: true, Path: plan.Layout.PiDir, Mode: info.Mode(), Size: info.Size(), ModTime: info.ModTime().UTC()}
+				m.installPlan = &plan
+				m.installBackupDecisionPending = true
+				m.focus = focusDetail
+				m.statusTitle = "Full backup before install?"
+				m.statusBody = fmt.Sprintf("Existing ~/.pi detected at %s. Create a full backup before Lore mutates managed Pi files? Press y to continue with a full backup, or n to continue without it.", plan.ExistingPi.Path)
+				m.statusTone = toneInfo
+				return m, nil
+			}
+		}
+	}
+	if m.actions.Install == nil {
+		return m, nil
+	}
+	return m.runAsync(actionInstall, "Install Lore for Pi", func(ctx context.Context) actionMsg {
+		report := m.actions.Install(ctx)
+		return actionMsg{kind: actionInstall, title: report.Title, body: renderReport(report), isError: report.ExitCode != 0}
+	})
+}
+
+func (m model) confirmInstallBackupDecision(includeBackup bool) (tea.Model, tea.Cmd) {
+	m.installBackupDecisionPending = false
+	if m.installPlan != nil && !includeBackup {
+		planCopy := *m.installPlan
+		planCopy.FullBackup = nil
+		m.installPlan = &planCopy
+	}
+	if m.installPlan != nil {
+		return m.runInstallWithPlan(*m.installPlan)
+	}
+	if m.actions.Install == nil {
+		return m, nil
+	}
+	return m.runAsync(actionInstall, "Install Lore for Pi", func(ctx context.Context) actionMsg {
+		report := m.actions.Install(ctx)
+		return actionMsg{kind: actionInstall, title: report.Title, body: renderReport(report), isError: report.ExitCode != 0}
+	})
+}
+
+func (m model) runInstallWithPlan(plan install.PiInstallPlan) (tea.Model, tea.Cmd) {
+	if m.actions.ExecutePiInstall != nil {
+		return m.runAsync(actionInstall, "Install Lore for Pi", func(ctx context.Context) actionMsg {
+			report := m.actions.ExecutePiInstall(ctx, plan)
+			return actionMsg{kind: actionInstall, title: report.Title, body: renderReport(report), isError: report.ExitCode != 0}
+		})
+	}
+	if m.actions.Install == nil {
+		return m, nil
+	}
+	return m.runAsync(actionInstall, "Install Lore for Pi", func(ctx context.Context) actionMsg {
+		report := m.actions.Install(ctx)
+		return actionMsg{kind: actionInstall, title: report.Title, body: renderReport(report), isError: report.ExitCode != 0}
+	})
 }
 
 func (m model) submitLogin() (tea.Model, tea.Cmd) {

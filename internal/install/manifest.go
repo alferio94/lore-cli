@@ -10,16 +10,17 @@ import (
 )
 
 type Manifest struct {
-	SchemaVersion string   `json:"schema_version"`
-	Target        string   `json:"target"`
-	AuthMode      string   `json:"auth_mode"`
-	ServerURL     string   `json:"server_url"`
-	LoreBinary    string   `json:"lore_binary_path"`
-	LoreConfigDir string   `json:"lore_config_dir"`
-	ManagedFiles  []string `json:"managed_files"`
-	BackupRoot    string   `json:"backup_root"`
-	InstalledAt   string   `json:"installed_at"`
-	CLIVersion    string   `json:"lore_cli_version"`
+	SchemaVersion string              `json:"schema_version"`
+	Target        string              `json:"target"`
+	AuthMode      string              `json:"auth_mode"`
+	ServerURL     string              `json:"server_url"`
+	LoreBinary    string              `json:"lore_binary_path"`
+	LoreConfigDir string              `json:"lore_config_dir"`
+	ManagedFiles  []string            `json:"managed_files"`
+	BackupRoot    string              `json:"backup_root"`
+	InstalledAt   string              `json:"installed_at"`
+	CLIVersion    string              `json:"lore_cli_version"`
+	FullPiBackup  *FullPiBackupResult `json:"full_pi_backup,omitempty"`
 }
 
 func LoadManifest(path string) (Manifest, error) {
@@ -32,6 +33,14 @@ func LoadManifest(path string) (Manifest, error) {
 		return Manifest{}, fmt.Errorf("decode manifest: %w", err)
 	}
 	return manifest, nil
+}
+
+func marshalManifest(manifest Manifest) ([]byte, error) {
+	data, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("encode manifest: %w", err)
+	}
+	return append(data, '\n'), nil
 }
 
 func (m Manifest) Validate(layout PiLayout) error {
@@ -67,6 +76,17 @@ func (m Manifest) Validate(layout PiLayout) error {
 	}
 	if _, err := time.Parse(time.RFC3339, m.InstalledAt); err != nil {
 		return fmt.Errorf("installed_at: %w", err)
+	}
+	if m.FullPiBackup != nil {
+		if filepath.Clean(m.FullPiBackup.SourcePath) != filepath.Clean(layout.PiDir) {
+			return fmt.Errorf("full_pi_backup.source_path = %q, want %q", m.FullPiBackup.SourcePath, layout.PiDir)
+		}
+		if filepath.Clean(m.FullPiBackup.ManifestPath) != filepath.Clean(filepath.Join(m.FullPiBackup.BackupPath, "lore-pi-backup.json")) {
+			return fmt.Errorf("full_pi_backup.manifest_path = %q, want path under backup directory", m.FullPiBackup.ManifestPath)
+		}
+		if _, err := time.Parse(time.RFC3339, m.FullPiBackup.CreatedAt); err != nil {
+			return fmt.Errorf("full_pi_backup.created_at: %w", err)
+		}
 	}
 	return nil
 }
