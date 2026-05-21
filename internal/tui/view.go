@@ -83,11 +83,14 @@ func renderDetailPanel(m model) string {
 		return style.Width(detailWidth(m.width)).Render(strings.Join(content, "\n"))
 	}
 	if m.focus == focusLogin {
-		content = append(content, "", mutedStyle.Render(m.statusBody), "", m.loginInputs[0].View(), m.loginInputs[1].View())
-		if m.loginError != "" {
-			content = append(content, errorStyle.Render(m.loginError))
+		content = append(content, "", mutedStyle.Render(m.statusBody), "")
+		for i := range m.loginInputs {
+			content = append(content, m.loginInputs[i].View())
 		}
-		content = append(content, "", hintStyle.Render("Tab to switch fields • Enter on token submits • Esc returns to menu"))
+		if m.loginError != "" {
+			content = append(content, "", errorStyle.Render(m.loginError))
+		}
+		content = append(content, "", hintStyle.Render("Tab to switch fields • Enter on password submits • Automation: --password-stdin • Compatibility: --token • Esc returns to menu"))
 		return style.Width(detailWidth(m.width)).Render(strings.Join(content, "\n"))
 	}
 	content = append(content, "", m.statusBody)
@@ -110,7 +113,7 @@ func renderToneTitle(tone, title string) string {
 func currentModeLabel(m model) string {
 	switch {
 	case m.focus == focusLogin:
-		return "Secure login form"
+		return "Secure password-first login form"
 	case m.updateConfirmationPending:
 		return "Update confirmation"
 	case m.installBackupDecisionPending:
@@ -137,7 +140,7 @@ func renderUpdateBanner(m model) string {
 
 func renderFooter(m model) string {
 	if m.focus == focusLogin {
-		return "Esc back • Tab next field • Enter submit • q quit"
+		return "Esc back • Tab next field • Enter submit • --password-stdin for automation • q quit"
 	}
 	return "↑/↓ navigate • Enter select • Tab switch panel • q quit • Explicit subcommands remain available"
 }

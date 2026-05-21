@@ -104,7 +104,7 @@ func (s Service) Preflight(ctx context.Context) PreflightResult {
 	if err != nil {
 		if errors.Is(err, config.ErrNotFound) {
 			result.LoginRequired = true
-			result.Checks = []output.Check{{Name: "config", Status: output.StatusWarn, Detail: fmt.Sprintf("no-config at %s", path), Action: "Run lore login --server <url> --token <token>."}}
+			result.Checks = []output.Check{{Name: "config", Status: output.StatusWarn, Detail: fmt.Sprintf("no-config at %s", path), Action: "Run lore login --server <url> --email <email> for password login, or use --token for compatibility mode."}}
 			return result
 		}
 		result.Checks = []output.Check{{Name: "config", Status: output.StatusFail, Detail: err.Error(), Action: "Inspect or remove the local config file and log in again."}}
@@ -120,7 +120,7 @@ func (s Service) Preflight(ctx context.Context) PreflightResult {
 	session, err := s.Auth.Load()
 	if err != nil {
 		result.LoginRequired = true
-		action := "Run lore login again with a valid server URL and normal user API token."
+		action := "Run lore login again with password login or a valid compatibility token."
 		var authErr *auth.Error
 		if errors.As(err, &authErr) && authErr.Code == auth.ErrCredentialUnavailable {
 			action = unavailableCredentialAction()
@@ -137,7 +137,7 @@ func (s Service) Preflight(ctx context.Context) PreflightResult {
 
 	client, err := s.ClientFactory(session.ServerURL)
 	if err != nil {
-		result.Checks = append(result.Checks, output.Check{Name: "server-url", Status: output.StatusFail, Detail: err.Error(), Action: "Fix the server URL with lore login --server <http(s)://host> --token <token>."})
+		result.Checks = append(result.Checks, output.Check{Name: "server-url", Status: output.StatusFail, Detail: err.Error(), Action: "Fix the server URL with lore login --server <http(s)://host> --email <email> for password login, or use --token for compatibility mode."})
 		return result
 	}
 	if err := client.Health(ctx); err != nil {
@@ -152,7 +152,7 @@ func (s Service) Preflight(ctx context.Context) PreflightResult {
 	result.Checks = append(result.Checks, output.Check{Name: "readyz", Status: output.StatusOK, Detail: "server is ready"})
 	if subject, err := client.Me(ctx, session.Token); err != nil {
 		result.LoginRequired = true
-		result.Checks = append(result.Checks, output.Check{Name: "auth", Status: output.StatusFail, Detail: explainLoginError(err), Action: "Obtain a valid normal user API token and run lore login again."})
+		result.Checks = append(result.Checks, output.Check{Name: "auth", Status: output.StatusFail, Detail: explainLoginError(err), Action: "Obtain a valid password-login session or compatibility token and run lore login again."})
 		return result
 	} else {
 		result.Checks = append(result.Checks, output.Check{Name: "auth", Status: output.StatusOK, Detail: output.FormatSubject(subject)})

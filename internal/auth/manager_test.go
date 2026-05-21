@@ -163,6 +163,37 @@ func TestManagerLoadFailsWhenLegacyCleanupCannotScrubOrDelete(t *testing.T) {
 	}
 }
 
+func TestManagerSaveReplacesStoredSessionWithoutPlaintextFallback(t *testing.T) {
+	store := &fakeConfigStore{path: filepath.Join(t.TempDir(), "config.json")}
+	creds := &fakeCredentialStore{}
+	manager := Manager{ConfigStore: store, Credentials: creds}
+
+	if err := manager.Save("https://example.test", "first-token"); err != nil {
+		t.Fatalf("Save(first) error = %v", err)
+	}
+	firstAccount := store.saved.CredentialAccount
+	if err := manager.Save("https://example.test", "second-token"); err != nil {
+		t.Fatalf("Save(second) error = %v", err)
+	}
+	if store.saved.APIToken != "" {
+		t.Fatalf("saved APIToken = %q, want metadata-only config", store.saved.APIToken)
+	}
+	if store.saved.CredentialAccount != firstAccount {
+		t.Fatalf("credential account = %q, want stable account %q", store.saved.CredentialAccount, firstAccount)
+	}
+	if got := creds.secrets[firstAccount]; got != "second-token" {
+		t.Fatalf("stored credential = %q, want second-token", got)
+	}
+
+	session, err := manager.Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if session.Token != "second-token" {
+		t.Fatalf("session.Token = %q, want second-token", session.Token)
+	}
+}
+
 func TestManagerSaveFailsClosedWhenCredentialBackendUnavailable(t *testing.T) {
 	store := &fakeConfigStore{path: filepath.Join(t.TempDir(), "config.json")}
 	creds := &fakeCredentialStore{setErr: errors.New("keychain locked")}
@@ -176,8 +207,17 @@ func TestManagerSaveFailsClosedWhenCredentialBackendUnavailable(t *testing.T) {
 	if !errors.As(err, &authErr) || authErr.Code != ErrCredentialUnavailable {
 		t.Fatalf("Save() error = %v, want credential unavailable", err)
 	}
+	if got := err.Error(); strings.Contains(got, "secret-token") || strings.Contains(got, "https://example.test") {
+		t.Fatalf("Save() error leaked secret material: %q", got)
+	}
 	if store.saveCalls != 0 {
 		t.Fatalf("saveCalls = %d, want 0", store.saveCalls)
+	}
+	if store.saved.ServerURL != "" || store.saved.CredentialAccount != "" || store.saved.APIToken != "" {
+		t.Fatalf("saved config = %+v, want no persisted metadata or plaintext fallback", store.saved)
+	}
+	if len(creds.secrets) != 0 {
+		t.Fatalf("stored credentials = %v, want none", creds.secrets)
 	}
 }
 

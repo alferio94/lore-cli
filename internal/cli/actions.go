@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/charmbracelet/x/term"
+
 	"github.com/alferio94/lore-cli/internal/auth"
 	"github.com/alferio94/lore-cli/internal/config"
 	"github.com/alferio94/lore-cli/internal/httpclient"
@@ -82,6 +84,14 @@ type UpdateAvailability struct {
 	Detail         string
 }
 
+type LoginInput struct {
+	Mode      string
+	ServerURL string
+	Email     string
+	Password  string
+	Token     string
+}
+
 type authConfigError struct {
 	Code    string
 	Message string
@@ -97,6 +107,7 @@ func (e *authConfigError) Error() string {
 // InteractiveActions exposes reusable command behavior for the TUI.
 type InteractiveActions struct {
 	Login            func(ctx context.Context, serverURL, token string) (ActionMessage, error)
+	LoginWithInput   func(ctx context.Context, input LoginInput) (ActionMessage, error)
 	Logout           func(ctx context.Context) (ActionMessage, error)
 	Status           func(ctx context.Context) ActionReport
 	Doctor           func(ctx context.Context) ActionReport
@@ -111,6 +122,7 @@ type InteractiveActions struct {
 func (a *App) InteractiveActions() InteractiveActions {
 	return InteractiveActions{
 		Login:            a.loginAction,
+		LoginWithInput:   a.loginActionWithInput,
 		Logout:           a.logoutAction,
 		Status:           a.statusAction,
 		Doctor:           a.doctorAction,
@@ -123,24 +135,90 @@ func (a *App) InteractiveActions() InteractiveActions {
 }
 
 func (a *App) loginAction(ctx context.Context, serverURL, token string) (ActionMessage, error) {
-	rawServer := strings.TrimSpace(serverURL)
-	rawToken := strings.TrimSpace(token)
+	return a.loginActionWithInput(ctx, LoginInput{Mode: "token", ServerURL: serverURL, Token: token})
+}
 
+func (a *App) loginActionWithInput(ctx context.Context, input LoginInput) (ActionMessage, error) {
+	rawServer := strings.TrimSpace(input.ServerURL)
 	client, err := a.ClientFactory(rawServer)
 	if err != nil {
 		return ActionMessage{}, err
 	}
-	subject, err := client.Me(ctx, rawToken)
+
+	var token string
+	switch strings.TrimSpace(input.Mode) {
+	case "password":
+		result, err := client.Login(ctx, strings.TrimSpace(input.Email), input.Password)
+		if err != nil {
+			return ActionMessage{}, err
+		}
+		token = result.Token
+	case "", "token":
+		token = strings.TrimSpace(input.Token)
+	default:
+		return ActionMessage{}, fmt.Errorf("unsupported login mode %q", input.Mode)
+	}
+
+	subject, err := client.Me(ctx, token)
 	if err != nil {
 		return ActionMessage{}, err
 	}
-
-	if err := a.authManager().Save(rawServer, rawToken); err != nil {
+	if err := a.authManager().Save(rawServer, token); err != nil {
 		return ActionMessage{}, explainAuthSaveError(err)
 	}
 
 	path, _ := a.Store.Path()
 	return ActionMessage{Summary: output.FormatLoginSuccess(subject, path)}, nil
+}
+
+func (a *App) readLoginPassword(fromStdin bool) (string, error) {
+	if fromStdin {
+		reader := a.Stdin
+		if reader == nil {
+			reader = os.Stdin
+		}
+		raw, err := io.ReadAll(io.LimitReader(reader, 1<<20))
+		if err != nil {
+			return "", fmt.Errorf("read password from stdin: %w", err)
+		}
+		password := strings.TrimRight(string(raw), "\r\n")
+		if password == "" {
+			return "", errors.New("password is required")
+		}
+		return password, nil
+	}
+
+	if a.PasswordPrompt != nil {
+		password, err := a.PasswordPrompt()
+		if err != nil {
+			return "", err
+		}
+		password = strings.TrimRight(password, "\r\n")
+		if password == "" {
+			return "", errors.New("password is required")
+		}
+		return password, nil
+	}
+
+	stdinFile := os.Stdin
+	if stdinFile == nil || !term.IsTerminal(stdinFile.Fd()) {
+		return "", errors.New("safe password input unavailable; use --password-stdin or lore login --server <url> --token <token>")
+	}
+	if _, err := fmt.Fprint(a.Stderr, "Password: "); err != nil {
+		return "", err
+	}
+	secret, err := term.ReadPassword(stdinFile.Fd())
+	if _, newlineErr := fmt.Fprintln(a.Stderr); newlineErr != nil && err == nil {
+		err = newlineErr
+	}
+	if err != nil {
+		return "", fmt.Errorf("read password: %w", err)
+	}
+	password := strings.TrimRight(string(secret), "\r\n")
+	if password == "" {
+		return "", errors.New("password is required")
+	}
+	return password, nil
 }
 
 func (a *App) logoutAction(_ context.Context) (ActionMessage, error) {
@@ -229,9 +307,9 @@ func (a *App) loadSavedAuthSession() (auth.Session, error) {
 	if errors.As(err, &authErr) {
 		switch authErr.Code {
 		case auth.ErrConfigNotFound:
-			return auth.Session{}, &authConfigError{Code: "missing_config", Message: "no saved login state; run lore login --server <url> --token <token>"}
+			return auth.Session{}, &authConfigError{Code: "missing_config", Message: "no saved login state; run lore login --server <url> --email <email> for password login or use lore login --server <url> --token <token> for compatibility mode"}
 		case auth.ErrCredentialMissing:
-			return auth.Session{}, &authConfigError{Code: "incomplete_config", Message: "saved login state is incomplete; run lore login --server <url> --token <token>"}
+			return auth.Session{}, &authConfigError{Code: "incomplete_config", Message: "saved login state is incomplete; run lore login again with password login or a valid compatibility token"}
 		case auth.ErrCredentialUnavailable:
 			return auth.Session{}, &authConfigError{Code: "credential_unavailable", Message: unavailableCredentialMessage("saved login state could not access secure credential storage")}
 		default:
@@ -604,7 +682,7 @@ func (a *App) collectChecks(ctx context.Context, includePi bool) ([]output.Check
 	cfg, err := a.Store.Load()
 	if err != nil {
 		if errors.Is(err, config.ErrNotFound) {
-			checks := []output.Check{{Name: "config", Status: output.StatusWarn, Detail: fmt.Sprintf("no-config at %s", path), Action: "Run lore login --server <url> --token <token>."}}
+			checks := []output.Check{{Name: "config", Status: output.StatusWarn, Detail: fmt.Sprintf("no-config at %s", path), Action: "Run lore login --server <url> --email <email> for password login, or use --token for compatibility mode."}}
 			if includePi {
 				checks = append(checks, a.piCheck())
 			}
@@ -618,7 +696,7 @@ func (a *App) collectChecks(ctx context.Context, includePi bool) ([]output.Check
 	}
 
 	checks := []output.Check{{Name: "config", Status: output.StatusOK, Detail: formatSavedLoginState(cfg, path)}}
-	defaultAuthAction := "Run lore login again with a valid normal user API token."
+	defaultAuthAction := "Run lore login again with password login or a valid compatibility token."
 	session, err := a.loadSavedAuthSession()
 	if err != nil {
 		action := defaultAuthAction
@@ -635,7 +713,7 @@ func (a *App) collectChecks(ctx context.Context, includePi bool) ([]output.Check
 
 	client, err := a.ClientFactory(session.ServerURL)
 	if err != nil {
-		checks = append(checks, output.Check{Name: "server-url", Status: output.StatusFail, Detail: err.Error(), Action: "Fix the server URL with lore login --server <http(s)://host> --token <token>."})
+		checks = append(checks, output.Check{Name: "server-url", Status: output.StatusFail, Detail: err.Error(), Action: "Fix the server URL with lore login --server <http(s)://host> --email <email> for password login, or use --token for compatibility mode."})
 		if includePi {
 			checks = append(checks, a.piCheck())
 		}
@@ -658,7 +736,7 @@ func (a *App) collectChecks(ctx context.Context, includePi bool) ([]output.Check
 	}
 
 	if subject, err := client.Me(ctx, session.Token); err != nil {
-		checks = append(checks, output.Check{Name: "auth", Status: output.StatusFail, Detail: explainLoginError(err), Action: "Obtain a valid normal user API token and run lore login again."})
+		checks = append(checks, output.Check{Name: "auth", Status: output.StatusFail, Detail: explainLoginError(err), Action: "Obtain a valid password-login session or compatibility token and run lore login again."})
 		exitCode = 1
 	} else {
 		checks = append(checks, output.Check{Name: "auth", Status: output.StatusOK, Detail: output.FormatSubject(subject)})
@@ -912,6 +990,10 @@ func explainLoginError(err error) string {
 	var unauthorized *httpclient.UnauthorizedError
 	if errors.As(err, &unauthorized) {
 		return "normal user API token required; /v1/me rejected the provided token"
+	}
+	var unsupported *httpclient.UnsupportedServerError
+	if errors.As(err, &unsupported) {
+		return unsupported.Error()
 	}
 	return explainEndpointError(err)
 }

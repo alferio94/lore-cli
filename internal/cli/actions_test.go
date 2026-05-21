@@ -37,6 +37,64 @@ func TestInteractiveActionsExposeAppHelpers(t *testing.T) {
 	}
 }
 
+func TestLoginActionPasswordModeMintsTokenAndLaterRequestsReuseBearer(t *testing.T) {
+	store := &fakeStore{path: "/tmp/lore/config.json", loadErr: config.ErrNotFound}
+	client := &fakeClient{
+		loginResult: httpclient.PasswordLoginResult{Token: "minted-token"},
+		subject:     httpclient.Subject{ID: "subject-1", UserID: "user-1", Roles: []string{"admin"}, TokenID: "token-1", TokenSource: "api_token", Kind: "user"},
+		memory:      httpclient.Memory{ID: "m1", ProjectID: "p1", Scope: "project", Type: "decision", Title: "t1", CreatedBy: "user-1"},
+		memories:    []httpclient.Memory{{ID: "m1", ProjectID: "p1", Scope: "project", Type: "decision", Title: "t1", CreatedBy: "user-1"}},
+	}
+	app, stdout, _ := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
+
+	result, err := app.loginActionWithInput(context.Background(), LoginInput{Mode: "password", ServerURL: " https://example.test ", Email: "admin@example.com", Password: "super-secret-password"})
+	if err != nil {
+		t.Fatalf("loginActionWithInput() error = %v", err)
+	}
+	if client.loginEmail != "admin@example.com" || client.loginPassword != "super-secret-password" {
+		t.Fatalf("Login() credentials = %q / %q", client.loginEmail, client.loginPassword)
+	}
+	if client.meToken != "minted-token" {
+		t.Fatalf("Me token after password login = %q, want minted-token", client.meToken)
+	}
+	if got := app.Auth.(*fakeAuthManager).savedToken; got != "minted-token" {
+		t.Fatalf("savedToken = %q, want minted-token", got)
+	}
+	if !strings.Contains(result.Summary, output.FormatSubject(client.subject)) {
+		t.Fatalf("summary = %q, want formatted subject", result.Summary)
+	}
+	if err := app.runRemember(rememberOptions{ProjectID: "p1", Type: "decision", Title: "t1", Content: "c1"}); err != nil {
+		t.Fatalf("runRemember() error = %v", err)
+	}
+	if err := app.runRecall(recallOptions{ProjectID: "p1"}); err != nil {
+		t.Fatalf("runRecall() error = %v", err)
+	}
+	if client.createToken != "minted-token" || client.listToken != "minted-token" {
+		t.Fatalf("later bearer reuse = create:%q list:%q, want minted-token", client.createToken, client.listToken)
+	}
+	if strings.Contains(stdout.String(), "super-secret-password") {
+		t.Fatalf("stdout leaked password: %q", stdout.String())
+	}
+	assertNoTokenLeak(t, stdout.String()+result.Summary, "", "minted-token")
+}
+
+func TestLoginActionWithInputTokenModePreservesCompatibility(t *testing.T) {
+	store := &fakeStore{path: "/tmp/lore/config.json", loadErr: config.ErrNotFound}
+	client := &fakeClient{subject: httpclient.Subject{UserID: "user-1", Kind: "user", TokenSource: "api_token"}}
+	app, _, _ := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
+
+	_, err := app.loginActionWithInput(context.Background(), LoginInput{Mode: "token", ServerURL: " https://example.test ", Token: " secret-token "})
+	if err != nil {
+		t.Fatalf("loginActionWithInput() error = %v", err)
+	}
+	if client.loginCalls != 0 {
+		t.Fatalf("Login() calls = %d, want token compatibility path to skip password login", client.loginCalls)
+	}
+	if client.meToken != "secret-token" {
+		t.Fatalf("Me token = %q, want secret-token", client.meToken)
+	}
+}
+
 func TestLoginActionMatchesCLIMessageAndTrimsInput(t *testing.T) {
 	store := &fakeStore{path: "/tmp/lore/config.json", loadErr: config.ErrNotFound}
 	client := &fakeClient{subject: httpclient.Subject{ID: "subject-1", UserID: "user-1", Roles: []string{"admin"}, TokenID: "token-1", TokenSource: "api_token", Kind: "user"}}

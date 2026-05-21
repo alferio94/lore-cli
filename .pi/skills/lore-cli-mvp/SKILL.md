@@ -19,17 +19,18 @@ metadata:
 ## Critical Patterns
 
 - Keep the MVP intentionally narrow: local auth/config diagnostics first, installer/Pi automation later.
-- Build against normal user API tokens. Do not use username/password, browser auth, JWT login, or bootstrap tokens for normal login.
+- Accepted exception for `cli-password-login-keychain-token`: primary login may use `POST /v1/auth/login` with email + hidden password to mint a normal user API token, then persist only that token in the OS keychain.
+- Manual `--token` login remains the explicit compatibility path; automation may use `--password-stdin`, but never `--password` argv or plaintext password env vars.
 - Treat `logout` as local credential removal only unless a later spec explicitly adds server-side revocation.
 - Do not call `POST /v1/bootstrap/init` as part of normal `login`; bootstrap is an operator setup route, not a runtime login route.
-- Prefer explicit, user-safe output: never print the stored token or full Authorization header.
+- Prefer explicit, user-safe output: never print the stored token, password, or full Authorization header.
 - If a server contract gap appears, document it in SDD before changing `lore-server`.
 
 ## Command Contract Summary
 
 | Command | MVP behavior |
 | --- | --- |
-| `lore login` | Accept or prompt for server URL and API token, validate with `GET /v1/me`, then persist local config only after validation succeeds. |
+| `lore login` | Primary path: accept or prompt for server URL + email, read a hidden password (or `--password-stdin` for automation), mint a normal user API token with `POST /v1/auth/login`, validate it with `GET /v1/me`, then persist metadata-only config plus the token in the OS keychain. Manual `--token` remains compatibility mode. |
 | `lore status` | Read local config, report server URL/config presence, check `/healthz`, `/readyz`, and authenticated `/v1/me` when a token exists. |
 | `lore logout` | Remove local config/credentials and clearly state that remote token revocation is not performed. |
 | `lore doctor` | Run diagnostics for config file, URL parsing, network reachability, readiness, token validity, and Pi availability when feasible. |
@@ -46,7 +47,9 @@ metadata:
 ## Commands
 
 ```bash
-# Expected MVP smoke shape once implemented
+# Accepted auth flows for the current MVP slice
+lore login --server https://example.test --email admin@example.com
+printf '%s\n' '<password-from-secret-store>' | lore login --server https://example.test --email admin@example.com --password-stdin
 lore login --server https://example.test --token "$LORE_API_TOKEN"
 lore status
 lore doctor

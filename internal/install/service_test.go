@@ -79,8 +79,8 @@ func TestPreflightBlocksMissingConfigAndAuthFailure(t *testing.T) {
 			t.Fatalf("result = %+v, want blocked login-required state", result)
 		}
 		assertCheck(t, result.Checks[0], "config", output.StatusWarn)
-		if got := result.Checks[0].Action; got == "" || !containsAll(got, "lore login", "--server", "--token") {
-			t.Fatalf("config action = %q, want login guidance", got)
+		if got := result.Checks[0].Action; got == "" || !containsAll(got, "lore login", "--email", "--token") {
+			t.Fatalf("config action = %q, want password-first login guidance with token compatibility", got)
 		}
 	})
 
@@ -96,6 +96,9 @@ func TestPreflightBlocksMissingConfigAndAuthFailure(t *testing.T) {
 		if got := result.Checks[3].Detail; got == "" || !containsAll(got, "normal user API token required", "/v1/me") {
 			t.Fatalf("auth detail = %q, want token remediation detail", got)
 		}
+		if got := result.Checks[3].Action; got != "Obtain a valid password-login session or compatibility token and run lore login again." {
+			t.Fatalf("auth action = %q, want password-first unauthorized remediation", got)
+		}
 	})
 
 	t.Run("missing credential", func(t *testing.T) {
@@ -109,8 +112,8 @@ func TestPreflightBlocksMissingConfigAndAuthFailure(t *testing.T) {
 		if got := result.Checks[1].Detail; got != "saved login state is incomplete" {
 			t.Fatalf("auth detail = %q, want incomplete saved-login guidance", got)
 		}
-		if got := result.Checks[1].Action; got != "Run lore login again with a valid server URL and normal user API token." {
-			t.Fatalf("auth action = %q, want shared login remediation", got)
+		if got := result.Checks[1].Action; got != "Run lore login again with password login or a valid compatibility token." {
+			t.Fatalf("auth action = %q, want shared password-first remediation", got)
 		}
 	})
 
@@ -124,6 +127,27 @@ func TestPreflightBlocksMissingConfigAndAuthFailure(t *testing.T) {
 		assertCheck(t, result.Checks[1], "auth", output.StatusFail)
 		if got := result.Checks[1].Action; got == "" || !containsAll(got, "OS keychain", "headless Linux", "gnome-keyring", "lore login") {
 			t.Fatalf("auth action = %q, want headless keychain remediation", got)
+		}
+		if got := result.Checks[1].Detail + "\n" + result.Checks[1].Action; strings.Contains(got, "secret-token") || strings.Contains(got, "password") || strings.Contains(got, "LORE_PASSWORD") || strings.Contains(got, "--password") {
+			t.Fatalf("headless keychain guidance leaked unsafe secret handling: %q", got)
+		}
+	})
+
+	t.Run("invalid saved server URL remediation is password-first", func(t *testing.T) {
+		store := stubStore{path: "/tmp/lore/config.json", cfg: config.Config{ServerURL: "ftp://bad.example", CredentialAccount: "acct-test"}}
+		service := Service{Store: store, Auth: stubAuthLoader{session: auth.Session{ServerURL: "ftp://bad.example", Token: "secret-token", ConfigPath: "/tmp/lore/config.json", CredentialAccount: "acct-test"}}, ClientFactory: func(string) (httpclient.Client, error) {
+			return nil, errors.New("server URL must start with http:// or https://")
+		}}
+		result := service.Preflight(context.Background())
+		if result.CanContinue || result.LoginRequired {
+			t.Fatalf("result = %+v, want server-url failure without login-required state", result)
+		}
+		assertCheck(t, result.Checks[1], "server-url", output.StatusFail)
+		if got := result.Checks[1].Action; got == "" || !containsAll(got, "--email", "--token", "password login") {
+			t.Fatalf("server-url action = %q, want password-first remediation with token compatibility", got)
+		}
+		if got := result.Checks[1].Detail + "\n" + result.Checks[1].Action; strings.Contains(got, "secret-token") {
+			t.Fatalf("server-url guidance leaked token: %q", got)
 		}
 	})
 }
@@ -194,6 +218,9 @@ type stubClient struct {
 
 func (c *stubClient) Health(context.Context) error { return c.healthErr }
 func (c *stubClient) Ready(context.Context) error  { return c.readyErr }
+func (*stubClient) Login(context.Context, string, string) (httpclient.PasswordLoginResult, error) {
+	panic("unexpected Login call")
+}
 func (c *stubClient) Me(context.Context, string) (httpclient.Subject, error) {
 	if c.meErr != nil {
 		return httpclient.Subject{}, c.meErr

@@ -58,11 +58,23 @@ type Status struct {
 type Client interface {
 	Health(ctx context.Context) error
 	Ready(ctx context.Context) error
+	Login(ctx context.Context, email, password string) (PasswordLoginResult, error)
 	Me(ctx context.Context, token string) (Subject, error)
 	CreateMemory(ctx context.Context, token string, req CreateMemoryRequest) (Memory, error)
 	ListMemories(ctx context.Context, token string, filter ListMemoriesFilter) ([]Memory, error)
 	RequestJSON(ctx context.Context, method, path, token string, body json.RawMessage) (RequestJSONResult, error)
 	MCPCall(ctx context.Context, token, toolName string, arguments json.RawMessage) (RequestJSONResult, error)
+}
+
+// PasswordLoginRequest is the POST /v1/auth/login payload.
+type PasswordLoginRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+// PasswordLoginResult carries the minted reusable API token.
+type PasswordLoginResult struct {
+	Token string
 }
 
 type statusEnvelope struct {
@@ -71,6 +83,14 @@ type statusEnvelope struct {
 
 type subjectEnvelope struct {
 	Data Subject `json:"data"`
+}
+
+type passwordLoginEnvelope struct {
+	Data struct {
+		APIToken struct {
+			Token string `json:"token"`
+		} `json:"api_token"`
+	} `json:"data"`
 }
 
 type memoryEnvelope struct {
@@ -127,6 +147,22 @@ func (e *UnauthorizedError) Error() string {
 		return fmt.Sprintf("authentication failed: %s (request_id=%s)", e.Message, e.RequestID)
 	}
 	return fmt.Sprintf("authentication failed: %s", e.Message)
+}
+
+// UnsupportedServerError indicates the server does not support password login.
+type UnsupportedServerError struct {
+	APIError
+}
+
+func (e *UnsupportedServerError) Error() string {
+	if e == nil {
+		return "password login is unsupported on this server"
+	}
+	message := "password login is unsupported on this server; use lore login --server <url> --token <token>"
+	if e.RequestID != "" {
+		return fmt.Sprintf("%s (request_id=%s)", message, e.RequestID)
+	}
+	return message
 }
 
 // ReadinessError indicates that the server is live but not ready.

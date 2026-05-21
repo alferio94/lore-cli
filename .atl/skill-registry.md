@@ -2,7 +2,7 @@
 
 - Source policy: project > pi-global
 - Project root: `/Users/alfonsocarmona/personal/lore2/lore-cli`
-- Refreshed: 2026-05-19
+- Refreshed: 2026-05-21
 - Compatibility mode: disabled
 
 ## Skills

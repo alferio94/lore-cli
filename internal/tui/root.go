@@ -94,19 +94,25 @@ func newModel(actions cli.InteractiveActions) model {
 	serverInput.CharLimit = 256
 	serverInput.Width = 36
 
-	tokenInput := textinput.New()
-	tokenInput.Prompt = "API token  "
-	tokenInput.Placeholder = "Paste a normal user token"
-	tokenInput.CharLimit = 512
-	tokenInput.Width = 36
-	tokenInput.EchoMode = textinput.EchoPassword
-	tokenInput.EchoCharacter = '•'
+	emailInput := textinput.New()
+	emailInput.Prompt = "Email      "
+	emailInput.Placeholder = "admin@example.com"
+	emailInput.CharLimit = 256
+	emailInput.Width = 36
+
+	passwordInput := textinput.New()
+	passwordInput.Prompt = "Password   "
+	passwordInput.Placeholder = "Enter your account password"
+	passwordInput.CharLimit = 512
+	passwordInput.Width = 36
+	passwordInput.EchoMode = textinput.EchoPassword
+	passwordInput.EchoCharacter = '•'
 
 	m := model{
 		actions: actions,
 		items: []menuItem{
 			{key: "status", title: "Status", description: "Inspect config, health, readiness, and authenticated identity."},
-			{key: "login", title: "Login", description: "Validate a user API token, store it in secure credential storage, and save login metadata locally."},
+			{key: "login", title: "Login", description: "Use email + password to mint a reusable token, store only that token in secure credential storage, and keep --token as CLI compatibility mode."},
 			{key: "logout", title: "Logout", description: "Remove the local session only. Safe to repeat."},
 			{key: "doctor", title: "Doctor", description: "Run actionable diagnostics, including Pi availability."},
 			{key: "install", title: "Install", description: "Pi is recommended today; Claude Code, OpenCode, Codex, and Antigravity remain Coming soon."},
@@ -114,7 +120,7 @@ func newModel(actions cli.InteractiveActions) model {
 			{key: "quit", title: "Quit", description: "Leave the interactive shell."},
 		},
 		focus:       focusMenu,
-		loginInputs: []textinput.Model{serverInput, tokenInput},
+		loginInputs: []textinput.Model{serverInput, emailInput, passwordInput},
 		statusTitle: "Welcome to Lore",
 		statusBody:  "Choose an action from the left. Keyboard hints stay visible, secrets stay masked, and explicit subcommands remain available for automation.",
 		statusTone:  toneInfo,
@@ -276,7 +282,7 @@ func (m model) updateLogin(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.quitting = true
 		return m, tea.Quit
 	case "tab", "shift+tab", "up", "down", "enter":
-		if msg.String() == "enter" && m.loginInputs[1].Focused() {
+		if msg.String() == "enter" && m.loginInputs[len(m.loginInputs)-1].Focused() {
 			return m.submitLogin()
 		}
 		if msg.String() == "shift+tab" || msg.String() == "up" {
@@ -363,11 +369,13 @@ func (m model) activateSelection() (tea.Model, tea.Cmd) {
 		m.installSelectionPending = false
 		m.updateConfirmationPending = false
 		m.focus = focusLogin
+		for i := range m.loginInputs {
+			m.loginInputs[i].Blur()
+		}
 		m.loginInputs[0].Focus()
-		m.loginInputs[1].Blur()
 		m.loginError = ""
 		m.statusTitle = "Login"
-		m.statusBody = "Enter your server URL and a normal user API token. The token stays masked, is validated first, and is stored in secure credential storage while only login metadata is saved locally."
+		m.statusBody = "Enter your server URL, account email, and password. Lore mints a reusable API token, stores only that token in secure credential storage, and keeps CLI --token as the compatibility path for older servers."
 		m.statusTone = toneInfo
 		return m, nil
 	case "install":
@@ -515,14 +523,19 @@ func (m model) runInstallWithPlan(plan install.PiInstallPlan) (tea.Model, tea.Cm
 
 func (m model) submitLogin() (tea.Model, tea.Cmd) {
 	serverURL := strings.TrimSpace(m.loginInputs[0].Value())
-	token := strings.TrimSpace(m.loginInputs[1].Value())
-	if serverURL == "" || token == "" {
-		m.loginError = "Server URL and API token are both required."
+	email := strings.TrimSpace(m.loginInputs[1].Value())
+	password := m.loginInputs[2].Value()
+	if serverURL == "" || email == "" || strings.TrimSpace(password) == "" {
+		m.loginError = "Server URL, email, and password are all required."
+		return m, nil
+	}
+	if m.actions.LoginWithInput == nil {
+		m.loginError = "Password login is unavailable in this build."
 		return m, nil
 	}
 	m.loginError = ""
 	return m.runAsync(actionLogin, "Validating credentials", func(ctx context.Context) actionMsg {
-		result, err := m.actions.Login(ctx, serverURL, token)
+		result, err := m.actions.LoginWithInput(ctx, cli.LoginInput{Mode: "password", ServerURL: serverURL, Email: email, Password: password})
 		if err != nil {
 			return actionMsg{kind: actionLogin, title: "Login failed", body: err.Error(), isError: true}
 		}

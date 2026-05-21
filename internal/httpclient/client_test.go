@@ -114,6 +114,108 @@ func TestMeUnauthorizedReturnsTokenSafeTypedError(t *testing.T) {
 	}
 }
 
+func TestLoginSuccessPostsCredentialsWithoutAuthorizationHeader(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got, want := r.Method, http.MethodPost; got != want {
+			t.Fatalf("method = %q, want %q", got, want)
+		}
+		if got, want := r.URL.Path, "/v1/auth/login"; got != want {
+			t.Fatalf("path = %q, want %q", got, want)
+		}
+		if got := r.Header.Get("Authorization"); got != "" {
+			t.Fatalf("Authorization header = %q, want empty", got)
+		}
+		var req PasswordLoginRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if req.Email != "admin@example.com" || req.Password != "secret-password" {
+			t.Fatalf("request = %+v", req)
+		}
+		writeJSON(w, http.StatusCreated, map[string]any{"data": map[string]any{"user": map[string]any{"id": "user-1"}, "api_token": map[string]any{"token": "minted-token"}}})
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server.URL, time.Second)
+	result, err := client.Login(context.Background(), "admin@example.com", "secret-password")
+	if err != nil {
+		t.Fatalf("Login() error = %v", err)
+	}
+	if result.Token != "minted-token" {
+		t.Fatalf("result = %+v, want minted token", result)
+	}
+}
+
+func TestLoginMapsCredentialAndInputErrorsWithoutPasswordLeak(t *testing.T) {
+	tests := []struct {
+		name       string
+		statusCode int
+		code       string
+		message    string
+		assertErr  func(*testing.T, error)
+	}{
+		{name: "invalid request", statusCode: http.StatusBadRequest, code: "invalid_request", message: "invalid login input", assertErr: func(t *testing.T, err error) {
+			var apiErr *APIError
+			if !errors.As(err, &apiErr) {
+				t.Fatalf("Login() error = %T %v, want *APIError", err, err)
+			}
+		}},
+		{name: "unauthorized", statusCode: http.StatusUnauthorized, code: "unauthorized", message: "unauthorized", assertErr: func(t *testing.T, err error) {
+			var unauthorized *UnauthorizedError
+			if !errors.As(err, &unauthorized) {
+				t.Fatalf("Login() error = %T %v, want *UnauthorizedError", err, err)
+			}
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				writeJSON(w, tt.statusCode, map[string]any{"error": map[string]any{"code": tt.code, "message": tt.message, "request_id": "req-login"}})
+			}))
+			defer server.Close()
+
+			client := newTestClient(t, server.URL, time.Second)
+			_, err := client.Login(context.Background(), "admin@example.com", "secret-password")
+			if err == nil {
+				t.Fatal("Login() error = nil, want typed error")
+			}
+			tt.assertErr(t, err)
+			if strings.Contains(err.Error(), "secret-password") {
+				t.Fatalf("error leaked password: %v", err)
+			}
+		})
+	}
+}
+
+func TestLoginMapsOlderServerRoutesToUnsupportedServerError(t *testing.T) {
+	for _, statusCode := range []int{http.StatusNotFound, http.StatusMethodNotAllowed} {
+		t.Run(http.StatusText(statusCode), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("X-Request-Id", "req-unsupported")
+				writeJSON(w, statusCode, map[string]any{"error": map[string]any{"code": "not_supported", "message": "route missing"}})
+			}))
+			defer server.Close()
+
+			client := newTestClient(t, server.URL, time.Second)
+			_, err := client.Login(context.Background(), "admin@example.com", "secret-password")
+			var unsupported *UnsupportedServerError
+			if !errors.As(err, &unsupported) {
+				t.Fatalf("Login() error = %T %v, want *UnsupportedServerError", err, err)
+			}
+			if unsupported.RequestID != "req-unsupported" {
+				t.Fatalf("RequestID = %q, want req-unsupported", unsupported.RequestID)
+			}
+			if !strings.Contains(err.Error(), "--token") {
+				t.Fatalf("error = %v, want manual token guidance", err)
+			}
+			if strings.Contains(err.Error(), "secret-password") {
+				t.Fatalf("error leaked password: %v", err)
+			}
+		})
+	}
+}
+
 func TestHealthServerErrorReturnsAPIError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{

@@ -49,6 +49,167 @@ func TestLoginSavesValidatedSession(t *testing.T) {
 	assertNoTokenLeak(t, stdout.String(), stderr.String(), "secret-token")
 }
 
+func TestLoginPasswordPromptUsesMintedTokenAndKeepsSecretsOutOfOutput(t *testing.T) {
+	store := &fakeStore{path: "/tmp/lore/config.json", loadErr: config.ErrNotFound}
+	client := &fakeClient{
+		loginResult: httpclient.PasswordLoginResult{Token: "minted-token"},
+		subject:     httpclient.Subject{ID: "subject-1", UserID: "user-1", Roles: []string{"admin"}, TokenID: "token-1", TokenSource: "api_token", Kind: "user"},
+	}
+	app, stdout, stderr := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
+	app.PasswordPrompt = func() (string, error) { return "super-secret-password", nil }
+
+	exitCode := app.Run([]string{"login", "--server", "https://example.test", "--email", "admin@example.com"})
+	if exitCode != 0 {
+		t.Fatalf("Run() exitCode = %d, want 0, stderr=%q", exitCode, stderr.String())
+	}
+	if client.loginEmail != "admin@example.com" || client.loginPassword != "super-secret-password" {
+		t.Fatalf("Login() credentials = %q / %q", client.loginEmail, client.loginPassword)
+	}
+	if client.meToken != "minted-token" {
+		t.Fatalf("Me token = %q, want minted-token", client.meToken)
+	}
+	if got := app.Auth.(*fakeAuthManager).savedToken; got != "minted-token" {
+		t.Fatalf("savedToken = %q, want minted-token", got)
+	}
+	if strings.Contains(stdout.String(), "super-secret-password") || strings.Contains(stderr.String(), "super-secret-password") {
+		t.Fatalf("password leaked in output: stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+	assertNoTokenLeak(t, stdout.String(), stderr.String(), "minted-token")
+}
+
+func TestLoginPasswordPromptUsesRealAuthManagerKeychainOnlyPersistence(t *testing.T) {
+	store := &fakeStore{path: filepath.Join(t.TempDir(), "config.json"), loadErr: config.ErrNotFound}
+	creds := &fakeCredentialStore{}
+	client := &fakeClient{
+		loginResult: httpclient.PasswordLoginResult{Token: "minted-token"},
+		subject:     httpclient.Subject{ID: "subject-1", UserID: "user-1", Roles: []string{"admin"}, TokenID: "token-1", TokenSource: "api_token", Kind: "user"},
+	}
+	app, stdout, stderr := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
+	app.Auth = auth.Manager{ConfigStore: store, Credentials: creds}
+	app.PasswordPrompt = func() (string, error) { return "super-secret-password", nil }
+
+	exitCode := app.Run([]string{"login", "--server", "https://example.test", "--email", "admin@example.com"})
+	if exitCode != 0 {
+		t.Fatalf("Run() exitCode = %d, want 0, stderr=%q", exitCode, stderr.String())
+	}
+	if store.saved.ServerURL != "https://example.test" || store.saved.APIToken != "" || store.saved.CredentialAccount == "" {
+		t.Fatalf("saved config = %+v, want metadata-only keychain-backed state", store.saved)
+	}
+	if got := creds.secrets[auth.ServiceName+":"+store.saved.CredentialAccount]; got != "minted-token" {
+		t.Fatalf("stored credential = %q, want minted-token", got)
+	}
+	if strings.Contains(stdout.String(), "super-secret-password") || strings.Contains(stderr.String(), "super-secret-password") {
+		t.Fatalf("password leaked in output: stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+	assertNoTokenLeak(t, stdout.String(), stderr.String(), "minted-token")
+}
+
+func TestLoginPasswordPromptFailsClosedWhenRealAuthManagerKeychainUnavailable(t *testing.T) {
+	store := &fakeStore{path: filepath.Join(t.TempDir(), "config.json"), loadErr: config.ErrNotFound}
+	creds := &fakeCredentialStore{setErr: errors.New("keychain locked")}
+	client := &fakeClient{
+		loginResult: httpclient.PasswordLoginResult{Token: "minted-token"},
+		subject:     httpclient.Subject{UserID: "user-1", TokenSource: "api_token", Kind: "user"},
+	}
+	app, stdout, stderr := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
+	app.Auth = auth.Manager{ConfigStore: store, Credentials: creds}
+	app.PasswordPrompt = func() (string, error) { return "super-secret-password", nil }
+
+	exitCode := app.Run([]string{"login", "--server", "https://example.test", "--email", "admin@example.com"})
+	if exitCode != 1 {
+		t.Fatalf("Run() exitCode = %d, want 1", exitCode)
+	}
+	if store.saveCalls != 0 {
+		t.Fatalf("saveCalls = %d, want 0 metadata writes on keychain failure", store.saveCalls)
+	}
+	if len(creds.secrets) != 0 {
+		t.Fatalf("stored credentials = %v, want none on failed keychain save", creds.secrets)
+	}
+	for _, want := range []string{"OS keychain", "headless Linux", "gnome-keyring", "run lore login again"} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("stderr = %q, want substring %q", stderr.String(), want)
+		}
+	}
+	if strings.Contains(stdout.String(), "super-secret-password") || strings.Contains(stderr.String(), "super-secret-password") {
+		t.Fatalf("password leaked in output: stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+	assertNoTokenLeak(t, stdout.String(), stderr.String(), "minted-token")
+}
+
+func TestLoginTokenCompatibilityUsesRealAuthManagerKeychainPath(t *testing.T) {
+	store := &fakeStore{path: filepath.Join(t.TempDir(), "config.json"), loadErr: config.ErrNotFound}
+	creds := &fakeCredentialStore{}
+	client := &fakeClient{subject: httpclient.Subject{ID: "subject-1", UserID: "user-1", Roles: []string{"admin"}, TokenID: "token-1", TokenSource: "api_token", Kind: "user"}}
+	app, stdout, stderr := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
+	app.Auth = auth.Manager{ConfigStore: store, Credentials: creds}
+
+	exitCode := app.Run([]string{"login", "--server", "https://example.test", "--token", "secret-token"})
+	if exitCode != 0 {
+		t.Fatalf("Run() exitCode = %d, want 0, stderr=%q", exitCode, stderr.String())
+	}
+	if store.saved.ServerURL != "https://example.test" || store.saved.APIToken != "" || store.saved.CredentialAccount == "" {
+		t.Fatalf("saved config = %+v, want metadata-only keychain-backed state", store.saved)
+	}
+	if got := creds.secrets[auth.ServiceName+":"+store.saved.CredentialAccount]; got != "secret-token" {
+		t.Fatalf("stored credential = %q, want secret-token", got)
+	}
+	assertNoTokenLeak(t, stdout.String(), stderr.String(), "secret-token")
+}
+
+func TestLoginPasswordStdinUsesMintedToken(t *testing.T) {
+	store := &fakeStore{path: "/tmp/lore/config.json", loadErr: config.ErrNotFound}
+	client := &fakeClient{
+		loginResult: httpclient.PasswordLoginResult{Token: "minted-token"},
+		subject:     httpclient.Subject{UserID: "user-1", TokenSource: "api_token", Kind: "user"},
+	}
+	app, stdout, stderr := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
+	app.Stdin = strings.NewReader("stdin-password\n")
+
+	exitCode := app.Run([]string{"login", "--server", "https://example.test", "--email", "admin@example.com", "--password-stdin"})
+	if exitCode != 0 {
+		t.Fatalf("Run() exitCode = %d, want 0, stderr=%q", exitCode, stderr.String())
+	}
+	if client.loginPassword != "stdin-password" {
+		t.Fatalf("Login() password = %q, want stdin-password", client.loginPassword)
+	}
+	if got := app.Auth.(*fakeAuthManager).savedToken; got != "minted-token" {
+		t.Fatalf("savedToken = %q, want minted-token", got)
+	}
+	if strings.Contains(stdout.String(), "stdin-password") || strings.Contains(stderr.String(), "stdin-password") {
+		t.Fatalf("stdin password leaked in output: stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+	assertNoTokenLeak(t, stdout.String(), stderr.String(), "minted-token")
+}
+
+func TestLoginRequiresSafePasswordInputOrTokenCompatibility(t *testing.T) {
+	store := &fakeStore{path: "/tmp/lore/config.json", loadErr: config.ErrNotFound}
+	app, _, stderr := newTestApp(store, nil)
+	app.Stdin = strings.NewReader("")
+
+	exitCode := app.Run([]string{"login", "--server", "https://example.test", "--email", "admin@example.com"})
+	if exitCode != 1 {
+		t.Fatalf("Run() exitCode = %d, want 1", exitCode)
+	}
+	for _, want := range []string{"--password-stdin", "--token", "safe password input"} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("stderr = %q, want substring %q", stderr.String(), want)
+		}
+	}
+}
+
+func TestLoginDoesNotAcceptPasswordArgvFlag(t *testing.T) {
+	store := &fakeStore{path: "/tmp/lore/config.json", loadErr: config.ErrNotFound}
+	app, _, stderr := newTestApp(store, nil)
+
+	exitCode := app.Run([]string{"login", "--server", "https://example.test", "--email", "admin@example.com", "--password", "secret"})
+	if exitCode != 1 {
+		t.Fatalf("Run() exitCode = %d, want 1", exitCode)
+	}
+	if !strings.Contains(stderr.String(), "flag provided but not defined: -password") {
+		t.Fatalf("stderr = %q, want unknown --password flag error", stderr.String())
+	}
+}
+
 func TestLoginRejectsUnauthorizedWithoutSaving(t *testing.T) {
 	store := &fakeStore{path: "/tmp/lore/config.json", loadErr: config.ErrNotFound}
 	client := &fakeClient{meErr: &httpclient.UnauthorizedError{APIError: httpclient.APIError{StatusCode: 401, Code: "unauthorized", Message: "normal user API token required", RequestID: "req-401"}}}
@@ -189,11 +350,30 @@ func TestStatusWithMissingCredentialReportsSharedRemediation(t *testing.T) {
 		t.Fatalf("Run() exitCode = %d, want 1, stderr=%q", exitCode, stderr.String())
 	}
 	out := stdout.String()
-	for _, want := range []string{"[OK] config", "[FAIL] auth", "saved login state is incomplete", "Run lore login again with a valid normal user API token."} {
+	for _, want := range []string{"[OK] config", "[FAIL] auth", "saved login state is incomplete", "Run lore login again with password login or a valid compatibility token."} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("stdout = %q, want substring %q", out, want)
 		}
 	}
+}
+
+func TestStatusWithInvalidSavedServerURLReportsPasswordFirstRemediationAndNoLeak(t *testing.T) {
+	store := &fakeStore{path: "/tmp/lore/config.json", loaded: config.Config{ServerURL: "ftp://bad.example", APIToken: "secret-token"}}
+	app, stdout, stderr := newTestApp(store, func(baseURL string) (httpclient.Client, error) {
+		return nil, errors.New("server URL must start with http:// or https://")
+	})
+
+	exitCode := app.Run([]string{"status"})
+	if exitCode != 1 {
+		t.Fatalf("Run() exitCode = %d, want 1, stderr=%q", exitCode, stderr.String())
+	}
+	out := stdout.String()
+	for _, want := range []string{"[OK] config", "[FAIL] server-url", "--email", "--token", "password login"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("stdout = %q, want substring %q", out, want)
+		}
+	}
+	assertNoTokenLeak(t, out, stderr.String(), "secret-token")
 }
 
 func TestDoctorReportsFailuresAndPiAvailability(t *testing.T) {
@@ -210,7 +390,7 @@ func TestDoctorReportsFailuresAndPiAvailability(t *testing.T) {
 		t.Fatalf("Run() exitCode = %d, want 1", exitCode)
 	}
 	out := stdout.String()
-	for _, want := range []string{"[OK] healthz", "[FAIL] readyz", "[FAIL] auth", "[WARN] pi", "request_id=req-ready", "normal user API token required"} {
+	for _, want := range []string{"[OK] healthz", "[FAIL] readyz", "[FAIL] auth", "[WARN] pi", "request_id=req-ready", "normal user API token required", "Obtain a valid password-login session or compatibility token and run lore login again."} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("stdout = %q, want substring %q", out, want)
 		}
@@ -511,9 +691,14 @@ func TestHelpAndUnknownCommand(t *testing.T) {
 	if exitCode := app.Run([]string{"--help"}); exitCode != 0 {
 		t.Fatalf("help exitCode = %d, want 0", exitCode)
 	}
-	for _, want := range []string{"Commands:", "version", "api request", "install", "update", "OS keychain-backed login metadata"} {
+	for _, want := range []string{"Commands:", "version", "api request", "install", "update", "email + hidden password", "--password-stdin", "--token", "OS keychain-backed login metadata"} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("stdout = %q, want substring %q", stdout.String(), want)
+		}
+	}
+	for _, unsafe := range []string{"LORE_PASSWORD", "--password "} {
+		if strings.Contains(stdout.String(), unsafe) {
+			t.Fatalf("stdout = %q, want no unsafe password documentation", stdout.String())
 		}
 	}
 
@@ -524,6 +709,25 @@ func TestHelpAndUnknownCommand(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "unknown command: wat") {
 		t.Fatalf("stderr = %q, want unknown command message", stderr.String())
+	}
+}
+
+func TestLoginUsageDescribesPasswordFirstCompatibilityAndStdin(t *testing.T) {
+	store := &fakeStore{path: "/tmp/lore/config.json", loadErr: config.ErrNotFound}
+	app, _, stderr := newTestApp(store, nil)
+
+	if exitCode := app.Run([]string{"login", "--help"}); exitCode != 1 {
+		t.Fatalf("login --help exitCode = %d, want 1 with usage output", exitCode)
+	}
+	for _, want := range []string{"--password-stdin", "--token", "hidden password", "mint a reusable API token"} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("stderr = %q, want substring %q", stderr.String(), want)
+		}
+	}
+	for _, unsafe := range []string{"LORE_PASSWORD", "--password "} {
+		if strings.Contains(stderr.String(), unsafe) {
+			t.Fatalf("stderr = %q, want no unsafe password documentation", stderr.String())
+		}
 	}
 }
 
@@ -611,6 +815,8 @@ func TestInstallUsageIncludesPiFirstGuidance(t *testing.T) {
 		"Pi-first managed runtime",
 		"saved Lore login state",
 		"OS keychain-backed login metadata",
+		"password-first login",
+		"compatibility token",
 		"Claude Code, OpenCode, Codex, and Antigravity remain Coming soon",
 	} {
 		if !strings.Contains(stderr.String(), want) {
@@ -1155,17 +1361,22 @@ func (s *fakeCredentialStore) Delete(service, account string) error {
 type fakeClient struct {
 	healthErr         error
 	readyErr          error
+	loginErr          error
 	meErr             error
 	createErr         error
 	listErr           error
+	loginResult       httpclient.PasswordLoginResult
 	subject           httpclient.Subject
 	memory            httpclient.Memory
 	memories          []httpclient.Memory
+	loginEmail        string
+	loginPassword     string
 	meToken           string
 	createToken       string
 	listToken         string
 	createRequest     httpclient.CreateMemoryRequest
 	listFilter        httpclient.ListMemoriesFilter
+	loginCalls        int
 	createCalls       int
 	listCalls         int
 	requestJSONToken  string
@@ -1183,6 +1394,15 @@ type fakeClient struct {
 
 func (c *fakeClient) Health(_ context.Context) error { return c.healthErr }
 func (c *fakeClient) Ready(_ context.Context) error  { return c.readyErr }
+func (c *fakeClient) Login(_ context.Context, email, password string) (httpclient.PasswordLoginResult, error) {
+	c.loginCalls++
+	c.loginEmail = email
+	c.loginPassword = password
+	if c.loginErr != nil {
+		return httpclient.PasswordLoginResult{}, c.loginErr
+	}
+	return c.loginResult, nil
+}
 func (c *fakeClient) Me(_ context.Context, token string) (httpclient.Subject, error) {
 	c.meToken = token
 	if c.meErr != nil {

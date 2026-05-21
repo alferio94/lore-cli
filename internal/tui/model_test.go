@@ -32,7 +32,7 @@ import (
 func TestInitialRenderShowsMenuHintsAndInstallEntry(t *testing.T) {
 	m := newModel(cli.InteractiveActions{})
 	view := m.View()
-	for _, want := range []string{"Lore", "Status", "Login", "Install", "Pi", "secure credential", "login metadata", "Explicit subcommands remain available"} {
+	for _, want := range []string{"Lore", "Status", "Login", "Install", "Pi", "password", "compatibility", "Explicit subcommands remain available"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view missing %q:\n%s", want, view)
 		}
@@ -310,7 +310,7 @@ func TestInstallBackupDecisionUsesSharedPlanExecutePath(t *testing.T) {
 	}
 }
 
-func TestLoginFormMasksTokenAndValidatesRequiredFields(t *testing.T) {
+func TestLoginFormCollectsEmailAndMaskedPasswordWithCompatibilityGuidance(t *testing.T) {
 	m := newModel(cli.InteractiveActions{})
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	m = updated.(model)
@@ -319,18 +319,32 @@ func TestLoginFormMasksTokenAndValidatesRequiredFields(t *testing.T) {
 	if m.focus != focusLogin {
 		t.Fatalf("focus = %v, want focusLogin", m.focus)
 	}
-	if got := m.loginInputs[1].EchoMode; got != textinput.EchoPassword {
-		t.Fatalf("token EchoMode = %v, want password mode", got)
+	if got := len(m.loginInputs); got != 3 {
+		t.Fatalf("login input count = %d, want 3", got)
 	}
-	if got := m.statusBody; !strings.Contains(got, "secure credential storage") || !strings.Contains(got, "login metadata") {
-		t.Fatalf("statusBody = %q, want secure credential storage guidance", got)
+	if got := m.loginInputs[2].EchoMode; got != textinput.EchoPassword {
+		t.Fatalf("password EchoMode = %v, want password mode", got)
 	}
+	if got := m.statusBody; !strings.Contains(got, "compatibility") || !strings.Contains(got, "password") {
+		t.Fatalf("statusBody = %q, want password-first compatibility guidance", got)
+	}
+	view := m.View()
+	for _, want := range []string{"Server URL", "Email", "Password", "--password-stdin", "--token"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("view missing %q:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "Enter on token submits") {
+		t.Fatalf("view still contains stale token-submit hint:\n%s", view)
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = updated.(model)
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
 	m = updated.(model)
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(model)
-	if !strings.Contains(m.loginError, "required") {
-		t.Fatalf("loginError = %q, want required-fields error", m.loginError)
+	if !strings.Contains(m.loginError, "required") || !strings.Contains(m.loginError, "password") {
+		t.Fatalf("loginError = %q, want required password error", m.loginError)
 	}
 }
 
@@ -640,9 +654,9 @@ func TestUpdateFlowUsesSharedUpdaterWithRealisticService(t *testing.T) {
 func TestLoginSuccessAndFailureStates(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		actions := cli.InteractiveActions{
-			Login: func(_ context.Context, serverURL, token string) (cli.ActionMessage, error) {
-				if serverURL != "https://example.test" || token != "secret-token" {
-					t.Fatalf("unexpected credentials: %q %q", serverURL, token)
+			LoginWithInput: func(_ context.Context, input cli.LoginInput) (cli.ActionMessage, error) {
+				if input.ServerURL != "https://example.test" || input.Email != "admin@example.com" || input.Password != "super-secret-password" || input.Mode != "password" {
+					t.Fatalf("unexpected login input: %+v", input)
 				}
 				return cli.ActionMessage{Summary: "login succeeded"}, nil
 			},
@@ -652,9 +666,10 @@ func TestLoginSuccessAndFailureStates(t *testing.T) {
 		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 		m = updated.(model)
 		m.loginInputs[0].SetValue("https://example.test")
-		m.loginInputs[1].SetValue("secret-token")
+		m.loginInputs[1].SetValue("admin@example.com")
+		m.loginInputs[2].SetValue("super-secret-password")
 		m.loginInputs[0].Blur()
-		m.loginInputs[1].Focus()
+		m.loginInputs[2].Focus()
 		updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 		m = updated.(model)
 		updated, _ = m.Update(cmd())
@@ -662,15 +677,15 @@ func TestLoginSuccessAndFailureStates(t *testing.T) {
 		if got := m.statusTitle; got != "Login complete" {
 			t.Fatalf("statusTitle = %q, want Login complete", got)
 		}
-		if strings.Contains(m.View(), "secret-token") {
-			t.Fatalf("raw token leaked in view: %s", m.View())
+		if strings.Contains(m.View(), "super-secret-password") {
+			t.Fatalf("raw password leaked in view: %s", m.View())
 		}
 	})
 
 	t.Run("failure", func(t *testing.T) {
 		actions := cli.InteractiveActions{
-			Login: func(context.Context, string, string) (cli.ActionMessage, error) {
-				return cli.ActionMessage{}, errors.New("normal user API token required")
+			LoginWithInput: func(context.Context, cli.LoginInput) (cli.ActionMessage, error) {
+				return cli.ActionMessage{}, errors.New("password login is unsupported on this server; use lore login --server <url> --token <token>")
 			},
 		}
 		m := newModel(actions)
@@ -678,9 +693,10 @@ func TestLoginSuccessAndFailureStates(t *testing.T) {
 		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 		m = updated.(model)
 		m.loginInputs[0].SetValue("https://example.test")
-		m.loginInputs[1].SetValue("bad-token")
+		m.loginInputs[1].SetValue("admin@example.com")
+		m.loginInputs[2].SetValue("bad-password")
 		m.loginInputs[0].Blur()
-		m.loginInputs[1].Focus()
+		m.loginInputs[2].Focus()
 		updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 		m = updated.(model)
 		updated, _ = m.Update(cmd())
@@ -690,6 +706,12 @@ func TestLoginSuccessAndFailureStates(t *testing.T) {
 		}
 		if got := m.statusTone; got != toneError {
 			t.Fatalf("statusTone = %q, want error", got)
+		}
+		if strings.Contains(m.View(), "bad-password") {
+			t.Fatalf("raw password leaked in view: %s", m.View())
+		}
+		if !strings.Contains(m.statusBody, "--token") {
+			t.Fatalf("statusBody = %q, want compatibility guidance", m.statusBody)
 		}
 	})
 }

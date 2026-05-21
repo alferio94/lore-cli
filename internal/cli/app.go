@@ -39,6 +39,8 @@ type AuthManager interface {
 type App struct {
 	Stdout               io.Writer
 	Stderr               io.Writer
+	Stdin                io.Reader
+	PasswordPrompt       func() (string, error)
 	Store                ConfigStore
 	Auth                 AuthManager
 	ClientFactory        ClientFactory
@@ -57,6 +59,7 @@ func New(configDir string, stdout, stderr io.Writer, buildInfo version.Info) *Ap
 		Stdout: stdout,
 		Stderr: stderr,
 		Store:  store,
+		Stdin:  os.Stdin,
 		Auth:   auth.Manager{ConfigStore: store},
 		ClientFactory: func(baseURL string) (httpclient.Client, error) {
 			return httpclient.New(baseURL, 0)
@@ -75,6 +78,9 @@ func (a *App) Run(args []string) int {
 	}
 	if a.Stderr == nil {
 		a.Stderr = io.Discard
+	}
+	if a.Stdin == nil {
+		a.Stdin = os.Stdin
 	}
 	if a.LookPath == nil {
 		a.LookPath = exec.LookPath
@@ -163,10 +169,13 @@ func (a *App) Run(args []string) int {
 func (a *App) runLogin(actions InteractiveActions, args []string) int {
 	fs := newFlagSet("login", a.Stderr)
 	server := fs.String("server", "", "Lore server base URL")
-	token := fs.String("token", "", "User API token")
+	email := fs.String("email", "", "Lore account email for password login")
+	token := fs.String("token", "", "User API token compatibility path")
+	passwordStdin := fs.Bool("password-stdin", false, "Read one password line from stdin for non-interactive automation")
 	fs.Usage = func() {
-		fmt.Fprintln(a.Stderr, "Usage: lore login --server <url> --token <token>")
-		fmt.Fprintln(a.Stderr, "Validate a normal user API token with /v1/me before saving OS keychain-backed login metadata.")
+		fmt.Fprintln(a.Stderr, "Usage: lore login --server <url> --email <email> [--password-stdin]")
+		fmt.Fprintln(a.Stderr, "   or: lore login --server <url> --token <token>")
+		fmt.Fprintln(a.Stderr, "Primary login uses email + hidden password to mint a reusable API token; only the minted token is saved in the OS keychain.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -178,19 +187,44 @@ func (a *App) runLogin(actions InteractiveActions, args []string) int {
 	}
 
 	rawServer := strings.TrimSpace(*server)
+	rawEmail := strings.TrimSpace(*email)
 	rawToken := strings.TrimSpace(*token)
-	if rawServer == "" || rawToken == "" {
+	if rawServer == "" {
 		fs.Usage()
 		return 1
 	}
 
-	result, err := actions.Login(context.Background(), rawServer, rawToken)
-	if err != nil {
-		if _, ok := err.(*httpclient.UnauthorizedError); ok {
-			fmt.Fprintf(a.Stderr, "login failed: %s\n", explainLoginError(err))
+	mode := ""
+	var (
+		result ActionMessage
+		err    error
+	)
+	switch {
+	case rawToken != "":
+		mode = "token"
+		if rawEmail != "" || *passwordStdin {
+			fmt.Fprintln(a.Stderr, "login failed: --token compatibility mode cannot be combined with --email or --password-stdin")
 			return 1
 		}
-		fmt.Fprintf(a.Stderr, "login failed: %v\n", err)
+		result, err = actions.Login(context.Background(), rawServer, rawToken)
+	case rawEmail != "":
+		mode = "password"
+		password, passwordErr := a.readLoginPassword(*passwordStdin)
+		if passwordErr != nil {
+			fmt.Fprintf(a.Stderr, "login failed: %v\n", passwordErr)
+			return 1
+		}
+		result, err = a.loginActionWithInput(context.Background(), LoginInput{Mode: "password", ServerURL: rawServer, Email: rawEmail, Password: password})
+	default:
+		fs.Usage()
+		return 1
+	}
+	if err != nil {
+		if mode == "password" {
+			fmt.Fprintf(a.Stderr, "login failed: %s\n", explainEndpointError(err))
+		} else {
+			fmt.Fprintf(a.Stderr, "login failed: %s\n", explainLoginError(err))
+		}
 		return 1
 	}
 
@@ -267,7 +301,7 @@ func (a *App) runInstall(_ InteractiveActions, args []string) int {
 	fs.Usage = func() {
 		fmt.Fprintln(a.Stderr, "Usage: lore install [--dry-run] [--yes]")
 		fmt.Fprintln(a.Stderr, "Install the Pi-first managed runtime using saved Lore login state.")
-		fmt.Fprintln(a.Stderr, "Healthy saved OS keychain-backed login metadata is reused automatically; Claude Code, OpenCode, Codex, and Antigravity remain Coming soon.")
+		fmt.Fprintln(a.Stderr, "Healthy saved OS keychain-backed login metadata is reused automatically after password-first login or a compatibility token via --token; Claude Code, OpenCode, Codex, and Antigravity remain Coming soon.")
 	}
 	if err := fs.Parse(args); err != nil {
 		return 1
@@ -457,7 +491,7 @@ func (a *App) printRootHelpTo(w io.Writer) {
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "Commands:")
 	fmt.Fprintln(w, "  tui       Start the interactive TUI explicitly")
-	fmt.Fprintln(w, "  login     Validate a user API token with /v1/me and save OS keychain-backed login metadata")
+	fmt.Fprintln(w, "  login     Use email + hidden password to mint a reusable token, or use --password-stdin / --token for automation and compatibility")
 	fmt.Fprintln(w, "  status    Show login metadata, health, readiness, and auth status")
 	fmt.Fprintln(w, "  logout    Remove local login metadata and matching OS keychain credential only")
 	fmt.Fprintln(w, "  doctor    Run actionable diagnostics, including optional Pi availability")

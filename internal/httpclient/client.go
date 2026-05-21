@@ -68,6 +68,18 @@ func (c *HTTPClient) Ready(ctx context.Context) error {
 	return nil
 }
 
+// Login mints a reusable API token through POST /v1/auth/login.
+func (c *HTTPClient) Login(ctx context.Context, email, password string) (PasswordLoginResult, error) {
+	var body passwordLoginEnvelope
+	if err := c.request(ctx, http.MethodPost, "/v1/auth/login", "", nil, PasswordLoginRequest{Email: email, Password: password}, &body); err != nil {
+		return PasswordLoginResult{}, err
+	}
+	if strings.TrimSpace(body.Data.APIToken.Token) == "" {
+		return PasswordLoginResult{}, &APIError{StatusCode: http.StatusCreated, Code: "invalid_response", Message: "login response missing api token"}
+	}
+	return PasswordLoginResult{Token: body.Data.APIToken.Token}, nil
+}
+
 // Me checks authenticated GET /v1/me.
 func (c *HTTPClient) Me(ctx context.Context, token string) (Subject, error) {
 	var body subjectEnvelope
@@ -331,8 +343,14 @@ func (c *HTTPClient) request(ctx context.Context, method, path, token string, qu
 	}
 	defer res.Body.Close()
 
+	if path == "/v1/auth/login" && (res.StatusCode == http.StatusNotFound || res.StatusCode == http.StatusMethodNotAllowed) {
+		return decodeLoginUnsupportedError(res)
+	}
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		return decodeAPIError(res, path)
+	}
+	if path == "/v1/auth/login" && res.StatusCode != http.StatusCreated {
+		return &APIError{StatusCode: res.StatusCode, Code: "invalid_response", Message: fmt.Sprintf("login returned status %d, want 201", res.StatusCode), RequestID: strings.TrimSpace(res.Header.Get("X-Request-Id"))}
 	}
 	if err := json.NewDecoder(res.Body).Decode(dst); err != nil {
 		return fmt.Errorf("decode success response from %s: %w", path, err)
@@ -366,20 +384,7 @@ func (c *HTTPClient) do(ctx context.Context, method, requestPath, token string, 
 }
 
 func decodeAPIError(res *http.Response, path string) error {
-	var body errorEnvelope
-	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
-		return &APIError{StatusCode: res.StatusCode, Code: "invalid_error_response", Message: fmt.Sprintf("decode error response from %s: %v", path, err), RequestID: strings.TrimSpace(res.Header.Get("X-Request-Id"))}
-	}
-	requestID := strings.TrimSpace(body.Error.RequestID)
-	if requestID == "" {
-		requestID = strings.TrimSpace(res.Header.Get("X-Request-Id"))
-	}
-	apiErr := APIError{
-		StatusCode: res.StatusCode,
-		Code:       body.Error.Code,
-		Message:    body.Error.Message,
-		RequestID:  requestID,
-	}
+	apiErr := decodeAPIErrorEnvelope(res, path)
 	if res.StatusCode == http.StatusUnauthorized {
 		return &UnauthorizedError{APIError: apiErr}
 	}
@@ -387,4 +392,26 @@ func decodeAPIError(res *http.Response, path string) error {
 		return &ReadinessError{APIError: apiErr}
 	}
 	return &apiErr
+}
+
+func decodeLoginUnsupportedError(res *http.Response) error {
+	apiErr := decodeAPIErrorEnvelope(res, "/v1/auth/login")
+	return &UnsupportedServerError{APIError: apiErr}
+}
+
+func decodeAPIErrorEnvelope(res *http.Response, path string) APIError {
+	var body errorEnvelope
+	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
+		return APIError{StatusCode: res.StatusCode, Code: "invalid_error_response", Message: fmt.Sprintf("decode error response from %s: %v", path, err), RequestID: strings.TrimSpace(res.Header.Get("X-Request-Id"))}
+	}
+	requestID := strings.TrimSpace(body.Error.RequestID)
+	if requestID == "" {
+		requestID = strings.TrimSpace(res.Header.Get("X-Request-Id"))
+	}
+	return APIError{
+		StatusCode: res.StatusCode,
+		Code:       body.Error.Code,
+		Message:    body.Error.Message,
+		RequestID:  requestID,
+	}
 }

@@ -11,7 +11,9 @@ Thin Go CLI for Lore server authentication, diagnostics, a default interactive T
 The root TUI offers `Status`, `Login`, `Logout`, `Doctor`, `Install`, `Update`, and `Quit`. `Install` is Pi-first: Pi is selectable and recommended, while Claude Code, OpenCode, Codex, and Antigravity stay visible as non-selectable `Coming soon` targets. `Update` can surface binary update availability in the background and asks for confirmation before running the binary-only CLI updater.
 
 ## Explicit commands
-- `lore login --server https://example.test --token "$LORE_API_TOKEN"`
+- `lore login --server https://example.test --email admin@example.com`
+- `printf '%s\n' '<password-from-secret-store>' | lore login --server https://example.test --email admin@example.com --password-stdin`
+- `lore login --server https://example.test --token "$LORE_API_TOKEN"` (compatibility mode)
 - `lore status`
 - `lore logout`
 - `lore doctor`
@@ -24,7 +26,7 @@ The root TUI offers `Status`, `Login`, `Logout`, `Doctor`, `Install`, `Update`, 
 - `lore update --dry-run`
 - `lore update --yes`
 
-`login` validates the provided normal user API token with `GET /v1/me` before saving metadata-only local config plus the token in the OS keychain.
+`login` uses email + hidden password by default to mint a reusable API token with `POST /v1/auth/login`, validates the minted token with `GET /v1/me`, and saves metadata-only local config plus the token in the OS keychain. `--token` remains available as an older-server compatibility mode.
 `status` reports saved login metadata presence plus `/healthz`, `/readyz`, and `/v1/me` state.
 `logout` removes local login metadata plus the matching OS keychain credential only and does not revoke server-side tokens.
 `doctor` prints actionable config, URL, network, readiness, auth, and Pi-availability diagnostics.
@@ -58,7 +60,7 @@ Linux/headless environments must provide a working Secret Service/keyring sessio
 Use the CLI memory MVP only after `lore login` succeeds and when you already know the target `project_id`.
 
 ```sh
-lore login --server https://example.test --token "$LORE_API_TOKEN"
+lore login --server https://example.test --email admin@example.com
 lore remember \
   --project-id prj_123 \
   --type decision \
