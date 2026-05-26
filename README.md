@@ -88,6 +88,7 @@ Notes:
 - Request failures surface request IDs when the server provides them.
 - `lore api request` is a hidden machine broker for allowlisted authenticated API calls used by the managed Pi runtime.
 - `lore mcp serve` is the canonical auth-safe local Lore Server MCP stdio bridge; `lore mcp proxy` remains a deprecated compatibility alias.
+- The bridge accepts either `Content-Length` framed JSON-RPC or one JSON-RPC object per non-empty line, then mirrors responses with the same framing for that session.
 - The MVP bridge supports `initialize`, `tools/list`, and `tools/call`, tolerates `notifications/initialized`, and rejects other methods.
 - Antigravity optional MCP config launches `lore mcp serve` per session instead of embedding a raw `/v1/mcp` URL or bearer token.
 - The bridge is intentionally separate from the default Pi install path; Pi MCP is not advertised or enabled by default in this slice, and Pi migration is deferred.

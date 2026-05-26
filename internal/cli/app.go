@@ -361,6 +361,7 @@ func (a *App) runMCP(args []string) int {
 		fs.Usage = func() {
 			fmt.Fprintf(a.Stderr, "Usage: lore mcp %s\n", commandName)
 			fmt.Fprintln(a.Stderr, "Start the local auth-safe Lore Server MCP stdio bridge using saved Lore login state.")
+			fmt.Fprintln(a.Stderr, "The bridge accepts Content-Length framed JSON-RPC or newline-delimited JSON-RPC and mirrors the same framing in responses for that session.")
 			if alias {
 				fmt.Fprintln(a.Stderr, "This deprecated compatibility alias forwards to the canonical lore mcp serve command.")
 			} else {

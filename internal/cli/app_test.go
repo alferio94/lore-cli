@@ -1361,6 +1361,37 @@ func TestMCPServeCommandUsesSavedAuthAndFramesJSONRPC(t *testing.T) {
 	assertNoTokenLeak(t, stdout.String(), stderr.String(), "secret-token")
 }
 
+func TestMCPServeCommandSupportsJSONLStdioWithSavedAuth(t *testing.T) {
+	store := &fakeStore{path: "/tmp/lore/config.json", loaded: config.Config{ServerURL: "https://example.test", CredentialAccount: "acct-1"}}
+	creds := &fakeCredentialStore{secrets: map[string]string{auth.ServiceName + ":acct-1": "secret-token"}}
+	client := &fakeClient{mcpForwardResult: json.RawMessage(`{"protocolVersion":"2025-03-26"}`)}
+	app, stdout, stderr := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
+	app.Auth = auth.Manager{ConfigStore: store, Credentials: creds}
+	app.Stdin = strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"tester"}}}` + "\n")
+
+	if exitCode := app.Run([]string{"mcp", "serve"}); exitCode != 0 {
+		t.Fatalf("mcp serve exitCode = %d, want 0 stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+	if client.mcpForwardToken != "secret-token" || client.mcpForwardMethod != "initialize" || string(client.mcpForwardParams) != `{"clientInfo":{"name":"tester"}}` {
+		t.Fatalf("MCPForward token/method/params = %q/%q/%s", client.mcpForwardToken, client.mcpForwardMethod, client.mcpForwardParams)
+	}
+	if strings.Contains(stdout.String(), "Content-Length:") {
+		t.Fatalf("stdout unexpectedly used Content-Length framing: %q", stdout.String())
+	}
+	payload := readTestMCPJSONLResponse(t, stdout.String())
+	var envelope struct {
+		ID     json.RawMessage `json:"id"`
+		Result json.RawMessage `json:"result"`
+	}
+	if err := json.Unmarshal(payload, &envelope); err != nil {
+		t.Fatalf("json.Unmarshal(payload): %v", err)
+	}
+	if string(envelope.ID) != `1` || string(envelope.Result) != `{"protocolVersion":"2025-03-26"}` {
+		t.Fatalf("serve response = %s", payload)
+	}
+	assertNoTokenLeak(t, stdout.String(), stderr.String(), "secret-token")
+}
+
 func TestMCPServeCommandShapesUpstreamFailuresWithoutLeakingSavedToken(t *testing.T) {
 	store := &fakeStore{path: "/tmp/lore/config.json", loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token"}}
 	client := &fakeClient{mcpForwardErr: &httpclient.MCPForwardError{Message: "upstream tools/call failed: network request failed"}}
@@ -1415,6 +1446,15 @@ func readTestMCPFrame(t *testing.T, framed string) []byte {
 		t.Fatalf("Read(payload) error = %v", err)
 	}
 	return payload
+}
+
+func readTestMCPJSONLResponse(t *testing.T, output string) []byte {
+	t.Helper()
+	line := strings.TrimSpace(output)
+	if line == "" {
+		t.Fatal("JSONL response was empty")
+	}
+	return []byte(line)
 }
 
 func setIsolatedPiHome(t *testing.T) (homeDir string, piAgentDir string) {
