@@ -19,6 +19,8 @@ metadata:
 ## Critical Patterns
 
 - Keep the MVP intentionally narrow: local auth/config diagnostics first, installer/Pi automation later.
+- For the current multi-harness install slice, Pi stays the preserved default target while Antigravity is documented as the prompt-and-skills-first MVP target.
+- Antigravity MVP non-goals must stay explicit: no Pi-style overlay emulation, no auto-install guarantee, and MCP remains optional.
 - Accepted exception for `cli-password-login-keychain-token`: primary login may use `POST /v1/auth/login` with email + hidden password to mint a normal user API token, then persist only that token in the OS keychain.
 - Manual `--token` login remains the explicit compatibility path; automation may use `--password-stdin`, but never `--password` argv or plaintext password env vars.
 - Treat `logout` as local credential removal only unless a later spec explicitly adds server-side revocation.
@@ -55,6 +57,12 @@ lore status
 lore doctor
 lore logout
 ```
+
+## Install Target Contract Note
+
+- Pi remains the default recommended install target and the only path with the preserved Pi-native extension/runtime behavior.
+- Antigravity wording should describe the MVP as prompt append/merge plus managed skills, with optional MCP only when explicitly selected.
+- Do not describe Antigravity as a Pi clone, and do not imply parity for overlays, background subagents, or automatic install flows.
 
 ## Resources
 

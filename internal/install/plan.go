@@ -53,6 +53,24 @@ type PiInstallPlan struct {
 	Snapshot              string
 }
 
+func (p PiInstallPlan) InstallPlan() InstallPlan {
+	files := make([]PlanFileAction, 0, len(p.ManagedFileActions))
+	for _, action := range p.ManagedFileActions {
+		files = append(files, PlanFileAction{
+			RelativePath: action.RelativePath,
+			AbsolutePath: action.AbsolutePath,
+			Action:       action.Action,
+			BackupPath:   action.BackupPath,
+		})
+	}
+	return InstallPlan{
+		Request:    p.Request.InstallRequest(),
+		Layout:     p.Layout.HarnessLayout(),
+		Components: append([]ComponentID(nil), p.Request.Components...),
+		Files:      files,
+	}
+}
+
 type InstallCommandOptions struct {
 	DryRun    bool
 	AssumeYes bool
@@ -72,6 +90,9 @@ func (s Service) PlanPiInstall(req PiInstallRequest) (PiInstallPlan, error) {
 	req.Target = req.targetOrDefault()
 	req.Components = components
 	req.Definition = req.definitionOrDefault()
+	if err := req.InstallRequest().Validate(); err != nil {
+		return PiInstallPlan{}, err
+	}
 	layout := ResolvePiLayout(req.HomeDir)
 	managedBackupRoot := filepath.Join(layout.AgentDir, "backups", req.Now.UTC().Format("20060102T150405Z"))
 	plan := PiInstallPlan{Request: req, Layout: layout, ManagedBackupRoot: managedBackupRoot}
@@ -251,8 +272,12 @@ func planManagedAgentOverlayActions(layout PiLayout, req PiInstallRequest, backu
 }
 
 func validateInstallResultAgainstPlan(plan PiInstallPlan, result PiInstallResult) error {
+	return validateSharedInstallResultAgainstPlan(plan.InstallPlan(), result.InstallResult())
+}
+
+func validateSharedInstallResultAgainstPlan(plan InstallPlan, result InstallResult) error {
 	planned := map[string]string{}
-	for _, action := range plan.ManagedFileActions {
+	for _, action := range plan.Files {
 		planned[action.RelativePath] = action.Action
 	}
 	actual := map[string]string{}

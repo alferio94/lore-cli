@@ -45,6 +45,21 @@ type PiInstallRequest struct {
 	Now             time.Time
 }
 
+func (r PiInstallRequest) InstallRequest() InstallRequest {
+	return InstallRequest{
+		HomeDir:         r.HomeDir,
+		ServerURL:       r.ServerURL,
+		LoreBinaryPath:  r.LoreBinaryPath,
+		LoreConfigDir:   r.LoreConfigDir,
+		LoreCLIVersion:  r.LoreCLIVersion,
+		Target:          r.targetOrDefault(),
+		Components:      append([]ComponentID(nil), r.Components...),
+		Definition:      r.definitionOrDefault(),
+		RuntimeContract: r.runtimeContractOrDefault(),
+		Now:             r.Now,
+	}
+}
+
 type ManagedFileAction struct {
 	RelativePath string `json:"relative_path"`
 	AbsolutePath string `json:"absolute_path"`
@@ -67,6 +82,15 @@ type PiInstallResult struct {
 	Manifest   Manifest
 	Summary    InstallSummary
 	FullBackup *FullPiBackupResult
+}
+
+func (r PiInstallResult) InstallResult() InstallResult {
+	return InstallResult{
+		Target:   r.Layout.HarnessLayout().Target,
+		Layout:   r.Layout.HarnessLayout(),
+		Summary:  r.Summary,
+		Manifest: r.Manifest,
+	}
 }
 
 type renderedPiFile struct {
@@ -109,6 +133,24 @@ func ResolvePiLayout(homeDir string) PiLayout {
 	}
 }
 
+func (l PiLayout) HarnessLayout() HarnessLayout {
+	return HarnessLayout{
+		Target:       TargetPi,
+		RootDir:      l.AgentDir,
+		ManifestPath: l.ManifestPath,
+		Paths: map[string]string{
+			"pi_dir":             l.PiDir,
+			"agent_dir":          l.AgentDir,
+			"extensions_dir":     l.ExtensionsDir,
+			"themes_dir":         l.ThemesDir,
+			"managed_agents_dir": l.ManagedAgentsDir,
+			"settings":           l.SettingsPath,
+			"manifest":           l.ManifestPath,
+			"theme":              l.AlferioThemePath,
+		},
+	}
+}
+
 func (r PiInstallRequest) targetOrDefault() TargetID {
 	if strings.TrimSpace(string(r.Target)) == "" {
 		return TargetPi
@@ -125,7 +167,12 @@ func (r PiInstallRequest) definitionOrDefault() agentpack.Definition {
 
 func (r PiInstallRequest) normalizedComponents() ([]ComponentID, error) {
 	if r.targetOrDefault() != TargetPi {
-		return nil, fmt.Errorf("target %q is not available yet; only Pi is selectable in this slice and non-Pi targets remain Coming soon", r.targetOrDefault())
+		if target, err := ResolveInstallTarget(r.targetOrDefault()); err != nil {
+			return nil, err
+		} else if target.ID == TargetAntigravity {
+			return nil, fmt.Errorf("target %q must use the Antigravity prompt + skills install flow instead of the Pi-native install path", r.targetOrDefault())
+		}
+		return nil, fmt.Errorf("target %q must use its own harness-owned install flow", r.targetOrDefault())
 	}
 	components, err := NormalizeComponentSelection(r.targetOrDefault(), r.Components)
 	if err != nil {
@@ -170,6 +217,9 @@ func (s Service) InstallPi(req PiInstallRequest) (PiInstallResult, error) {
 	}
 
 	if err := validateRuntimeContractCompatibility(req.runtimeContractOrDefault()); err != nil {
+		return PiInstallResult{}, err
+	}
+	if err := req.InstallRequest().Validate(); err != nil {
 		return PiInstallResult{}, err
 	}
 

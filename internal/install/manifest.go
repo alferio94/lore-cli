@@ -122,11 +122,23 @@ func upgradeLegacyManifest(legacy legacyManifest) Manifest {
 }
 
 func (m Manifest) Validate(layout PiLayout) error {
+	if err := m.ValidateForLayout(layout.HarnessLayout(), layout.ManagedFiles, filepath.Join(layout.AgentDir, "backups")); err != nil {
+		return err
+	}
+	if m.FullPiBackup != nil {
+		if filepath.Clean(m.FullPiBackup.SourcePath) != filepath.Clean(layout.PiDir) {
+			return fmt.Errorf("full_pi_backup.source_path = %q, want %q", m.FullPiBackup.SourcePath, layout.PiDir)
+		}
+	}
+	return nil
+}
+
+func (m Manifest) ValidateForLayout(layout HarnessLayout, managedFiles []string, backupRootDir string) error {
 	if m.SchemaVersion != PortableManifestSchemaVersion {
 		return fmt.Errorf("schema_version = %q, want %q", m.SchemaVersion, PortableManifestSchemaVersion)
 	}
-	if m.Target != TargetPi {
-		return fmt.Errorf("target = %q, want %q", m.Target, TargetPi)
+	if m.Target != layout.Target {
+		return fmt.Errorf("target = %q, want %q", m.Target, layout.Target)
 	}
 	if m.AuthMode != "cli-request" {
 		return fmt.Errorf("auth_mode = %q, want %q", m.AuthMode, "cli-request")
@@ -143,10 +155,10 @@ func (m Manifest) Validate(layout PiLayout) error {
 	if len(m.Components) == 0 {
 		return fmt.Errorf("components are required")
 	}
-	if len(m.ManagedFiles) != len(layout.ManagedFiles) {
-		return fmt.Errorf("managed_files length = %d, want %d", len(m.ManagedFiles), len(layout.ManagedFiles))
+	if len(m.ManagedFiles) != len(managedFiles) {
+		return fmt.Errorf("managed_files length = %d, want %d", len(m.ManagedFiles), len(managedFiles))
 	}
-	for i, want := range layout.ManagedFiles {
+	for i, want := range managedFiles {
 		got := m.ManagedFiles[i]
 		if filepath.Clean(got.Path) != filepath.Clean(want) {
 			return fmt.Errorf("managed_files[%d].path = %q, want %q", i, got.Path, want)
@@ -161,9 +173,9 @@ func (m Manifest) Validate(layout PiLayout) error {
 			return fmt.Errorf("managed_files[%d].content_hash is required", i)
 		}
 	}
-	backupPrefix := filepath.Join(layout.AgentDir, "backups") + string(os.PathSeparator)
+	backupPrefix := filepath.Clean(backupRootDir) + string(os.PathSeparator)
 	if !strings.HasPrefix(filepath.Clean(m.BackupRoot), backupPrefix) {
-		return fmt.Errorf("backup_root = %q, want path under %q", m.BackupRoot, filepath.Join(layout.AgentDir, "backups"))
+		return fmt.Errorf("backup_root = %q, want path under %q", m.BackupRoot, backupRootDir)
 	}
 	if _, err := time.Parse(time.RFC3339, m.InstalledAt); err != nil {
 		return fmt.Errorf("installed_at: %w", err)
@@ -180,9 +192,6 @@ func (m Manifest) Validate(layout PiLayout) error {
 		}
 	}
 	if m.FullPiBackup != nil {
-		if filepath.Clean(m.FullPiBackup.SourcePath) != filepath.Clean(layout.PiDir) {
-			return fmt.Errorf("full_pi_backup.source_path = %q, want %q", m.FullPiBackup.SourcePath, layout.PiDir)
-		}
 		if filepath.Clean(m.FullPiBackup.ManifestPath) != filepath.Clean(filepath.Join(m.FullPiBackup.BackupPath, "lore-pi-backup.json")) {
 			return fmt.Errorf("full_pi_backup.manifest_path = %q, want path under backup directory", m.FullPiBackup.ManifestPath)
 		}

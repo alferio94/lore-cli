@@ -35,9 +35,32 @@ func TestInteractiveActionsExposeAppHelpers(t *testing.T) {
 	if !ok || plan.Request.Target != install.TargetPi || planReport.Title != "Lore install" {
 		t.Fatalf("PlanPiInstall() = plan:%+v report:%+v ok:%t, want Pi install plan", plan, planReport, ok)
 	}
+	sharedPlan := plan.InstallPlan()
+	if sharedPlan.Request.Target != install.TargetPi || sharedPlan.Layout.Target != install.TargetPi {
+		t.Fatalf("shared plan = %+v, want Pi-target shared bridge without changing defaults", sharedPlan)
+	}
+	if got := formatInstallPlanSummary(plan, true); !strings.Contains(got, "install_target=pi") || !strings.Contains(got, "runtime=pi-remote-package") {
+		t.Fatalf("formatInstallPlanSummary() = %q, want unchanged Pi summary wording", got)
+	}
+	if _, err := install.ResolveInstallTarget(install.TargetClaudeCode); err == nil {
+		t.Fatal("ResolveInstallTarget(claude-code) error = nil, want fail-closed unsupported target behavior")
+	}
+	if _, err := install.ResolveInstallTarget(install.TargetID("unknown-target")); err == nil {
+		t.Fatal("ResolveInstallTarget(unknown-target) error = nil, want fail-closed unknown target behavior")
+	}
 	installReport := actions.Install(context.Background())
 	if installReport.ExitCode != 0 || installReport.Title != "Lore install" {
 		t.Fatalf("Install() = %+v, want successful Pi install report", installReport)
+	}
+	foundInstallSummary := false
+	for _, check := range installReport.Checks {
+		if check.Name == "install" && strings.Contains(check.Detail, "install_target=pi") {
+			foundInstallSummary = true
+			break
+		}
+	}
+	if !foundInstallSummary {
+		t.Fatalf("Install() checks = %+v, want unchanged Pi install summary", installReport.Checks)
 	}
 	if _, err := actions.Logout(context.Background()); err != nil {
 		t.Fatalf("Logout() error = %v", err)

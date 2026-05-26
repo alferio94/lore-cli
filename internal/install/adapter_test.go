@@ -12,16 +12,31 @@ func TestDefaultComponentSelectionKeepsPiSafeAndMCPOptional(t *testing.T) {
 	if got := DefaultComponentSelection(TargetPi); !equalComponentIDs(got, []ComponentID{ComponentCorePack, ComponentPiExtensions}) {
 		t.Fatalf("DefaultComponentSelection(pi) = %v, want core-pack + pi-extensions", got)
 	}
+	if got := DefaultComponentSelection(TargetAntigravity); !equalComponentIDs(got, []ComponentID{ComponentCorePack}) {
+		t.Fatalf("DefaultComponentSelection(antigravity) = %v, want core-pack only", got)
+	}
 	if got := DefaultComponentSelection(TargetClaudeCode); !equalComponentIDs(got, []ComponentID{ComponentCorePack}) {
 		t.Fatalf("DefaultComponentSelection(claude-code) = %v, want core-pack only", got)
 	}
 
 	resolved, err := NormalizeComponentSelection(TargetPi, []ComponentID{ComponentLoreServerMCP, ComponentCorePack, ComponentCorePack})
 	if err != nil {
-		t.Fatalf("NormalizeComponentSelection error = %v, want nil", err)
+		t.Fatalf("NormalizeComponentSelection(pi) error = %v, want nil", err)
 	}
 	if !equalComponentIDs(resolved, []ComponentID{ComponentCorePack, ComponentLoreServerMCP}) {
-		t.Fatalf("NormalizeComponentSelection = %v, want deduped ordered components", resolved)
+		t.Fatalf("NormalizeComponentSelection(pi) = %v, want deduped ordered components", resolved)
+	}
+
+	resolved, err = NormalizeComponentSelection(TargetAntigravity, []ComponentID{ComponentLoreServerMCP, ComponentCorePack, ComponentCorePack})
+	if err != nil {
+		t.Fatalf("NormalizeComponentSelection(antigravity) error = %v, want nil", err)
+	}
+	if !equalComponentIDs(resolved, []ComponentID{ComponentCorePack, ComponentLoreServerMCP}) {
+		t.Fatalf("NormalizeComponentSelection(antigravity) = %v, want core-pack + optional MCP", resolved)
+	}
+
+	if _, err := NormalizeComponentSelection(TargetAntigravity, []ComponentID{ComponentPiExtensions}); err == nil || !containsAll(err.Error(), string(TargetAntigravity), string(ComponentPiExtensions), "supported") {
+		t.Fatalf("NormalizeComponentSelection(antigravity, pi-extensions) error = %v, want unsupported-component guardrail", err)
 	}
 }
 
@@ -51,9 +66,9 @@ func TestRenderRequestValidateRejectsUnknownComponentsAndWrongSchema(t *testing.
 }
 
 func TestRegistryResolveReturnsTargetAdapterAndCapabilities(t *testing.T) {
-	registry, err := NewRegistry(defaultPiAdapter())
+	registry, err := defaultInstallRegistry()
 	if err != nil {
-		t.Fatalf("NewRegistry error = %v, want nil", err)
+		t.Fatalf("defaultInstallRegistry error = %v, want nil", err)
 	}
 
 	adapter, err := registry.Resolve(TargetPi)
@@ -80,6 +95,28 @@ func TestRegistryResolveReturnsTargetAdapterAndCapabilities(t *testing.T) {
 	if adapter.Supports(ComponentLoreServerMCP) {
 		t.Fatal("Supports(lore-server-mcp) = true, want false for Pi scaffold")
 	}
+
+	adapter, err = registry.Resolve(TargetAntigravity)
+	if err != nil {
+		t.Fatalf("Resolve(antigravity) error = %v, want nil", err)
+	}
+	if adapter.Title() != "Antigravity" {
+		t.Fatalf("adapter.Title() = %q, want Antigravity", adapter.Title())
+	}
+	antigravityCapabilities := adapter.Capabilities()
+	if antigravityCapabilities[CapabilityPrompt].Description == "" || antigravityCapabilities[CapabilitySkills].Description == "" {
+		t.Fatalf("antigravity capabilities = %+v, want prompt and skills capability flags", antigravityCapabilities)
+	}
+	if got := antigravityCapabilities[CapabilityLoreServerMCP]; got.Component != ComponentLoreServerMCP || !got.Optional {
+		t.Fatalf("CapabilityLoreServerMCP = %+v, want optional MCP capability mapping", got)
+	}
+	if adapter.Supports(ComponentPiExtensions) {
+		t.Fatal("Supports(pi-extensions) = true, want false for Antigravity groundwork")
+	}
+	if !adapter.Supports(ComponentLoreServerMCP) {
+		t.Fatal("Supports(lore-server-mcp) = false, want true for optional Antigravity MCP groundwork")
+	}
+
 	if _, err := registry.Resolve(TargetOpenCode); err == nil {
 		t.Fatal("Resolve(opencode) error = nil, want unavailable target error")
 	}

@@ -115,7 +115,7 @@ func newModel(actions cli.InteractiveActions) model {
 			{key: "login", title: "Login", description: "Use email + password to mint a reusable token, store only that token in secure credential storage, and keep --token as CLI compatibility mode."},
 			{key: "logout", title: "Logout", description: "Remove the local session only. Safe to repeat."},
 			{key: "doctor", title: "Doctor", description: "Run actionable diagnostics, including Pi availability."},
-			{key: "install", title: "Install", description: "Pi is recommended today; Claude Code, OpenCode, Codex, and Antigravity remain Coming soon."},
+			{key: "install", title: "Install", description: "Pi is recommended today; Antigravity is the prompt + skills MVP target, while Claude Code, OpenCode, and Codex remain Coming soon."},
 			{key: "update", title: "Update", description: "Check or apply a binary-only Lore CLI update; Pi runtime and ~/.pi stay untouched."},
 			{key: "quit", title: "Quit", description: "Leave the interactive shell."},
 		},
@@ -383,7 +383,7 @@ func (m model) activateSelection() (tea.Model, tea.Cmd) {
 		if !m.installSelectionPending {
 			m.installSelectionPending = true
 			m.focus = focusDetail
-			m.statusTitle = "Install Lore for Pi"
+			m.statusTitle = "Install Lore"
 			m.statusBody = install.FormatTargetSelection(install.DefaultTargets())
 			m.statusTone = toneInfo
 			return m, nil
@@ -465,7 +465,7 @@ func (m model) startInstallFlow() (tea.Model, tea.Cmd) {
 	if m.actions.Install == nil {
 		return m, nil
 	}
-	return m.runAsync(actionInstall, "Install Lore for Pi", func(ctx context.Context) actionMsg {
+	return m.runAsync(actionInstall, "Install Lore", func(ctx context.Context) actionMsg {
 		report := m.actions.Install(ctx)
 		return actionMsg{kind: actionInstall, title: report.Title, body: renderReport(report), isError: report.ExitCode != 0}
 	})
@@ -484,7 +484,7 @@ func (m model) confirmInstallBackupDecision(includeBackup bool) (tea.Model, tea.
 	if m.actions.Install == nil {
 		return m, nil
 	}
-	return m.runAsync(actionInstall, "Install Lore for Pi", func(ctx context.Context) actionMsg {
+	return m.runAsync(actionInstall, "Install Lore", func(ctx context.Context) actionMsg {
 		report := m.actions.Install(ctx)
 		return actionMsg{kind: actionInstall, title: report.Title, body: renderReport(report), isError: report.ExitCode != 0}
 	})
@@ -507,7 +507,7 @@ func (m model) confirmUpdateDecision(confirmed bool) (tea.Model, tea.Cmd) {
 
 func (m model) runInstallWithPlan(plan install.PiInstallPlan) (tea.Model, tea.Cmd) {
 	if m.actions.ExecutePiInstall != nil {
-		return m.runAsync(actionInstall, "Install Lore for Pi", func(ctx context.Context) actionMsg {
+		return m.runAsync(actionInstall, "Install Lore", func(ctx context.Context) actionMsg {
 			report := m.actions.ExecutePiInstall(ctx, plan)
 			return actionMsg{kind: actionInstall, title: report.Title, body: renderReport(report), isError: report.ExitCode != 0}
 		})
@@ -515,7 +515,7 @@ func (m model) runInstallWithPlan(plan install.PiInstallPlan) (tea.Model, tea.Cm
 	if m.actions.Install == nil {
 		return m, nil
 	}
-	return m.runAsync(actionInstall, "Install Lore for Pi", func(ctx context.Context) actionMsg {
+	return m.runAsync(actionInstall, "Install Lore", func(ctx context.Context) actionMsg {
 		report := m.actions.Install(ctx)
 		return actionMsg{kind: actionInstall, title: report.Title, body: renderReport(report), isError: report.ExitCode != 0}
 	})

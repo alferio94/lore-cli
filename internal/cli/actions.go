@@ -575,6 +575,11 @@ func (a *App) updateActionWithOptions(ctx context.Context, opts updateCommandOpt
 }
 
 func (a *App) installActionWithOptions(ctx context.Context, opts installCommandOptions) ActionReport {
+	selectedTarget, err := install.ResolveInstallTarget(opts.Target)
+	if err == nil && selectedTarget.ID == install.TargetAntigravity {
+		return a.installAntigravityActionWithOptions(ctx, opts)
+	}
+
 	plan, report, ok := a.planPiInstallAction(ctx, opts)
 	if !ok {
 		return report
@@ -600,6 +605,71 @@ func (a *App) installActionWithOptions(ctx context.Context, opts installCommandO
 		execReport.ExitCode = report.ExitCode
 	}
 	return execReport
+}
+
+func (a *App) installAntigravityActionWithOptions(ctx context.Context, opts installCommandOptions) ActionReport {
+	service := install.Service{Store: a.Store, Auth: a.authManager(), ClientFactory: install.ClientFactory(a.ClientFactory)}
+	report := ActionReport{Title: "Lore install"}
+	preflight := service.Preflight(ctx)
+	report.Checks = append(report.Checks, preflight.Checks...)
+	if !preflight.CanContinue {
+		report.ExitCode = 1
+		return report
+	}
+
+	homeDir, err := a.resolveUserHomeDir()
+	if err != nil {
+		report.Checks = append(report.Checks, output.Check{Name: "install", Status: output.StatusFail, Detail: err.Error(), Action: "Retry after HOME can be resolved for the current user."})
+		report.ExitCode = 1
+		return report
+	}
+	binaryPath, err := a.resolveExecutablePath()
+	if err != nil {
+		report.Checks = append(report.Checks, output.Check{Name: "install", Status: output.StatusFail, Detail: err.Error(), Action: "Retry from a normal Lore CLI binary context so the managed manifest can record the CLI path."})
+		report.ExitCode = 1
+		return report
+	}
+	configPath, err := a.Store.Path()
+	if err != nil {
+		report.Checks = append(report.Checks, output.Check{Name: "install", Status: output.StatusFail, Detail: err.Error(), Action: "Fix the local config directory permissions or override LORE_CONFIG_DIR."})
+		report.ExitCode = 1
+		return report
+	}
+
+	plan, err := service.PlanAntigravityInstall(install.InstallRequest{
+		HomeDir:        homeDir,
+		ServerURL:      preflight.ServerURL,
+		LoreBinaryPath: binaryPath,
+		LoreConfigDir:  filepath.Dir(configPath),
+		LoreCLIVersion: a.BuildInfo.Normalized().Version,
+		Target:         install.TargetAntigravity,
+		Components:     append([]install.ComponentID(nil), opts.Components...),
+	})
+	if err != nil {
+		report.Checks = append(report.Checks, output.Check{Name: "install", Status: output.StatusFail, Detail: err.Error(), Action: "Inspect the requested Antigravity components and rerun lore install after fixing the reported issue."})
+		report.ExitCode = 1
+		return report
+	}
+	if opts.DryRun {
+		report.Checks = append(report.Checks, output.Check{Name: "install", Status: output.StatusOK, Detail: formatSharedInstallPlanSummary(plan, true)})
+		return report
+	}
+	result, err := service.ExecuteAntigravityInstall(plan, install.InstallCommandOptions{})
+	if err != nil {
+		report.Checks = append(report.Checks, output.Check{Name: "install", Status: output.StatusFail, Detail: err.Error(), Action: "Inspect the Antigravity runtime directory and rerun lore install after fixing the reported issue."})
+		report.ExitCode = 1
+		return report
+	}
+	status := output.StatusOK
+	if len(result.Summary.Failed) > 0 {
+		status = output.StatusFail
+		report.ExitCode = 1
+	}
+	report.Checks = append(report.Checks,
+		output.Check{Name: "install", Status: status, Detail: formatSharedInstallSummary(result)},
+		output.Check{Name: "manifest", Status: output.StatusOK, Detail: fmt.Sprintf("verified %s auth_mode=%s managed_files=%d managed_overlays=%d", result.Layout.ManifestPath, result.Manifest.AuthMode, len(result.Manifest.ManagedFiles), len(result.Manifest.ManagedAgentOverlays))},
+	)
+	return report
 }
 
 func (a *App) planPiInstallAction(ctx context.Context, opts installCommandOptions) (install.PiInstallPlan, ActionReport, bool) {
@@ -650,7 +720,11 @@ func (a *App) planPiInstallAction(ctx context.Context, opts installCommandOption
 	}
 	plan, err := service.PlanPiInstall(req)
 	if err != nil {
-		report.Checks = append(report.Checks, output.Check{Name: "install", Status: output.StatusFail, Detail: err.Error(), Action: "Keep Pi on the native Lore extensions path for now; Pi MCP remains disabled by default. Inspect the requested target/components and rerun lore install after fixing the reported issue."})
+		action := "Keep Pi on the native Lore extensions path for now; Pi MCP remains disabled by default. Inspect the requested target/components and rerun lore install after fixing the reported issue."
+		if selectedTarget.ID == install.TargetAntigravity {
+			action = "Pi remains the default recommended path today. Antigravity stays prompt + skills first, keeps MCP optional, does not emulate Pi overlays, and will need the generic target-driven install flow before CLI apply can proceed."
+		}
+		report.Checks = append(report.Checks, output.Check{Name: "install", Status: output.StatusFail, Detail: err.Error(), Action: action})
 		report.ExitCode = 1
 		return install.PiInstallPlan{}, report, false
 	}
@@ -790,6 +864,21 @@ func formatInstallSummary(result install.PiInstallResult) string {
 	return strings.Join(parts, " ")
 }
 
+func formatSharedInstallSummary(result install.InstallResult) string {
+	if result.Target == install.TargetPi {
+		return fmt.Sprintf("install_target=%s runtime=pi-remote-package", result.Target)
+	}
+	summary := fmt.Sprintf("install_target=%s runtime=antigravity-prompt-skills components=%s managed_local_files=%d created=%d updated=%d deleted=%d unchanged=%d backed_up=%d conflicted=%d failed=%d", result.Target, formatComponentIDs(result.Manifest.Components), len(result.Manifest.ManagedFiles), len(result.Summary.Created), len(result.Summary.Updated), len(result.Summary.Deleted), len(result.Summary.Unchanged), len(result.Summary.BackedUp), len(result.Summary.Conflicted), len(result.Summary.Failed))
+	parts := append([]string{summary}, formatManagedFileSummaryParts(result.Summary.Created, "create")...)
+	parts = append(parts, formatManagedFileSummaryParts(result.Summary.Updated, "update")...)
+	parts = append(parts, formatManagedFileSummaryParts(result.Summary.Deleted, "delete")...)
+	parts = append(parts, formatManagedFileSummaryParts(result.Summary.Unchanged, "unchanged")...)
+	if len(result.Summary.Failed) > 0 {
+		parts = append(parts, fmt.Sprintf("findings=%s", strings.Join(result.Summary.Failed, "; ")))
+	}
+	return strings.Join(parts, " ")
+}
+
 func formatInstallPlanSummary(plan install.PiInstallPlan, dryRun bool) string {
 	parts := []string{
 		fmt.Sprintf("install_target=%s", plan.Request.Target),
@@ -819,6 +908,28 @@ func formatInstallPlanSummary(plan install.PiInstallPlan, dryRun bool) string {
 		parts = append(parts, fmt.Sprintf("managed_action=%s:%s", action.Action, action.RelativePath))
 	}
 	parts = append(parts, formatManagedFileSummaryParts(plan.ManagedAgentConflicts, "conflict")...)
+	return strings.Join(parts, " ")
+}
+
+func formatSharedInstallPlanSummary(plan install.InstallPlan, dryRun bool) string {
+	if plan.Layout.Target == install.TargetPi {
+		return fmt.Sprintf("install_target=%s runtime=pi-remote-package", plan.Layout.Target)
+	}
+	parts := []string{
+		fmt.Sprintf("install_target=%s", plan.Layout.Target),
+		"runtime=antigravity-prompt-skills",
+		fmt.Sprintf("components=%s", formatComponentIDs(plan.Components)),
+		fmt.Sprintf("target=%s", plan.Layout.RootDir),
+		fmt.Sprintf("prompt=%s", plan.Layout.Paths["shared_prompt"]),
+		fmt.Sprintf("manifest=%s", plan.Layout.ManifestPath),
+		"mcp_optional=true",
+	}
+	if dryRun {
+		parts = append(parts, "mode=dry-run")
+	}
+	for _, action := range plan.Files {
+		parts = append(parts, fmt.Sprintf("managed_action=%s:%s", action.Action, action.RelativePath))
+	}
 	return strings.Join(parts, " ")
 }
 

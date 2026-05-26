@@ -208,3 +208,18 @@ func TestLoadManifestCurrentSchemaTracksManagedAgentOverlays(t *testing.T) {
 		t.Fatalf("ManagedAgentOverlays = %+v, want lore-worker overlay metadata", loaded.ManagedAgentOverlays)
 	}
 }
+
+func TestManifestValidateForLayoutUsesSharedHarnessLayoutGroundwork(t *testing.T) {
+	layout := ResolvePiLayout(t.TempDir())
+	manifest := validManifestForTest(layout)
+
+	if err := manifest.ValidateForLayout(layout.HarnessLayout(), layout.ManagedFiles, filepath.Join(layout.AgentDir, "backups")); err != nil {
+		t.Fatalf("ValidateForLayout() error = %v, want nil", err)
+	}
+
+	broken := manifest
+	broken.Target = TargetAntigravity
+	if err := broken.ValidateForLayout(layout.HarnessLayout(), layout.ManagedFiles, filepath.Join(layout.AgentDir, "backups")); err == nil || !strings.Contains(err.Error(), "target") {
+		t.Fatalf("ValidateForLayout() err = %v, want shared target mismatch rejection", err)
+	}
+}

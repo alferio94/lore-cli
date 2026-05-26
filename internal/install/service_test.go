@@ -28,7 +28,10 @@ func TestDefaultTargetsPreferPiAndMarkOthersComingSoon(t *testing.T) {
 	if got := targets[0].Description; !containsAll(got, "Pi-native Lore extensions", "MCP") {
 		t.Fatalf("targets[0].Description = %q, want Pi-native extension guardrails", got)
 	}
-	for _, want := range []TargetID{TargetClaudeCode, TargetOpenCode, TargetCodex, TargetAntigravity} {
+	if got := findTarget(targets, TargetAntigravity); !got.Available || got.Recommended || !containsAll(got.Description, "prompt", "skills", "optional MCP") {
+		t.Fatalf("antigravity target = %+v, want supported prompt/skills target with optional MCP", got)
+	}
+	for _, want := range []TargetID{TargetClaudeCode, TargetOpenCode, TargetCodex} {
 		target := findTarget(targets, want)
 		if target.Available {
 			t.Fatalf("target %s unexpectedly available", want)
@@ -56,7 +59,15 @@ func TestResolveInstallTargetKeepsPiDefaultAndRejectsRoadmapTargets(t *testing.T
 		t.Fatalf("ResolveInstallTarget(pi) = %+v, want Pi", selected)
 	}
 
-	if _, err := ResolveInstallTarget(TargetClaudeCode); err == nil || !containsAll(err.Error(), string(TargetClaudeCode), "Coming soon", "Pi-native Lore extensions") {
+	selected, err = ResolveInstallTarget(TargetAntigravity)
+	if err != nil {
+		t.Fatalf("ResolveInstallTarget(antigravity) error = %v, want nil", err)
+	}
+	if selected.ID != TargetAntigravity || !selected.Available {
+		t.Fatalf("ResolveInstallTarget(antigravity) = %+v, want supported Antigravity target", selected)
+	}
+
+	if _, err := ResolveInstallTarget(TargetClaudeCode); err == nil || !containsAll(err.Error(), string(TargetClaudeCode), "Coming soon", "supported targets") {
 		t.Fatalf("ResolveInstallTarget(claude-code) error = %v, want roadmap guardrail", err)
 	}
 	if _, err := ResolveInstallTarget(TargetID("unknown-target")); err == nil || !containsAll(err.Error(), "unknown target") {
@@ -66,7 +77,7 @@ func TestResolveInstallTargetKeepsPiDefaultAndRejectsRoadmapTargets(t *testing.T
 
 func TestFormatTargetSelectionExplainsPiNativePathAndMCPDeferral(t *testing.T) {
 	formatted := FormatTargetSelection(DefaultTargets())
-	for _, want := range []string{"Choose an install target:", "Pi — Recommended", "Pi-native Lore extensions", "Coming soon", "Only Pi is selectable in this slice.", "Pi MCP remains explicitly disabled by default."} {
+	for _, want := range []string{"Choose an install target:", "Pi — Recommended", "Pi-native Lore extensions", "Antigravity:", "prompt + skills", "Coming soon", "Pi remains the default recommended path.", "Pi MCP stays disabled by default while Antigravity MCP is optional."} {
 		if !strings.Contains(formatted, want) {
 			t.Fatalf("FormatTargetSelection() = %q, want substring %q", formatted, want)
 		}
@@ -900,7 +911,7 @@ func TestPlanPiInstallRejectsUnsupportedExplicitComponent(t *testing.T) {
 	}
 }
 
-func TestPlanPiInstallRejectsNonPiTargetEnablement(t *testing.T) {
+func TestPlanPiInstallRejectsRoadmapTargetEnablement(t *testing.T) {
 	homeDir := t.TempDir()
 	_, err := Service{}.PlanPiInstall(PiInstallRequest{
 		HomeDir:        homeDir,
@@ -911,8 +922,93 @@ func TestPlanPiInstallRejectsNonPiTargetEnablement(t *testing.T) {
 		Target:         TargetClaudeCode,
 		Now:            time.Date(2026, 5, 19, 0, 6, 0, 0, time.UTC),
 	})
-	if err == nil || !containsAll(err.Error(), string(TargetClaudeCode), "not available yet", "Coming soon") {
-		t.Fatalf("PlanPiInstall error = %v, want non-Pi target guardrail", err)
+	if err == nil || !containsAll(err.Error(), string(TargetClaudeCode), "Coming soon", "supported targets") {
+		t.Fatalf("PlanPiInstall error = %v, want roadmap target guardrail", err)
+	}
+}
+
+func TestPlanAntigravityInstallReportsPromptSkillsActions(t *testing.T) {
+	homeDir := t.TempDir()
+	now := time.Date(2026, 5, 25, 13, 0, 0, 0, time.UTC)
+
+	plan, err := Service{}.PlanAntigravityInstall(InstallRequest{
+		HomeDir:        homeDir,
+		ServerURL:      "https://lore.example",
+		LoreBinaryPath: "/usr/local/bin/lore",
+		LoreConfigDir:  filepath.Join(homeDir, ".lore"),
+		LoreCLIVersion: "v1.2.3",
+		Target:         TargetAntigravity,
+		Now:            now,
+	})
+	if err != nil {
+		t.Fatalf("PlanAntigravityInstall error: %v", err)
+	}
+	if plan.Layout.Target != TargetAntigravity {
+		t.Fatalf("plan.Layout.Target = %q, want %q", plan.Layout.Target, TargetAntigravity)
+	}
+	if got := len(plan.Files); got == 0 {
+		t.Fatal("plan.Files is empty, want prompt/skills/manifest actions")
+	}
+	assertPlanFileAction(t, plan.Files, filepath.ToSlash(filepath.Join("..", "GEMINI.md")), "create")
+	assertPlanFileAction(t, plan.Files, filepath.ToSlash(filepath.Join("skills", "sdd-apply", "SKILL.md")), "create")
+	assertPlanFileAction(t, plan.Files, "lore-install.json", "create")
+	for _, action := range plan.Files {
+		if strings.HasPrefix(action.RelativePath, filepath.ToSlash(filepath.Join("agents", ""))) || strings.HasPrefix(action.RelativePath, filepath.ToSlash(filepath.Join("extensions", ""))) || action.RelativePath == "settings.json" {
+			t.Fatalf("plan leaked Pi-only artifact: %+v", action)
+		}
+	}
+}
+
+func TestExecuteAntigravityInstallWritesPromptSkillsAndManifest(t *testing.T) {
+	homeDir := t.TempDir()
+	now := time.Date(2026, 5, 25, 13, 30, 0, 0, time.UTC)
+	service := Service{}
+
+	plan, err := service.PlanAntigravityInstall(InstallRequest{
+		HomeDir:        homeDir,
+		ServerURL:      "https://lore.example",
+		LoreBinaryPath: "/usr/local/bin/lore",
+		LoreConfigDir:  filepath.Join(homeDir, ".lore"),
+		LoreCLIVersion: "v1.2.3",
+		Target:         TargetAntigravity,
+		Now:            now,
+	})
+	if err != nil {
+		t.Fatalf("PlanAntigravityInstall error: %v", err)
+	}
+
+	result, err := service.ExecuteAntigravityInstall(plan, InstallCommandOptions{})
+	if err != nil {
+		t.Fatalf("ExecuteAntigravityInstall error: %v", err)
+	}
+	if result.Target != TargetAntigravity {
+		t.Fatalf("result.Target = %q, want %q", result.Target, TargetAntigravity)
+	}
+	if len(result.Summary.Created) == 0 || len(result.Summary.Failed) != 0 {
+		t.Fatalf("summary = %+v, want created files and no failures", result.Summary)
+	}
+	promptPath := filepath.Join(homeDir, ".gemini", "GEMINI.md")
+	promptContent, err := os.ReadFile(promptPath)
+	if err != nil {
+		t.Fatalf("ReadFile(prompt) error: %v", err)
+	}
+	promptText := string(promptContent)
+	if !containsAll(promptText, antigravityPromptStartMarker, antigravityPromptEndMarker, "Lore Runtime") {
+		t.Fatalf("prompt content = %q, want managed Antigravity prompt block", promptText)
+	}
+	if strings.Contains(promptText, "agents/lore-managed") || strings.Contains(promptText, ".pi/agent") {
+		t.Fatalf("prompt content leaked Pi semantics: %q", promptText)
+	}
+	manifestPath := filepath.Join(homeDir, ".gemini", "antigravity-cli", "lore-install.json")
+	manifest, err := LoadManifest(manifestPath)
+	if err != nil {
+		t.Fatalf("LoadManifest(antigravity) error: %v", err)
+	}
+	if manifest.Target != TargetAntigravity || len(manifest.ManagedAgentOverlays) != 0 {
+		t.Fatalf("manifest = %+v, want Antigravity manifest without managed overlays", manifest)
+	}
+	if err := manifest.ValidateForLayout(result.Layout, managedManifestPaths(manifest), filepath.Join(result.Layout.RootDir, "backups")); err != nil {
+		t.Fatalf("ValidateForLayout(antigravity) error: %v", err)
 	}
 }
 
@@ -1153,6 +1249,20 @@ func TestExecutePiInstallRerunDoesNotDriftWhenManagedOverlaysAreUnchanged(t *tes
 		}
 	}
 
+	sharedPlan := plan.InstallPlan()
+	if sharedPlan.Layout.Target != TargetPi || sharedPlan.Layout.ManifestPath != plan.Layout.ManifestPath {
+		t.Fatalf("shared plan layout = %+v, want Pi layout bridge", sharedPlan.Layout)
+	}
+	if sharedPlan.Request.Target != TargetPi || sharedPlan.Request.HomeDir != req.HomeDir {
+		t.Fatalf("shared plan request = %+v, want Pi request bridge", sharedPlan.Request)
+	}
+	if got := len(sharedPlan.Files); got != len(plan.ManagedFileActions) {
+		t.Fatalf("len(shared plan files) = %d, want %d", got, len(plan.ManagedFileActions))
+	}
+	if got := sharedPlan.Files[0].Action; got != plan.ManagedFileActions[0].Action {
+		t.Fatalf("shared plan first action = %q, want %q", got, plan.ManagedFileActions[0].Action)
+	}
+
 	result, err := (Service{}).ExecutePiInstall(plan, InstallCommandOptions{AssumeYes: true})
 	if err != nil {
 		t.Fatalf("ExecutePiInstall rerun error: %v", err)
@@ -1165,6 +1275,10 @@ func TestExecutePiInstallRerunDoesNotDriftWhenManagedOverlaysAreUnchanged(t *tes
 	}
 	if containsSummaryEntry(result.Summary.Unchanged, filepath.Join("themes", "alferio.json")) {
 		t.Fatalf("Unchanged = %v, want theme bootstrap excluded from managed plan/summary accounting", result.Summary.Unchanged)
+	}
+	sharedResult := result.InstallResult()
+	if sharedResult.Target != TargetPi || sharedResult.Layout.Target != TargetPi {
+		t.Fatalf("shared result = %+v, want Pi shared install result bridge", sharedResult)
 	}
 }
 
@@ -1414,6 +1528,28 @@ func TestInstallPiManagedOverlayRerunDeletesStaleTrackedOverlay(t *testing.T) {
 			t.Fatalf("ManagedAgentOverlays = %+v, want stale overlay removed from manifest", second.Manifest.ManagedAgentOverlays)
 		}
 	}
+}
+
+func assertPlanFileAction(t *testing.T, actions []PlanFileAction, relativePath, wantAction string) {
+	t.Helper()
+	for _, action := range actions {
+		if filepath.ToSlash(action.RelativePath) != filepath.ToSlash(relativePath) {
+			continue
+		}
+		if action.Action != wantAction {
+			t.Fatalf("plan action for %s = %+v, want action %q", relativePath, action, wantAction)
+		}
+		return
+	}
+	t.Fatalf("plan action for %s missing from %+v", relativePath, actions)
+}
+
+func managedManifestPaths(manifest Manifest) []string {
+	paths := make([]string, 0, len(manifest.ManagedFiles))
+	for _, file := range manifest.ManagedFiles {
+		paths = append(paths, file.Path)
+	}
+	return paths
 }
 
 func containsSummaryEntry(entries []string, wants ...string) bool {

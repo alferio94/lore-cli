@@ -300,17 +300,17 @@ func (a *App) runDoctor(actions InteractiveActions, args []string) int {
 
 func (a *App) runInstall(_ InteractiveActions, args []string) int {
 	fs := newFlagSet("install", a.Stderr)
-	dryRun := fs.Bool("dry-run", false, "Show the Pi install plan without mutating ~/.pi")
+	dryRun := fs.Bool("dry-run", false, "Show the selected install plan without mutating managed runtime files")
 	yes := fs.Bool("yes", false, "Accept the safe default full-backup behavior without prompting")
-	target := fs.String("target", string(install.DefaultInstallTarget()), "Install target (Pi is the only selectable target in this slice)")
+	target := fs.String("target", string(install.DefaultInstallTarget()), "Install target (Pi stays the default recommended target; Antigravity is the prompt + skills MVP target)")
 	var components componentFlag
 	fs.Var(&components, "component", "Optional component override; repeat or use a comma-separated list (Pi supports core-pack and pi-extensions only)")
 	fs.Usage = func() {
-		fmt.Fprintln(a.Stderr, "Usage: lore install [--dry-run] [--yes] [--target pi] [--component <id>]")
+		fmt.Fprintln(a.Stderr, "Usage: lore install [--dry-run] [--yes] [--target pi|antigravity] [--component <id>]")
 		fmt.Fprintln(a.Stderr, "Install the Pi-first managed runtime using saved Lore login state.")
-		fmt.Fprintln(a.Stderr, "This slice installs the portable Lore agent pack for Pi with the default core-pack plus pi-extensions components.")
-		fmt.Fprintln(a.Stderr, "Healthy saved OS keychain-backed login metadata is reused automatically after password-first login or a compatibility token via --token; Claude Code, OpenCode, Codex, and Antigravity remain Coming soon.")
-		fmt.Fprintln(a.Stderr, "Pi keeps the native Lore extensions path by default; Pi MCP remains disabled unless a later slice explicitly changes that contract.")
+		fmt.Fprintln(a.Stderr, "Pi remains the default recommended path with the portable Lore agent pack plus pi-extensions; Antigravity is the supported prompt + skills MVP target with harness-owned prompt, skills, and optional MCP config semantics.")
+		fmt.Fprintln(a.Stderr, "Healthy saved OS keychain-backed login metadata is reused automatically after password-first login or a compatibility token via --token; Claude Code, OpenCode, and Codex remain Coming soon.")
+		fmt.Fprintln(a.Stderr, "Pi keeps the native Lore extensions path by default; Antigravity keeps prompt + skills first, does not emulate Pi overlays, makes no auto-install guarantee, and keeps MCP optional.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {

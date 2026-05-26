@@ -864,7 +864,9 @@ func TestInstallUsageIncludesPiFirstGuidance(t *testing.T) {
 		"OS keychain-backed login metadata",
 		"password-first login",
 		"compatibility token",
-		"Claude Code, OpenCode, Codex, and Antigravity remain Coming soon",
+		"Pi stays the default recommended target",
+		"Antigravity is the supported prompt + skills MVP target",
+		"Claude Code, OpenCode, and Codex remain Coming soon",
 	} {
 		if !strings.Contains(stderr.String(), want) {
 			t.Fatalf("stderr = %q, want substring %q", stderr.String(), want)

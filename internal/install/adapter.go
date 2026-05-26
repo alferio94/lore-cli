@@ -14,6 +14,8 @@ type MergeMode string
 const (
 	CapabilityAgentPack     CapabilityID = "agent-pack"
 	CapabilityPiExtensions  CapabilityID = "pi-extensions"
+	CapabilityPrompt        CapabilityID = "prompt"
+	CapabilitySkills        CapabilityID = "skills"
 	CapabilityLoreServerMCP CapabilityID = "lore-server-mcp"
 
 	MergeModeReplace      MergeMode = "replace"
@@ -96,6 +98,10 @@ func (r RenderRequest) Validate() error {
 		return err
 	}
 	return nil
+}
+
+func defaultInstallRegistry() (*Registry, error) {
+	return NewRegistry(defaultPiAdapter(), defaultAntigravityAdapter())
 }
 
 func containsComponent(components []ComponentID, target ComponentID) bool {

@@ -32,7 +32,7 @@ import (
 func TestInitialRenderShowsMenuHintsAndInstallEntry(t *testing.T) {
 	m := newModel(cli.InteractiveActions{})
 	view := m.View()
-	for _, want := range []string{"Lore", "Status", "Login", "Install", "Pi", "password", "compatibility", "Explicit subcommands remain available"} {
+	for _, want := range []string{"Lore", "Status", "Login", "Install", "Pi", "Antigravity", "password", "compatibility", "Explicit subcommands remain available"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view missing %q:\n%s", want, view)
 		}
@@ -63,10 +63,10 @@ func TestNavigationAndInstallTargetSelectionMessage(t *testing.T) {
 	if calls != 0 {
 		t.Fatalf("install calls = %d, want 0 before confirming Pi target", calls)
 	}
-	if got := m.statusTitle; got != "Install Lore for Pi" {
-		t.Fatalf("statusTitle = %q, want Install Lore for Pi", got)
+	if got := m.statusTitle; got != "Install Lore" {
+		t.Fatalf("statusTitle = %q, want Install Lore", got)
 	}
-	for _, want := range []string{"Pi", "Recommended", "Claude Code", "OpenCode", "Codex", "Antigravity", "Coming soon"} {
+	for _, want := range []string{"Pi", "Recommended", "Claude Code", "OpenCode", "Codex", "Antigravity", "Coming soon", "optional"} {
 		if !strings.Contains(m.statusBody, want) {
 			t.Fatalf("statusBody missing %q:\n%s", want, m.statusBody)
 		}
@@ -128,7 +128,7 @@ func TestInstallActionRendersSuccessAndLoginRemediationStates(t *testing.T) {
 	})
 }
 
-func TestInstallTargetSelectionListsOnlyPiAsSelectable(t *testing.T) {
+func TestInstallTargetSelectionSurfacesPiDefaultAndAntigravityMVPGuidance(t *testing.T) {
 	m := newModel(cli.InteractiveActions{})
 	for i := 0; i < 4; i++ {
 		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
@@ -136,8 +136,13 @@ func TestInstallTargetSelectionListsOnlyPiAsSelectable(t *testing.T) {
 	}
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(model)
-	if !strings.Contains(m.statusBody, "Only Pi is selectable in this slice.") {
-		t.Fatalf("statusBody = %q, want Pi-only guidance", m.statusBody)
+	for _, want := range []string{"Pi remains the default recommended path.", "Antigravity", "prompt + skills", "optional", "Choose an install target:"} {
+		if !strings.Contains(m.statusBody, want) {
+			t.Fatalf("statusBody = %q, want updated install guidance containing %q", m.statusBody, want)
+		}
+	}
+	if strings.Contains(m.statusBody, "Only Pi is selectable in this slice.") {
+		t.Fatalf("statusBody = %q, want updated multi-target messaging", m.statusBody)
 	}
 	if strings.Contains(m.statusBody, "Claude Code — Recommended") {
 		t.Fatalf("statusBody = %q, did not expect non-Pi targets to be marked recommended", m.statusBody)

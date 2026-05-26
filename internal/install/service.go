@@ -63,12 +63,50 @@ func DefaultInstallTarget() TargetID {
 }
 
 func DefaultTargets() []Target {
-	return []Target{
-		{ID: DefaultInstallTarget(), Title: "Pi", Description: "Recommended today; keeps the Pi-native Lore extensions path as the default backend and leaves Pi MCP disabled by default.", Recommended: true, Available: true},
-		{ID: TargetClaudeCode, Title: "Claude Code", Description: "Listed for roadmap visibility.", Availability: "Coming soon"},
-		{ID: TargetOpenCode, Title: "OpenCode", Description: "Listed for roadmap visibility.", Availability: "Coming soon"},
-		{ID: TargetCodex, Title: "Codex", Description: "Listed for roadmap visibility.", Availability: "Coming soon"},
-		{ID: TargetAntigravity, Title: "Antigravity", Description: "Listed for roadmap visibility.", Availability: "Coming soon"},
+	registry, _ := defaultInstallRegistry()
+	known := []TargetID{DefaultInstallTarget(), TargetClaudeCode, TargetOpenCode, TargetCodex, TargetAntigravity}
+	targets := make([]Target, 0, len(known))
+	for _, id := range known {
+		target := roadmapTarget(id)
+		if registry != nil {
+			if adapter, err := registry.Resolve(id); err == nil {
+				target = supportedTarget(adapter)
+			}
+		}
+		targets = append(targets, target)
+	}
+	return targets
+}
+
+func supportedTarget(adapter HarnessAdapter) Target {
+	capabilities := adapter.Capabilities()
+	target := Target{ID: adapter.ID(), Title: adapter.Title(), Available: true, Recommended: adapter.ID() == DefaultInstallTarget()}
+	switch adapter.ID() {
+	case TargetPi:
+		target.Description = "Recommended today; keeps the Pi-native Lore extensions path as the default backend and leaves Pi MCP disabled by default."
+	case TargetAntigravity:
+		target.Description = "prompt + skills MVP target with optional MCP capability; Pi remains the default recommended path while Antigravity keeps harness-owned prompt, skills, and manifest semantics."
+		if capabilities[CapabilityPrompt].Description == "" || capabilities[CapabilitySkills].Description == "" {
+			target.Description = "prompt + skills MVP target."
+		}
+	default:
+		target.Description = "Supported target."
+	}
+	return target
+}
+
+func roadmapTarget(id TargetID) Target {
+	switch id {
+	case TargetClaudeCode:
+		return Target{ID: id, Title: "Claude Code", Description: "Listed for roadmap visibility.", Availability: "Coming soon"}
+	case TargetOpenCode:
+		return Target{ID: id, Title: "OpenCode", Description: "Listed for roadmap visibility.", Availability: "Coming soon"}
+	case TargetCodex:
+		return Target{ID: id, Title: "Codex", Description: "Listed for roadmap visibility.", Availability: "Coming soon"}
+	case TargetAntigravity:
+		return Target{ID: id, Title: "Antigravity", Description: "Listed for roadmap visibility.", Availability: "Coming soon"}
+	default:
+		return Target{ID: id, Title: string(id), Description: "Listed for roadmap visibility.", Availability: "Coming soon"}
 	}
 }
 
@@ -77,12 +115,16 @@ func ResolveInstallTarget(target TargetID) (Target, error) {
 	if strings.TrimSpace(string(selected)) == "" {
 		selected = DefaultInstallTarget()
 	}
+	available := make([]string, 0, len(DefaultTargets()))
 	for _, candidate := range DefaultTargets() {
+		if candidate.Available {
+			available = append(available, string(candidate.ID))
+		}
 		if candidate.ID != selected {
 			continue
 		}
 		if !candidate.Available {
-			return Target{}, fmt.Errorf("target %q is %s; Pi remains the supported default and keeps the Pi-native Lore extensions path while Pi MCP stays disabled by default", selected, candidate.Availability)
+			return Target{}, fmt.Errorf("target %q is %s; supported targets: %s", selected, candidate.Availability, strings.Join(available, ", "))
 		}
 		return candidate, nil
 	}
@@ -103,7 +145,7 @@ func FormatTargetSelection(targets []Target) string {
 		}
 		fmt.Fprintf(&b, "- %s: %s (%s)\n", label, target.Description, target.Availability)
 	}
-	b.WriteString("\nOnly Pi is selectable in this slice. Pi MCP remains explicitly disabled by default.")
+	b.WriteString("\nPi remains the default recommended path. Pi MCP stays disabled by default while Antigravity MCP is optional.")
 	return b.String()
 }
 
