@@ -1,9 +1,11 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -733,6 +735,42 @@ func TestLoginUsageDescribesPasswordFirstCompatibilityAndStdin(t *testing.T) {
 
 func TestInstallCommandRunsPiInstallAndPrintsSummary(t *testing.T) {
 	homeDir, piAgentDir := setIsolatedPiHome(t)
+	layout := install.ResolvePiLayout(homeDir)
+	legacyDelegationPath := filepath.Join(piAgentDir, "extensions", "lore-delegation.ts")
+	if err := os.MkdirAll(filepath.Dir(legacyDelegationPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll legacy delegation dir: %v", err)
+	}
+	if err := os.MkdirAll(layout.ManagedAgentsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll managed agents dir: %v", err)
+	}
+	if err := os.WriteFile(legacyDelegationPath, []byte("legacy delegation"), 0o600); err != nil {
+		t.Fatalf("WriteFile legacy delegation: %v", err)
+	}
+	trackedManagedOverlay := filepath.Join(layout.ManagedAgentsDir, "lore-managed-lore-worker.md")
+	if err := os.WriteFile(trackedManagedOverlay, []byte("old managed worker"), 0o600); err != nil {
+		t.Fatalf("WriteFile tracked managed overlay: %v", err)
+	}
+	staleManagedOverlay := filepath.Join(layout.ManagedAgentsDir, "lore-managed-stale-agent.md")
+	if err := os.WriteFile(staleManagedOverlay, []byte("stale managed overlay"), 0o600); err != nil {
+		t.Fatalf("WriteFile stale managed overlay: %v", err)
+	}
+	conflictingUserOverlay := filepath.Join(layout.ManagedAgentsDir, "lore-managed-sdd-archive.md")
+	if err := os.WriteFile(conflictingUserOverlay, []byte("user-owned conflicting overlay"), 0o600); err != nil {
+		t.Fatalf("WriteFile conflicting user overlay: %v", err)
+	}
+	manifestBytes, err := json.MarshalIndent(install.Manifest{
+		SchemaVersion: install.PortableManifestSchemaVersion,
+		ManagedAgentOverlays: []install.ManagedAgentOverlayRecord{
+			{AgentName: "lore-worker", Path: trackedManagedOverlay, ContentHash: "tracked"},
+			{AgentName: "stale-agent", Path: staleManagedOverlay, ContentHash: "stale"},
+		},
+	}, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent manifest: %v", err)
+	}
+	if err := os.WriteFile(layout.ManifestPath, append(manifestBytes, '\n'), 0o600); err != nil {
+		t.Fatalf("WriteFile manifest: %v", err)
+	}
 	store := &fakeStore{path: "/tmp/lore/config/config.json", loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token"}}
 	client := &fakeClient{subject: httpclient.Subject{UserID: "user-1", Kind: "user"}}
 	app, stdout, stderr := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
@@ -746,11 +784,20 @@ func TestInstallCommandRunsPiInstallAndPrintsSummary(t *testing.T) {
 	if _, err := os.Stat(manifestPath); err != nil {
 		t.Fatalf("manifest stat err = %v, want manifest created in isolated PI_CODING_AGENT_DIR=%q (home=%q)", err, piAgentDir, homeDir)
 	}
+	if _, err := os.Stat(legacyDelegationPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("legacy delegation stat err = %v, want cleanup after install", err)
+	}
+	if _, err := os.Stat(staleManagedOverlay); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stale managed overlay stat err = %v, want cleanup after install", err)
+	}
 	out := stdout.String()
-	for _, want := range []string{"Lore install", "[OK] healthz", "[OK] install", "created=4", "manifest", manifestPath} {
+	for _, want := range []string{"Lore install", "[OK] healthz", "[OK] install", "runtime=pi-remote-package", "remote_package=git:github.com/alferio94/lore-pi-subagents", "managed_local_files=3", "project_agents=disabled(default-lore-managed)", "created=11", "updated=1", "deleted=2", "conflicted=1", "managed_action=update:agents/lore-managed-lore-worker.md", "managed_action=delete:agents/lore-managed-stale-agent.md", "managed_action=delete:extensions/lore-delegation.ts", "managed_action=conflict:agents/lore-managed-sdd-archive.md", "manifest", manifestPath} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("stdout = %q, want substring %q", out, want)
 		}
+	}
+	if strings.Contains(out, "managed_action=create:extensions/lore-delegation.ts") {
+		t.Fatalf("stdout = %q, want no delegation regeneration action", out)
 	}
 	assertNoTokenLeak(t, out, stderr.String(), "secret-token")
 }
@@ -857,7 +904,7 @@ func TestInstallCommandDryRunReportsPlanWithoutMutation(t *testing.T) {
 	}
 	out := stdout.String()
 	lowerOut := strings.ToLower(out)
-	for _, want := range []string{"dry-run", "backup", "manifest=", "managed_backup_root=", "full_backup_manifest=", "existing_pi_kind=directory"} {
+	for _, want := range []string{"dry-run", "backup", "runtime=pi-remote-package", "remote_package=git:github.com/alferio94/lore-pi-subagents", "managed_local_files=3", "manifest=", "managed_backup_root=", "full_backup_manifest=", "existing_pi_kind=directory"} {
 		if !strings.Contains(lowerOut, strings.ToLower(want)) {
 			t.Fatalf("stdout = %q, want dry-run plan detail containing %q", out, want)
 		}
@@ -870,6 +917,9 @@ func TestInstallCommandDryRunSurfacesManagedFileActions(t *testing.T) {
 	layout := install.ResolvePiLayout(homeDir)
 	if err := os.MkdirAll(layout.ExtensionsDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll extensions: %v", err)
+	}
+	if err := os.MkdirAll(layout.ManagedAgentsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll managed agents dir: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(homeDir, ".pi", "legacy.txt"), []byte("keep-me"), 0o600); err != nil {
 		t.Fatalf("WriteFile legacyPath: %v", err)
@@ -888,6 +938,31 @@ func TestInstallCommandDryRunSurfacesManagedFileActions(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(layout.ExtensionsDir, "lore-delegation.ts"), []byte("legacy-delegation"), 0o600); err != nil {
 		t.Fatalf("WriteFile updated managed file: %v", err)
 	}
+	trackedManagedOverlay := filepath.Join(layout.ManagedAgentsDir, "lore-managed-lore-worker.md")
+	if err := os.WriteFile(trackedManagedOverlay, []byte("old managed worker"), 0o600); err != nil {
+		t.Fatalf("WriteFile tracked managed overlay: %v", err)
+	}
+	staleManagedOverlay := filepath.Join(layout.ManagedAgentsDir, "lore-managed-stale-agent.md")
+	if err := os.WriteFile(staleManagedOverlay, []byte("stale managed overlay"), 0o600); err != nil {
+		t.Fatalf("WriteFile stale managed overlay: %v", err)
+	}
+	conflictingUserOverlay := filepath.Join(layout.ManagedAgentsDir, "lore-managed-sdd-archive.md")
+	if err := os.WriteFile(conflictingUserOverlay, []byte("user-owned conflicting overlay"), 0o600); err != nil {
+		t.Fatalf("WriteFile conflicting user overlay: %v", err)
+	}
+	manifestBytes, err := json.MarshalIndent(install.Manifest{
+		SchemaVersion: install.PortableManifestSchemaVersion,
+		ManagedAgentOverlays: []install.ManagedAgentOverlayRecord{
+			{AgentName: "lore-worker", Path: trackedManagedOverlay, ContentHash: "tracked"},
+			{AgentName: "stale-agent", Path: staleManagedOverlay, ContentHash: "stale"},
+		},
+	}, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent manifest: %v", err)
+	}
+	if err := os.WriteFile(layout.ManifestPath, append(manifestBytes, '\n'), 0o600); err != nil {
+		t.Fatalf("WriteFile manifest: %v", err)
+	}
 
 	store := &fakeStore{path: filepath.Join(configDir, "config.json"), loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token=plan-actions"}}
 	client := &fakeClient{subject: httpclient.Subject{UserID: "user-1", Kind: "user"}}
@@ -904,15 +979,19 @@ func TestInstallCommandDryRunSurfacesManagedFileActions(t *testing.T) {
 	if _, err := os.Stat(layout.SettingsPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("settings stat err = %v, want no created settings in dry-run", err)
 	}
-	if _, err := os.Stat(filepath.Join(piAgentDir, "lore-install.json")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("manifest stat err = %v, want not exist after dry-run", err)
-	}
 	out := stdout.String()
 	for _, want := range []string{
+		"runtime=pi-remote-package",
+		"remote_package=git:github.com/alferio94/lore-pi-subagents",
+		"managed_local_files=3",
+		"project_agents=disabled(default-lore-managed)",
 		"managed_action=unchanged:extensions/lore-memory.ts",
-		"managed_action=update:extensions/lore-delegation.ts",
+		"managed_action=delete:extensions/lore-delegation.ts",
 		"managed_action=create:extensions/lore-footer.ts",
 		"managed_action=create:settings.json",
+		"managed_action=update:agents/lore-managed-lore-worker.md",
+		"managed_action=delete:agents/lore-managed-stale-agent.md",
+		"managed_action=conflict:agents/lore-managed-sdd-archive.md",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("stdout = %q, want action-level dry-run detail %q", out, want)
@@ -1167,6 +1246,135 @@ func TestAPIMCPCallReportsJSONRPCError(t *testing.T) {
 	}
 }
 
+func TestNewConfiguresProductionDefaults(t *testing.T) {
+	stdout := &strings.Builder{}
+	stderr := &strings.Builder{}
+	app := New(t.TempDir(), stdout, stderr, version.Info{Version: "v1.2.3"})
+
+	if app.Stdout != stdout || app.Stderr != stderr {
+		t.Fatal("New did not preserve provided stdout/stderr writers")
+	}
+	if app.Store == nil || app.Auth == nil || app.ClientFactory == nil || app.Stdin == nil || app.LookPath == nil || app.UserHomeDir == nil || app.ExecutablePath == nil {
+		t.Fatalf("New returned incomplete app defaults: %+v", app)
+	}
+	if got := app.BuildInfo.Version; got != "v1.2.3" {
+		t.Fatalf("BuildInfo.Version = %q, want v1.2.3", got)
+	}
+}
+
+func TestComponentFlagParsesRepeatedCommaSeparatedValues(t *testing.T) {
+	var flag componentFlag
+	if err := flag.Set("core-pack, pi-extensions"); err != nil {
+		t.Fatalf("Set comma-separated error = %v", err)
+	}
+	if err := flag.Set("lore-server-mcp"); err != nil {
+		t.Fatalf("Set repeated error = %v", err)
+	}
+	if got, want := flag.String(), "core-pack,pi-extensions,lore-server-mcp"; got != want {
+		t.Fatalf("String() = %q, want %q", got, want)
+	}
+	components := flag.ComponentIDs()
+	if got, want := len(components), 3; got != want {
+		t.Fatalf("len(ComponentIDs()) = %d, want %d", got, want)
+	}
+	if components[0] != install.ComponentCorePack || components[1] != install.ComponentPiExtensions || components[2] != install.ComponentLoreServerMCP {
+		t.Fatalf("ComponentIDs() = %v, want parsed component ids", components)
+	}
+	components[0] = "mutated"
+	if got := flag.ComponentIDs()[0]; got != install.ComponentCorePack {
+		t.Fatalf("ComponentIDs() exposed mutable backing store, got %q", got)
+	}
+	if err := flag.Set(" , "); err == nil || !strings.Contains(err.Error(), "component value cannot be empty") {
+		t.Fatalf("Set empty error = %v, want empty component rejection", err)
+	}
+}
+
+func TestMCPProxyCommandRequiresExplicitBridgeSelectionAndSavedAuth(t *testing.T) {
+	store := &fakeStore{path: "/tmp/lore/config.json", loadErr: config.ErrNotFound}
+	app, stdout, stderr := newTestApp(store, nil)
+
+	if exitCode := app.Run([]string{"mcp"}); exitCode != 1 {
+		t.Fatalf("mcp exitCode = %d, want 1 stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+	if got := stderr.String(); !strings.Contains(got, "Usage: lore mcp <proxy>") || !strings.Contains(got, "opt-in") {
+		t.Fatalf("stderr = %q, want explicit opt-in bridge selection usage", got)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if exitCode := app.Run([]string{"mcp", "proxy", "unexpected"}); exitCode != 1 {
+		t.Fatalf("mcp proxy unexpected exitCode = %d, want 1 stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+	if got := stderr.String(); !strings.Contains(got, "Usage: lore mcp proxy") || !strings.Contains(got, "auth-safe") || !strings.Contains(got, "default Pi install path") {
+		t.Fatalf("stderr = %q, want proxy usage guidance", got)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if exitCode := app.Run([]string{"mcp", "proxy"}); exitCode != 1 {
+		t.Fatalf("mcp proxy exitCode = %d, want 1 stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+	if got := stderr.String(); !strings.Contains(got, "mcp proxy failed: no saved login state") || !strings.Contains(got, "password login") || !strings.Contains(got, "--token") {
+		t.Fatalf("stderr = %q, want saved-auth remediation", got)
+	}
+}
+
+func TestMCPProxyCommandUsesSavedAuthAndFramesJSONRPC(t *testing.T) {
+	store := &fakeStore{path: "/tmp/lore/config.json", loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token"}}
+	client := &fakeClient{mcpJSONRPCResult: httpclient.RequestJSONResult{StatusCode: 200, RequestID: "req-proxy", Data: json.RawMessage(`{"protocolVersion":"2025-03-26"}`)}}
+	app, stdout, stderr := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
+	app.Stdin = strings.NewReader(testMCPFrame(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"tester"}}}`))
+
+	if exitCode := app.Run([]string{"mcp", "proxy"}); exitCode != 0 {
+		t.Fatalf("mcp proxy exitCode = %d, want 0 stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+	if client.mcpJSONRPCToken != "secret-token" || client.mcpJSONRPCMethod != "initialize" || string(client.mcpJSONRPCParams) != `{"clientInfo":{"name":"tester"}}` {
+		t.Fatalf("MCPJSONRPC token/method/params = %q/%q/%s", client.mcpJSONRPCToken, client.mcpJSONRPCMethod, client.mcpJSONRPCParams)
+	}
+	payload := readTestMCPFrame(t, stdout.String())
+	var envelope struct {
+		ID     json.RawMessage `json:"id"`
+		Result json.RawMessage `json:"result"`
+	}
+	if err := json.Unmarshal(payload, &envelope); err != nil {
+		t.Fatalf("json.Unmarshal(payload): %v", err)
+	}
+	if string(envelope.ID) != `1` || string(envelope.Result) != `{"protocolVersion":"2025-03-26"}` {
+		t.Fatalf("proxy response = %s", payload)
+	}
+	assertNoTokenLeak(t, stdout.String(), stderr.String(), "secret-token")
+}
+
+func testMCPFrame(payload string) string {
+	return fmt.Sprintf("Content-Length: %d\r\n\r\n%s", len(payload), payload)
+}
+
+func readTestMCPFrame(t *testing.T, framed string) []byte {
+	t.Helper()
+	reader := bufio.NewReader(strings.NewReader(framed))
+	contentLength := 0
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			t.Fatalf("ReadString() error = %v", err)
+		}
+		trimmed := strings.TrimRight(line, "\r\n")
+		if trimmed == "" {
+			break
+		}
+		if strings.HasPrefix(trimmed, "Content-Length: ") {
+			if _, err := fmt.Sscanf(trimmed, "Content-Length: %d", &contentLength); err != nil {
+				t.Fatalf("Sscanf(Content-Length): %v", err)
+			}
+		}
+	}
+	payload := make([]byte, contentLength)
+	if _, err := reader.Read(payload); err != nil {
+		t.Fatalf("Read(payload) error = %v", err)
+	}
+	return payload
+}
+
 func setIsolatedPiHome(t *testing.T) (homeDir string, piAgentDir string) {
 	t.Helper()
 	homeDir = t.TempDir()
@@ -1390,6 +1598,11 @@ type fakeClient struct {
 	mcpArgs           json.RawMessage
 	mcpResult         httpclient.RequestJSONResult
 	mcpErr            error
+	mcpJSONRPCToken   string
+	mcpJSONRPCMethod  string
+	mcpJSONRPCParams  json.RawMessage
+	mcpJSONRPCResult  httpclient.RequestJSONResult
+	mcpJSONRPCErr     error
 }
 
 func (c *fakeClient) Health(_ context.Context) error { return c.healthErr }
@@ -1438,6 +1651,16 @@ func (c *fakeClient) RequestJSON(_ context.Context, method, path, token string, 
 		return httpclient.RequestJSONResult{}, c.requestJSONErr
 	}
 	return c.requestJSONResult, nil
+}
+
+func (c *fakeClient) MCPJSONRPC(_ context.Context, token, method string, params json.RawMessage) (httpclient.RequestJSONResult, error) {
+	c.mcpJSONRPCToken = token
+	c.mcpJSONRPCMethod = method
+	c.mcpJSONRPCParams = params
+	if c.mcpJSONRPCErr != nil {
+		return httpclient.RequestJSONResult{}, c.mcpJSONRPCErr
+	}
+	return c.mcpJSONRPCResult, nil
 }
 
 func (c *fakeClient) MCPCall(_ context.Context, token, toolName string, arguments json.RawMessage) (httpclient.RequestJSONResult, error) {

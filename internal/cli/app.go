@@ -13,6 +13,8 @@ import (
 	"github.com/alferio94/lore-cli/internal/auth"
 	"github.com/alferio94/lore-cli/internal/config"
 	"github.com/alferio94/lore-cli/internal/httpclient"
+	"github.com/alferio94/lore-cli/internal/install"
+	"github.com/alferio94/lore-cli/internal/mcp"
 	"github.com/alferio94/lore-cli/internal/output"
 	cliupdate "github.com/alferio94/lore-cli/internal/update"
 	"github.com/alferio94/lore-cli/internal/version"
@@ -155,6 +157,8 @@ func (a *App) Run(args []string) int {
 		return a.runUpdate(args[1:])
 	case "api":
 		return a.runAPI(actions, args[1:])
+	case "mcp":
+		return a.runMCP(args[1:])
 	case "remember":
 		return a.parseRemember(args[1:])
 	case "recall":
@@ -298,10 +302,16 @@ func (a *App) runInstall(_ InteractiveActions, args []string) int {
 	fs := newFlagSet("install", a.Stderr)
 	dryRun := fs.Bool("dry-run", false, "Show the Pi install plan without mutating ~/.pi")
 	yes := fs.Bool("yes", false, "Accept the safe default full-backup behavior without prompting")
+	target := fs.String("target", string(install.DefaultInstallTarget()), "Install target (Pi is the only selectable target in this slice)")
+	var components componentFlag
+	fs.Var(&components, "component", "Optional component override; repeat or use a comma-separated list (Pi supports core-pack and pi-extensions only)")
 	fs.Usage = func() {
-		fmt.Fprintln(a.Stderr, "Usage: lore install [--dry-run] [--yes]")
+		fmt.Fprintln(a.Stderr, "Usage: lore install [--dry-run] [--yes] [--target pi] [--component <id>]")
 		fmt.Fprintln(a.Stderr, "Install the Pi-first managed runtime using saved Lore login state.")
+		fmt.Fprintln(a.Stderr, "This slice installs the portable Lore agent pack for Pi with the default core-pack plus pi-extensions components.")
 		fmt.Fprintln(a.Stderr, "Healthy saved OS keychain-backed login metadata is reused automatically after password-first login or a compatibility token via --token; Claude Code, OpenCode, Codex, and Antigravity remain Coming soon.")
+		fmt.Fprintln(a.Stderr, "Pi keeps the native Lore extensions path by default; Pi MCP remains disabled unless a later slice explicitly changes that contract.")
+		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
 		return 1
@@ -311,7 +321,7 @@ func (a *App) runInstall(_ InteractiveActions, args []string) int {
 		return 1
 	}
 
-	report := a.installActionWithOptions(context.Background(), installCommandOptions{DryRun: *dryRun, Yes: *yes})
+	report := a.installActionWithOptions(context.Background(), installCommandOptions{DryRun: *dryRun, Yes: *yes, Target: install.TargetID(strings.TrimSpace(*target)), Components: components.ComponentIDs()})
 	fmt.Fprint(a.Stdout, output.RenderChecks(report.Title, report.Checks))
 	return report.ExitCode
 }
@@ -337,6 +347,51 @@ func (a *App) runUpdate(args []string) int {
 	report := a.updateActionWithOptions(context.Background(), updateCommandOptions{DryRun: *dryRun, Yes: *yes})
 	fmt.Fprint(a.Stdout, output.RenderChecks(report.Title, report.Checks))
 	return report.ExitCode
+}
+
+func (a *App) runMCP(args []string) int {
+	if len(args) == 0 {
+		fmt.Fprintln(a.Stderr, "Usage: lore mcp <proxy>")
+		fmt.Fprintln(a.Stderr, "Use the opt-in local Lore Server MCP bridge; it is not part of the default Pi install path.")
+		return 1
+	}
+
+	switch args[0] {
+	case "proxy":
+		fs := newFlagSet("mcp proxy", a.Stderr)
+		fs.Usage = func() {
+			fmt.Fprintln(a.Stderr, "Usage: lore mcp proxy")
+			fmt.Fprintln(a.Stderr, "Start the local auth-safe Lore Server MCP stdio bridge using saved Lore login state.")
+			fmt.Fprintln(a.Stderr, "This opt-in bridge is intentionally separate from the default Pi install path.")
+		}
+		if err := fs.Parse(args[1:]); err != nil {
+			return 1
+		}
+		if fs.NArg() != 0 {
+			fs.Usage()
+			return 1
+		}
+		client, session, err := a.loadAuthenticatedClient()
+		if err != nil {
+			fmt.Fprintf(a.Stderr, "mcp proxy failed: %s\n", err)
+			return 1
+		}
+		if err := mcp.Serve(context.Background(), a.Stdin, a.Stdout, mcp.UpstreamFunc(func(ctx context.Context, method string, params json.RawMessage) (json.RawMessage, error) {
+			result, err := client.MCPJSONRPC(ctx, session.Token, method, params)
+			if err != nil {
+				return nil, err
+			}
+			return result.Data, nil
+		})); err != nil {
+			fmt.Fprintf(a.Stderr, "mcp proxy failed: %v\n", err)
+			return 1
+		}
+		return 0
+	default:
+		fmt.Fprintln(a.Stderr, "Usage: lore mcp <proxy>")
+		fmt.Fprintln(a.Stderr, "Use the opt-in local Lore Server MCP bridge; it is not part of the default Pi install path.")
+		return 1
+	}
 }
 
 func (a *App) runAPI(_ InteractiveActions, args []string) int {
@@ -460,6 +515,34 @@ func (a *App) runVersion(args []string) int {
 
 	fmt.Fprintln(a.Stdout, info.String())
 	return 0
+}
+
+type componentFlag []string
+
+func (f *componentFlag) String() string {
+	if f == nil {
+		return ""
+	}
+	return strings.Join(*f, ",")
+}
+
+func (f *componentFlag) Set(value string) error {
+	for _, raw := range strings.Split(value, ",") {
+		component := strings.TrimSpace(raw)
+		if component == "" {
+			return fmt.Errorf("component value cannot be empty")
+		}
+		*f = append(*f, component)
+	}
+	return nil
+}
+
+func (f componentFlag) ComponentIDs() []install.ComponentID {
+	components := make([]install.ComponentID, 0, len(f))
+	for _, component := range f {
+		components = append(components, install.ComponentID(component))
+	}
+	return components
 }
 
 func newFlagSet(name string, stderr io.Writer) *flag.FlagSet {

@@ -163,20 +163,71 @@ func (c *HTTPClient) RequestJSON(ctx context.Context, method, path, token string
 	return RequestJSONResult{StatusCode: res.StatusCode, RequestID: strings.TrimSpace(res.Header.Get("X-Request-Id")), Data: data}, nil
 }
 
+// MCPJSONRPC performs an authenticated JSON-RPC request against /v1/mcp.
+func (c *HTTPClient) MCPJSONRPC(ctx context.Context, token, method string, params json.RawMessage) (RequestJSONResult, error) {
+	return c.mcpRequest(ctx, token, "lore-cli-mcp", method, params)
+}
+
 // MCPCall performs an allowlisted JSON-RPC tools/call request against /v1/mcp.
 func (c *HTTPClient) MCPCall(ctx context.Context, token, toolName string, arguments json.RawMessage) (RequestJSONResult, error) {
 	toolName, args, err := ValidateBrokerMCPCall(toolName, arguments)
 	if err != nil {
 		return RequestJSONResult{}, err
 	}
+	params, err := json.Marshal(map[string]any{
+		"name":      toolName,
+		"arguments": json.RawMessage(args),
+	})
+	if err != nil {
+		return RequestJSONResult{}, fmt.Errorf("encode MCP request params: %w", err)
+	}
+	return c.mcpRequest(ctx, token, "lore-cli-mcp-call", "tools/call", params)
+}
+
+// ValidateBrokerMCPCall normalizes and validates hidden MCP broker inputs.
+func ValidateBrokerMCPCall(toolName string, arguments json.RawMessage) (string, json.RawMessage, error) {
+	trimmedTool := strings.TrimSpace(toolName)
+	if trimmedTool == "" {
+		return "", nil, errors.New("tool is required")
+	}
+	if !isBrokerMCPToolAllowed(trimmedTool) {
+		return "", nil, errors.New("tool is not allowlisted for lore api mcp-call")
+	}
+	trimmedArgs := bytes.TrimSpace(arguments)
+	if len(trimmedArgs) == 0 {
+		trimmedArgs = json.RawMessage(`{}`)
+	}
+	var decoded any
+	if err := json.Unmarshal(trimmedArgs, &decoded); err != nil {
+		return "", nil, fmt.Errorf("args-json must be valid JSON: %w", err)
+	}
+	if _, ok := decoded.(map[string]any); !ok {
+		return "", nil, errors.New("args-json must decode to a JSON object")
+	}
+	return trimmedTool, trimmedArgs, nil
+}
+
+func (c *HTTPClient) mcpRequest(ctx context.Context, token, requestID, method string, params json.RawMessage) (RequestJSONResult, error) {
+	trimmedMethod := strings.TrimSpace(method)
+	if trimmedMethod == "" {
+		return RequestJSONResult{}, errors.New("mcp method is required")
+	}
+	trimmedParams := bytes.TrimSpace(params)
+	if len(trimmedParams) == 0 {
+		trimmedParams = json.RawMessage(`{}`)
+	}
+	var decoded any
+	if err := json.Unmarshal(trimmedParams, &decoded); err != nil {
+		return RequestJSONResult{}, fmt.Errorf("mcp params must be valid JSON: %w", err)
+	}
+	if _, ok := decoded.(map[string]any); !ok {
+		return RequestJSONResult{}, errors.New("mcp params must decode to a JSON object")
+	}
 	payload, err := json.Marshal(map[string]any{
 		"jsonrpc": "2.0",
-		"id":      "lore-cli-mcp-call",
-		"method":  "tools/call",
-		"params": map[string]any{
-			"name":      toolName,
-			"arguments": json.RawMessage(args),
-		},
+		"id":      requestID,
+		"method":  trimmedMethod,
+		"params":  json.RawMessage(trimmedParams),
 	})
 	if err != nil {
 		return RequestJSONResult{}, fmt.Errorf("encode MCP request: %w", err)
@@ -205,42 +256,19 @@ func (c *HTTPClient) MCPCall(ctx context.Context, token, toolName string, argume
 	if err := json.Unmarshal(responsePayload, &envelope); err != nil {
 		return RequestJSONResult{}, fmt.Errorf("decode MCP response: %w", err)
 	}
-	requestID := strings.TrimSpace(res.Header.Get("X-Request-Id"))
+	requestIDHeader := strings.TrimSpace(res.Header.Get("X-Request-Id"))
 	if envelope.Error != nil {
 		code := fmt.Sprint(envelope.Error.Code)
 		if code == "<nil>" || strings.TrimSpace(code) == "" {
 			code = "mcp_error"
 		}
-		return RequestJSONResult{}, &APIError{StatusCode: res.StatusCode, Code: code, Message: envelope.Error.Message, RequestID: requestID}
+		return RequestJSONResult{}, &APIError{StatusCode: res.StatusCode, Code: code, Message: envelope.Error.Message, RequestID: requestIDHeader}
 	}
 	result := envelope.Result
 	if len(bytes.TrimSpace(result)) == 0 {
 		result = json.RawMessage("null")
 	}
-	return RequestJSONResult{StatusCode: res.StatusCode, RequestID: requestID, Data: result}, nil
-}
-
-// ValidateBrokerMCPCall normalizes and validates hidden MCP broker inputs.
-func ValidateBrokerMCPCall(toolName string, arguments json.RawMessage) (string, json.RawMessage, error) {
-	trimmedTool := strings.TrimSpace(toolName)
-	if trimmedTool == "" {
-		return "", nil, errors.New("tool is required")
-	}
-	if !isBrokerMCPToolAllowed(trimmedTool) {
-		return "", nil, errors.New("tool is not allowlisted for lore api mcp-call")
-	}
-	trimmedArgs := bytes.TrimSpace(arguments)
-	if len(trimmedArgs) == 0 {
-		trimmedArgs = json.RawMessage(`{}`)
-	}
-	var decoded any
-	if err := json.Unmarshal(trimmedArgs, &decoded); err != nil {
-		return "", nil, fmt.Errorf("args-json must be valid JSON: %w", err)
-	}
-	if _, ok := decoded.(map[string]any); !ok {
-		return "", nil, errors.New("args-json must decode to a JSON object")
-	}
-	return trimmedTool, trimmedArgs, nil
+	return RequestJSONResult{StatusCode: res.StatusCode, RequestID: requestIDHeader, Data: result}, nil
 }
 
 func isBrokerMCPToolAllowed(toolName string) bool {

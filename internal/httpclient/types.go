@@ -63,6 +63,7 @@ type Client interface {
 	CreateMemory(ctx context.Context, token string, req CreateMemoryRequest) (Memory, error)
 	ListMemories(ctx context.Context, token string, filter ListMemoriesFilter) ([]Memory, error)
 	RequestJSON(ctx context.Context, method, path, token string, body json.RawMessage) (RequestJSONResult, error)
+	MCPJSONRPC(ctx context.Context, token, method string, params json.RawMessage) (RequestJSONResult, error)
 	MCPCall(ctx context.Context, token, toolName string, arguments json.RawMessage) (RequestJSONResult, error)
 }
 

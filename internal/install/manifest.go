@@ -9,7 +9,36 @@ import (
 	"time"
 )
 
+type ManagedFileRecord struct {
+	Path        string      `json:"path"`
+	Component   ComponentID `json:"component"`
+	MergeMode   MergeMode   `json:"merge_mode"`
+	ContentHash string      `json:"content_hash"`
+}
+
+type ManagedAgentOverlayRecord struct {
+	AgentName   string `json:"agent_name"`
+	Path        string `json:"path"`
+	ContentHash string `json:"content_hash"`
+}
+
 type Manifest struct {
+	SchemaVersion        string                      `json:"schema_version"`
+	Target               TargetID                    `json:"target"`
+	AuthMode             string                      `json:"auth_mode"`
+	ServerURL            string                      `json:"server_url"`
+	LoreBinary           string                      `json:"lore_binary_path"`
+	LoreConfigDir        string                      `json:"lore_config_dir"`
+	Components           []ComponentID               `json:"components,omitempty"`
+	ManagedFiles         []ManagedFileRecord         `json:"managed_files"`
+	ManagedAgentOverlays []ManagedAgentOverlayRecord `json:"managed_agent_overlays,omitempty"`
+	BackupRoot           string                      `json:"backup_root"`
+	InstalledAt          string                      `json:"installed_at"`
+	CLIVersion           string                      `json:"lore_cli_version"`
+	FullPiBackup         *FullPiBackupResult         `json:"full_pi_backup,omitempty"`
+}
+
+type legacyManifest struct {
 	SchemaVersion string              `json:"schema_version"`
 	Target        string              `json:"target"`
 	AuthMode      string              `json:"auth_mode"`
@@ -28,6 +57,19 @@ func LoadManifest(path string) (Manifest, error) {
 	if err != nil {
 		return Manifest{}, fmt.Errorf("read manifest: %w", err)
 	}
+	var raw struct {
+		SchemaVersion string `json:"schema_version"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return Manifest{}, fmt.Errorf("decode manifest: %w", err)
+	}
+	if raw.SchemaVersion == LegacyPiManifestSchemaVersion {
+		var legacy legacyManifest
+		if err := json.Unmarshal(data, &legacy); err != nil {
+			return Manifest{}, fmt.Errorf("decode manifest: %w", err)
+		}
+		return upgradeLegacyManifest(legacy), nil
+	}
 	var manifest Manifest
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		return Manifest{}, fmt.Errorf("decode manifest: %w", err)
@@ -43,11 +85,47 @@ func marshalManifest(manifest Manifest) ([]byte, error) {
 	return append(data, '\n'), nil
 }
 
-func (m Manifest) Validate(layout PiLayout) error {
-	if m.SchemaVersion != "1" {
-		return fmt.Errorf("schema_version = %q, want %q", m.SchemaVersion, "1")
+func upgradeLegacyManifest(legacy legacyManifest) Manifest {
+	components := []ComponentID{ComponentCorePack, ComponentPiExtensions}
+	records := make([]ManagedFileRecord, 0, len(legacy.ManagedFiles))
+	for _, path := range legacy.ManagedFiles {
+		if filepath.Base(path) == filepath.Base(legacyPiDelegationRelativePath) {
+			continue
+		}
+		component := ComponentPiExtensions
+		mergeMode := MergeModeReplace
+		if filepath.Base(path) == "settings.json" {
+			component = ComponentCorePack
+			mergeMode = MergeModeAdditiveJSON
+		}
+		records = append(records, ManagedFileRecord{
+			Path:        path,
+			Component:   component,
+			MergeMode:   mergeMode,
+			ContentHash: contentHash([]byte(path)),
+		})
 	}
-	if m.Target != string(TargetPi) {
+	return Manifest{
+		SchemaVersion: PortableManifestSchemaVersion,
+		Target:        TargetID(strings.TrimSpace(legacy.Target)),
+		AuthMode:      legacy.AuthMode,
+		ServerURL:     legacy.ServerURL,
+		LoreBinary:    legacy.LoreBinary,
+		LoreConfigDir: legacy.LoreConfigDir,
+		Components:    components,
+		ManagedFiles:  records,
+		BackupRoot:    legacy.BackupRoot,
+		InstalledAt:   legacy.InstalledAt,
+		CLIVersion:    legacy.CLIVersion,
+		FullPiBackup:  legacy.FullPiBackup,
+	}
+}
+
+func (m Manifest) Validate(layout PiLayout) error {
+	if m.SchemaVersion != PortableManifestSchemaVersion {
+		return fmt.Errorf("schema_version = %q, want %q", m.SchemaVersion, PortableManifestSchemaVersion)
+	}
+	if m.Target != TargetPi {
 		return fmt.Errorf("target = %q, want %q", m.Target, TargetPi)
 	}
 	if m.AuthMode != "cli-request" {
@@ -62,12 +140,25 @@ func (m Manifest) Validate(layout PiLayout) error {
 	if strings.TrimSpace(m.LoreConfigDir) == "" {
 		return fmt.Errorf("lore_config_dir is required")
 	}
+	if len(m.Components) == 0 {
+		return fmt.Errorf("components are required")
+	}
 	if len(m.ManagedFiles) != len(layout.ManagedFiles) {
 		return fmt.Errorf("managed_files length = %d, want %d", len(m.ManagedFiles), len(layout.ManagedFiles))
 	}
 	for i, want := range layout.ManagedFiles {
-		if got := m.ManagedFiles[i]; got != want {
-			return fmt.Errorf("managed_files[%d] = %q, want %q", i, got, want)
+		got := m.ManagedFiles[i]
+		if filepath.Clean(got.Path) != filepath.Clean(want) {
+			return fmt.Errorf("managed_files[%d].path = %q, want %q", i, got.Path, want)
+		}
+		if got.Component == "" {
+			return fmt.Errorf("managed_files[%d].component is required", i)
+		}
+		if got.MergeMode == "" {
+			return fmt.Errorf("managed_files[%d].merge_mode is required", i)
+		}
+		if strings.TrimSpace(got.ContentHash) == "" && m.SchemaVersion == PortableManifestSchemaVersion {
+			return fmt.Errorf("managed_files[%d].content_hash is required", i)
 		}
 	}
 	backupPrefix := filepath.Join(layout.AgentDir, "backups") + string(os.PathSeparator)
@@ -76,6 +167,17 @@ func (m Manifest) Validate(layout PiLayout) error {
 	}
 	if _, err := time.Parse(time.RFC3339, m.InstalledAt); err != nil {
 		return fmt.Errorf("installed_at: %w", err)
+	}
+	for i, overlay := range m.ManagedAgentOverlays {
+		if strings.TrimSpace(overlay.AgentName) == "" {
+			return fmt.Errorf("managed_agent_overlays[%d].agent_name is required", i)
+		}
+		if strings.TrimSpace(overlay.Path) == "" {
+			return fmt.Errorf("managed_agent_overlays[%d].path is required", i)
+		}
+		if strings.TrimSpace(overlay.ContentHash) == "" {
+			return fmt.Errorf("managed_agent_overlays[%d].content_hash is required", i)
+		}
 	}
 	if m.FullPiBackup != nil {
 		if filepath.Clean(m.FullPiBackup.SourcePath) != filepath.Clean(layout.PiDir) {

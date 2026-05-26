@@ -1,0 +1,13 @@
+{
+  "name": "alferio",
+  "palette": {
+    "accent": "#8b5cf6",
+    "muted": "#94a3b8",
+    "dim": "#64748b",
+    "warning": "#f59e0b",
+    "success": "#22c55e",
+    "error": "#ef4444",
+    "toolTitle": "#c084fc",
+    "toolOutput": "#cbd5e1"
+  }
+}

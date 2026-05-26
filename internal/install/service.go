@@ -58,14 +58,35 @@ type PreflightResult struct {
 	ConfigPath    string
 }
 
+func DefaultInstallTarget() TargetID {
+	return TargetPi
+}
+
 func DefaultTargets() []Target {
 	return []Target{
-		{ID: TargetPi, Title: "Pi", Description: "Recommended for direct remote Lore access.", Recommended: true, Available: true},
+		{ID: DefaultInstallTarget(), Title: "Pi", Description: "Recommended today; keeps the Pi-native Lore extensions path as the default backend and leaves Pi MCP disabled by default.", Recommended: true, Available: true},
 		{ID: TargetClaudeCode, Title: "Claude Code", Description: "Listed for roadmap visibility.", Availability: "Coming soon"},
 		{ID: TargetOpenCode, Title: "OpenCode", Description: "Listed for roadmap visibility.", Availability: "Coming soon"},
 		{ID: TargetCodex, Title: "Codex", Description: "Listed for roadmap visibility.", Availability: "Coming soon"},
 		{ID: TargetAntigravity, Title: "Antigravity", Description: "Listed for roadmap visibility.", Availability: "Coming soon"},
 	}
+}
+
+func ResolveInstallTarget(target TargetID) (Target, error) {
+	selected := target
+	if strings.TrimSpace(string(selected)) == "" {
+		selected = DefaultInstallTarget()
+	}
+	for _, candidate := range DefaultTargets() {
+		if candidate.ID != selected {
+			continue
+		}
+		if !candidate.Available {
+			return Target{}, fmt.Errorf("target %q is %s; Pi remains the supported default and keeps the Pi-native Lore extensions path while Pi MCP stays disabled by default", selected, candidate.Availability)
+		}
+		return candidate, nil
+	}
+	return Target{}, fmt.Errorf("unknown target %q", selected)
 }
 
 func FormatTargetSelection(targets []Target) string {
@@ -82,7 +103,7 @@ func FormatTargetSelection(targets []Target) string {
 		}
 		fmt.Fprintf(&b, "- %s: %s (%s)\n", label, target.Description, target.Availability)
 	}
-	b.WriteString("\nOnly Pi is selectable in this slice.")
+	b.WriteString("\nOnly Pi is selectable in this slice. Pi MCP remains explicitly disabled by default.")
 	return b.String()
 }
 

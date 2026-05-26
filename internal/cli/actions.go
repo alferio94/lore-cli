@@ -67,8 +67,10 @@ type apiMCPCallOptions struct {
 }
 
 type installCommandOptions struct {
-	DryRun bool
-	Yes    bool
+	DryRun     bool
+	Yes        bool
+	Target     install.TargetID
+	Components []install.ComponentID
 }
 
 type updateCommandOptions struct {
@@ -121,13 +123,15 @@ type InteractiveActions struct {
 // InteractiveActions returns the shared action set used by the CLI and future TUI.
 func (a *App) InteractiveActions() InteractiveActions {
 	return InteractiveActions{
-		Login:            a.loginAction,
-		LoginWithInput:   a.loginActionWithInput,
-		Logout:           a.logoutAction,
-		Status:           a.statusAction,
-		Doctor:           a.doctorAction,
-		Install:          a.installAction,
-		PlanPiInstall:    a.planPiInstallAction,
+		Login:          a.loginAction,
+		LoginWithInput: a.loginActionWithInput,
+		Logout:         a.logoutAction,
+		Status:         a.statusAction,
+		Doctor:         a.doctorAction,
+		Install:        a.installAction,
+		PlanPiInstall: func(ctx context.Context) (install.PiInstallPlan, ActionReport, bool) {
+			return a.planPiInstallAction(ctx, installCommandOptions{})
+		},
 		ExecutePiInstall: a.executePiInstallAction,
 		CheckForUpdate:   a.checkForUpdateAction,
 		Update:           a.updateApplyAction,
@@ -571,7 +575,7 @@ func (a *App) updateActionWithOptions(ctx context.Context, opts updateCommandOpt
 }
 
 func (a *App) installActionWithOptions(ctx context.Context, opts installCommandOptions) ActionReport {
-	plan, report, ok := a.planPiInstallAction(ctx)
+	plan, report, ok := a.planPiInstallAction(ctx, opts)
 	if !ok {
 		return report
 	}
@@ -598,12 +602,19 @@ func (a *App) installActionWithOptions(ctx context.Context, opts installCommandO
 	return execReport
 }
 
-func (a *App) planPiInstallAction(ctx context.Context) (install.PiInstallPlan, ActionReport, bool) {
+func (a *App) planPiInstallAction(ctx context.Context, opts installCommandOptions) (install.PiInstallPlan, ActionReport, bool) {
 	service := install.Service{Store: a.Store, Auth: a.authManager(), ClientFactory: install.ClientFactory(a.ClientFactory)}
 	report := ActionReport{Title: "Lore install"}
 	preflight := service.Preflight(ctx)
 	report.Checks = append(report.Checks, preflight.Checks...)
 	if !preflight.CanContinue {
+		report.ExitCode = 1
+		return install.PiInstallPlan{}, report, false
+	}
+
+	selectedTarget, err := install.ResolveInstallTarget(opts.Target)
+	if err != nil {
+		report.Checks = append(report.Checks, output.Check{Name: "install-target", Status: output.StatusFail, Detail: err.Error(), Action: install.FormatTargetSelection(install.DefaultTargets())})
 		report.ExitCode = 1
 		return install.PiInstallPlan{}, report, false
 	}
@@ -634,10 +645,12 @@ func (a *App) planPiInstallAction(ctx context.Context) (install.PiInstallPlan, A
 		LoreConfigDir:  filepath.Dir(configPath),
 		LoreCLIVersion: a.BuildInfo.Normalized().Version,
 		SavedToken:     preflight.Token,
+		Target:         selectedTarget.ID,
+		Components:     append([]install.ComponentID(nil), opts.Components...),
 	}
 	plan, err := service.PlanPiInstall(req)
 	if err != nil {
-		report.Checks = append(report.Checks, output.Check{Name: "install", Status: output.StatusFail, Detail: err.Error(), Action: "Inspect the Pi runtime directory and rerun lore install after fixing the reported issue."})
+		report.Checks = append(report.Checks, output.Check{Name: "install", Status: output.StatusFail, Detail: err.Error(), Action: "Keep Pi on the native Lore extensions path for now; Pi MCP remains disabled by default. Inspect the requested target/components and rerun lore install after fixing the reported issue."})
 		report.ExitCode = 1
 		return install.PiInstallPlan{}, report, false
 	}
@@ -765,10 +778,12 @@ func (a *App) authManager() AuthManager {
 }
 
 func formatInstallSummary(result install.PiInstallResult) string {
-	summary := fmt.Sprintf("target=%s created=%d updated=%d unchanged=%d backed_up=%d failed=%d", result.Manifest.Target, len(result.Summary.Created), len(result.Summary.Updated), len(result.Summary.Unchanged), len(result.Summary.BackedUp), len(result.Summary.Failed))
+	summary := fmt.Sprintf("install_target=%s runtime=pi-remote-package remote_package=%s components=%s managed_local_files=%d project_agents=%s created=%d updated=%d deleted=%d unchanged=%d backed_up=%d conflicted=%d failed=%d", result.Manifest.Target, installPiRemotePackage(), formatComponentIDs(result.Manifest.Components), len(result.Manifest.ManagedFiles), formatProjectAgentsPolicy(), len(result.Summary.Created), len(result.Summary.Updated), len(result.Summary.Deleted), len(result.Summary.Unchanged), len(result.Summary.BackedUp), len(result.Summary.Conflicted), len(result.Summary.Failed))
 	parts := append([]string{summary}, formatManagedFileSummaryParts(result.Summary.Created, "create")...)
 	parts = append(parts, formatManagedFileSummaryParts(result.Summary.Updated, "update")...)
+	parts = append(parts, formatManagedFileSummaryParts(result.Summary.Deleted, "delete")...)
 	parts = append(parts, formatManagedFileSummaryParts(result.Summary.Unchanged, "unchanged")...)
+	parts = append(parts, formatManagedFileSummaryParts(result.Summary.Conflicted, "conflict")...)
 	if len(result.Summary.Failed) > 0 {
 		parts = append(parts, fmt.Sprintf("findings=%s", strings.Join(result.Summary.Failed, "; ")))
 	}
@@ -777,10 +792,15 @@ func formatInstallSummary(result install.PiInstallResult) string {
 
 func formatInstallPlanSummary(plan install.PiInstallPlan, dryRun bool) string {
 	parts := []string{
+		fmt.Sprintf("install_target=%s", plan.Request.Target),
+		"runtime=pi-remote-package",
+		fmt.Sprintf("remote_package=%s", installPiRemotePackage()),
+		fmt.Sprintf("components=%s", formatComponentIDs(plan.Request.Components)),
 		fmt.Sprintf("target=%s", plan.Layout.AgentDir),
 		fmt.Sprintf("manifest=%s", plan.Layout.ManifestPath),
 		fmt.Sprintf("managed_backup_root=%s", plan.ManagedBackupRoot),
-		fmt.Sprintf("managed_files=%d", len(plan.Layout.ManagedFiles)),
+		fmt.Sprintf("managed_local_files=%d", len(plan.Layout.ManagedFiles)),
+		fmt.Sprintf("project_agents=%s", formatProjectAgentsPolicy()),
 	}
 	if dryRun {
 		parts = append(parts, "mode=dry-run")
@@ -798,6 +818,7 @@ func formatInstallPlanSummary(plan install.PiInstallPlan, dryRun bool) string {
 	for _, action := range plan.ManagedFileActions {
 		parts = append(parts, fmt.Sprintf("managed_action=%s:%s", action.Action, action.RelativePath))
 	}
+	parts = append(parts, formatManagedFileSummaryParts(plan.ManagedAgentConflicts, "conflict")...)
 	return strings.Join(parts, " ")
 }
 
@@ -807,6 +828,25 @@ func formatManagedFileSummaryParts(paths []string, action string) []string {
 		parts = append(parts, fmt.Sprintf("managed_action=%s:%s", action, path))
 	}
 	return parts
+}
+
+func installPiRemotePackage() string {
+	return "git:github.com/alferio94/lore-pi-subagents"
+}
+
+func formatProjectAgentsPolicy() string {
+	return "disabled(default-lore-managed)"
+}
+
+func formatComponentIDs(components []install.ComponentID) string {
+	if len(components) == 0 {
+		return "default"
+	}
+	values := make([]string, 0, len(components))
+	for _, component := range components {
+		values = append(values, string(component))
+	}
+	return strings.Join(values, ",")
 }
 
 func (a *App) confirmFullBackup(plan install.PiInstallPlan) (bool, error) {

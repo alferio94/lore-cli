@@ -46,6 +46,66 @@ func TestPlanPiInstallBackupDestinationOutsidePiDir(t *testing.T) {
 	}
 }
 
+func TestExecutePiInstallDryRunSkipsFullBackupAndManagedWrites(t *testing.T) {
+	homeDir := t.TempDir()
+	piRoot := filepath.Join(homeDir, ".pi")
+	if err := os.MkdirAll(filepath.Join(piRoot, "nested"), 0o755); err != nil {
+		t.Fatalf("MkdirAll nested pi tree: %v", err)
+	}
+	legacyPath := filepath.Join(piRoot, "nested", "marker.txt")
+	if err := os.WriteFile(legacyPath, []byte("existing"), 0o644); err != nil {
+		t.Fatalf("WriteFile marker.txt: %v", err)
+	}
+	delegationPath := filepath.Join(piRoot, "agent", "extensions", "lore-delegation.ts")
+	if err := os.MkdirAll(filepath.Dir(delegationPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll legacy delegation dir: %v", err)
+	}
+	if err := os.WriteFile(delegationPath, []byte("legacy delegation"), 0o644); err != nil {
+		t.Fatalf("WriteFile lore-delegation.ts: %v", err)
+	}
+
+	configDir := filepath.Join(homeDir, ".lore")
+	plan, err := Service{}.PlanPiInstall(PiInstallRequest{
+		HomeDir:        homeDir,
+		ServerURL:      "https://lore.example",
+		LoreBinaryPath: "/usr/local/bin/lore",
+		LoreConfigDir:  configDir,
+		LoreCLIVersion: "v1.2.3",
+		Now:            time.Date(2026, 5, 19, 1, 20, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("PlanPiInstall error: %v", err)
+	}
+	if plan.FullBackup == nil {
+		t.Fatal("FullBackup = nil, want scheduled full backup for existing ~/.pi")
+	}
+
+	result, err := (Service{}).ExecutePiInstall(plan, InstallCommandOptions{DryRun: true})
+	if err != nil {
+		t.Fatalf("ExecutePiInstall dry-run error: %v", err)
+	}
+	if result.FullBackup != nil {
+		t.Fatalf("result.FullBackup = %+v, want nil in dry-run mode", result.FullBackup)
+	}
+	if got, err := os.ReadFile(legacyPath); err != nil || string(got) != "existing" {
+		t.Fatalf("legacy file after dry-run = %q err=%v, want unchanged", string(got), err)
+	}
+	if got, err := os.ReadFile(delegationPath); err != nil || string(got) != "legacy delegation" {
+		t.Fatalf("delegation file after dry-run = %q err=%v, want unchanged", string(got), err)
+	}
+
+	layout := ResolvePiLayout(homeDir)
+	if _, statErr := os.Stat(layout.ManifestPath); !os.IsNotExist(statErr) {
+		t.Fatalf("ManifestPath stat error = %v, want no manifest writes in dry-run", statErr)
+	}
+	if _, statErr := os.Stat(layout.SettingsPath); !os.IsNotExist(statErr) {
+		t.Fatalf("SettingsPath stat error = %v, want no settings writes in dry-run", statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(configDir, "backups")); !os.IsNotExist(statErr) {
+		t.Fatalf("backup root stat error = %v, want no full backup writes in dry-run", statErr)
+	}
+}
+
 func TestExecutePiInstallCreatesFullBackupTree(t *testing.T) {
 	homeDir := t.TempDir()
 	piRoot := filepath.Join(homeDir, ".pi")
@@ -124,6 +184,44 @@ func TestPlanPiInstallFailsClosedOnTopLevelUnexpectedPiType(t *testing.T) {
 	})
 	if err == nil || !containsAll(strings.ToLower(err.Error()), "refusing", ".pi", "file") {
 		t.Fatalf("PlanPiInstall error = %v, want fail-closed actionable top-level type guidance", err)
+	}
+}
+
+func TestPlanPiInstallFailsClosedOnTopLevelPiSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink semantics vary on Windows")
+	}
+
+	homeDir := t.TempDir()
+	targetDir := filepath.Join(homeDir, "pi-target")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll pi-target: %v", err)
+	}
+	piRoot := filepath.Join(homeDir, ".pi")
+	if err := os.Symlink(targetDir, piRoot); err != nil {
+		t.Fatalf("Symlink ~/.pi: %v", err)
+	}
+
+	_, err := Service{}.PlanPiInstall(PiInstallRequest{
+		HomeDir:        homeDir,
+		ServerURL:      "https://lore.example",
+		LoreBinaryPath: "/usr/local/bin/lore",
+		LoreConfigDir:  filepath.Join(homeDir, ".lore"),
+		LoreCLIVersion: "v1.2.3",
+		Now:            time.Date(2026, 5, 19, 1, 46, 0, 0, time.UTC),
+	})
+	if err == nil || !containsAll(strings.ToLower(err.Error()), "refusing", ".pi", "symlink") {
+		t.Fatalf("PlanPiInstall error = %v, want fail-closed top-level symlink guidance", err)
+	}
+}
+
+func TestValidateInstallResultAgainstPlanRejectsActionMismatch(t *testing.T) {
+	plan := PiInstallPlan{ManagedFileActions: []ManagedFileAction{{RelativePath: "extensions/lore-memory.ts", Action: "update"}}}
+	result := PiInstallResult{Summary: InstallSummary{Created: []string{"extensions/lore-memory.ts"}}}
+
+	err := validateInstallResultAgainstPlan(plan, result)
+	if err == nil || !containsAll(err.Error(), "action drift", "planned=update", "actual=create") {
+		t.Fatalf("validateInstallResultAgainstPlan() err = %v, want action drift error", err)
 	}
 }
 

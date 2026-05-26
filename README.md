@@ -18,6 +18,8 @@ The root TUI offers `Status`, `Login`, `Logout`, `Doctor`, `Install`, `Update`, 
 - `lore logout`
 - `lore doctor`
 - `lore install`
+- `lore install --dry-run --target pi --component pi-extensions`
+- `lore mcp proxy` (opt-in local bridge; not part of the default Pi install path)
 - `lore remember --project-id <project-id> --type decision --title "Ship it" --content "..."`
 - `lore recall --project-id <project-id> --type decision --limit 10`
 - `lore version`
@@ -30,7 +32,7 @@ The root TUI offers `Status`, `Login`, `Logout`, `Doctor`, `Install`, `Update`, 
 `status` reports saved login metadata presence plus `/healthz`, `/readyz`, and `/v1/me` state.
 `logout` removes local login metadata plus the matching OS keychain credential only and does not revoke server-side tokens.
 `doctor` prints actionable config, URL, network, readiness, auth, and Pi-availability diagnostics.
-`install` reuses healthy saved Lore login state, runs the same config `/healthz` `/readyz` `/v1/me` preflight as `status`, installs only the managed `~/.pi/agent` Pi runtime files, and writes non-secret `~/.pi/agent/lore-install.json` metadata. Generated Pi assets call the hidden `lore api request` broker so no raw API token is written into Pi files.
+`install` reuses healthy saved Lore login state, runs the same config `/healthz` `/readyz` `/v1/me` preflight as `status`, and installs the portable Lore agent pack into the managed `~/.pi/agent` Pi runtime files. The current Pi slice is package-first: it manages only `extensions/lore-memory.ts`, `extensions/lore-footer.ts`, and `settings.json`, ensures `settings.json.packages` contains `git:github.com/alferio94/lore-pi-subagents` exactly once, preserves existing package order/other entries, and keeps `lore-install.json` as bookkeeping-only metadata rather than a runtime source. It also renders managed global agent overlays under `~/.pi/agent/agents/lore-managed-*.md`; runtime resolution is `builtin < managed < user`, user-owned collisions are reported and left untouched, and stale managed overlays are backed up before delete/update so rollback can restore them from the managed backup root. Lore-managed installs ignore project `.pi/agents` by default at runtime; opt in explicitly with `settings.json.lore.agent_resolution.project_agents=enabled` when you really want project-local agents back in play. When a legacy managed `extensions/lore-delegation.ts` exists from an older install, `lore install` reports a scoped cleanup action, backs that file up under the managed backup root, and deletes only that obsolete path during apply. Non-Pi targets remain visible as `Coming soon`, and Pi MCP stays disabled by default. Generated Pi assets call the hidden `lore api request` broker so no raw API token is written into Pi files.
 `remember` creates one memory with explicit REST fields only; `--project-id`, `--type`, `--title`, and `--content` are required, `--scope` defaults to `project`, `--metadata-json` must be a JSON object, and `--json` prints `{\"data\": {...}}`.
 `recall` lists memories by explicit filters only; `--project-id` is required, optional filters are `--type`, `--scope`, and `--limit`, semantic/full-text search is out of scope, and `--json` prints `{\"data\": [...]}`.
 `version` prints build metadata without requiring config, auth, or network access.
@@ -75,12 +77,18 @@ lore status # reports no saved config / unauthenticated after logout
 
 Notes:
 - `remember` requires `--content`; positional memory content is not accepted in this MVP.
-- `remember`, `recall`, and `install` reuse the saved server URL plus the API token resolved from the OS keychain.
+- `remember`, `recall`, `install`, and the opt-in `mcp proxy` bridge reuse the saved server URL plus the API token resolved from the OS keychain.
 - `install` blocks before any Pi writes when saved login metadata is missing, invalid, unhealthy, or cannot reach the keychain, and surfaces remediation guidance instead.
+- Existing `settings.json.packages` entries are preserved additively; Lore CLI appends the Pi remote subagents package only when it is absent.
+- Managed global overlays are installer-owned only when tracked in `lore-install.json`; a user-created file at the same managed path is reported as a conflict and is never clobbered.
+- Runtime precedence for shared identities is `builtin < managed < user`; project `.pi/agents` stay disabled by default for Lore-managed installs unless `settings.json.lore.agent_resolution.project_agents=enabled` is set explicitly.
+- Existing legacy `extensions/lore-delegation.ts` files are treated as cleanup-only migration artifacts: dry-runs report the delete, applies back it up and remove it, and reruns do not regenerate it.
+- Managed overlay rollback is backup-first: updates and deletes copy the prior managed content into the managed backup root before mutation so operators can restore and rerun install to reconverge.
 - Human output is concise and omits raw `content`, `metadata`, and secrets.
 - Request failures surface request IDs when the server provides them.
 - `lore api request` is a hidden machine broker for allowlisted authenticated API calls used by the managed Pi runtime.
-- Single-memory fetch, non-`--body-json` broker body input modes, project lookup UX, MCP transport, and semantic search are intentionally out of scope for this MVP.
+- `lore mcp proxy` is an auth-safe local Lore Server MCP stdio bridge for explicit future harness integration work; it is intentionally separate from the default Pi install path, and Pi MCP is not advertised or enabled by default in this slice.
+- Single-memory fetch, non-`--body-json` broker body input modes, project lookup UX, broad non-Pi runtime installs, and semantic search are intentionally out of scope for this MVP.
 
 ## Releases
 
@@ -200,7 +208,7 @@ Local builds keep the defaults:
 
 ## Out of scope
 This slice intentionally excludes:
-- runtime-agent installation flows beyond the Pi-first managed install path and visible `Coming soon` placeholders for other clients;
+- runtime-agent installation flows beyond the Pi-first managed install path, the portable pack components already supported for Pi, and any non-Pi install enablement beyond visible `Coming soon` placeholders for other clients;
 - code signing, notarization, provenance attestation, MSI/installer packaging, or other signing/distribution automation beyond SHA256 checksums;
 - automatic Windows self-update and package-manager integration;
 - renaming existing macOS/Linux release assets;

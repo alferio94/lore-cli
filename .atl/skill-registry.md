@@ -2,21 +2,21 @@
 
 - Source policy: project > pi-global
 - Project root: `/Users/alfonsocarmona/personal/lore2/lore-cli`
-- Refreshed: 2026-05-21
+- Refreshed: 2026-05-25
 - Compatibility mode: disabled
 
 ## Skills
 
 | Name | Source | Path | Triggers | Priority | Notes |
 | --- | --- | --- | --- | --- | --- |
-| lore-cli-mvp | project | `.pi/skills/lore-cli-mvp/SKILL.md` | lore-cli product scope, auth/config, install flow, server contracts | high | Product contract authority for CLI and TUI behavior |
+| lore-cli-mvp | project | `.pi/skills/lore-cli-mvp/SKILL.md` | lore-cli MVP scope, auth/config, install flow, runtime target UX | high | Product contract authority for CLI, TUI, and installer behavior |
 | lore-cli-go | project | `.pi/skills/lore-cli-go/SKILL.md` | Go implementation, refactors, package boundaries, secret safety | high | Primary Go architecture guidance |
-| lore-cli-testing | project | `.pi/skills/lore-cli-testing/SKILL.md` | lore-cli command/config/http/TUI tests | high | Overrides generic Go testing guidance |
+| lore-cli-testing | project | `.pi/skills/lore-cli-testing/SKILL.md` | lore-cli command/config/http/install/TUI tests | high | Overrides generic Go testing guidance |
 | sdd-init | pi-global | `~/.pi/agent/skills/sdd-init/SKILL.md` | initialize SDD context | medium | Use with shared SDD protocol |
 | sdd-explore | pi-global | `~/.pi/agent/skills/sdd-explore/SKILL.md` | repository investigation before proposal/spec | medium | Default next phase after init |
 | sdd-propose | pi-global | `~/.pi/agent/skills/sdd-propose/SKILL.md` | write change proposal | medium | Use after exploration for scoped changes |
 | sdd-spec | pi-global | `~/.pi/agent/skills/sdd-spec/SKILL.md` | write delta specs | medium | Required for contract-sensitive changes |
-| sdd-design | pi-global | `~/.pi/agent/skills/sdd-design/SKILL.md` | technical design for risky flows | medium | Useful for install/runtime backup decisions |
+| sdd-design | pi-global | `~/.pi/agent/skills/sdd-design/SKILL.md` | technical design for risky flows | medium | Useful for cross-harness rendering and install decisions |
 | sdd-tasks | pi-global | `~/.pi/agent/skills/sdd-tasks/SKILL.md` | break approved change into implementation steps | medium | Prepare bounded apply slices |
 | sdd-apply | pi-global | `~/.pi/agent/skills/sdd-apply/SKILL.md` | implement approved tasks | medium | Follow bounded-slice apply protocol |
 | sdd-verify | pi-global | `~/.pi/agent/skills/sdd-verify/SKILL.md` | validate implementation against specs and tasks | medium | Prefer focused verification evidence |
@@ -29,20 +29,21 @@
 ### SDD
 - Treat `lore-cli` as the repository root and Lore memory project key as `lore-cli`.
 - In Lore mode, persist full English artifacts and return only compact summaries.
-- For architecture, contract, persistence, or rollout-sensitive changes, stay in SDD rather than ad hoc edits.
+- For architecture, contract, persistence, installer, or rollout-sensitive changes, stay in SDD rather than ad hoc edits.
 - Do not create `openspec/` while Lore persistence is healthy.
 
 ### Product + Architecture
 - Keep command parsing thin in `internal/cli`; push behavior into small testable packages.
-- The app is a Go CLI plus Bubble Tea TUI with packages for auth, config, HTTP client, install, output, and versioning.
-- Never print or persist raw API tokens outside the OS keychain; config and Pi files remain metadata-only.
+- The app is a Go CLI plus Bubble Tea TUI with packages for auth, config, HTTP client, install, update, output, versioning, agentpack, and MCP proxy support.
+- Never print or persist raw API tokens outside the OS keychain; config and generated agent files remain metadata-only.
 - Normalize and validate server URLs before persistence and before client construction.
+- Reuse the embedded runtime asset pattern already present under `internal/install/assets/pi/` when extending harness support.
 
-### Install Flow
+### Install + Agent Runtime
 - `install` is Pi-first and reuses healthy saved Lore login state plus `/healthz`, `/readyz`, and `/v1/me` preflight.
-- Other runtimes remain visible but unavailable unless a later spec explicitly changes that contract.
-- Generated Pi assets must use the hidden `lore api request` broker instead of embedding raw credentials.
-- For `install-plan-and-pi-backup`, preserve current secret-safety and idempotent install guarantees while adding dry-run, confirmation bypass, and existing `~/.pi` handling.
+- Other runtimes may remain visible but unavailable unless an approved spec explicitly changes that contract.
+- Generated harness assets must prefer brokered authenticated calls over embedding raw credentials.
+- Portable agent-pack work should centralize persona/workflow/worker/model-routing intent once, then render target-specific config from that source of truth.
 
 ### Testing
 - Prefer repo-local testing guidance over generic Go testing guidance.
@@ -54,6 +55,7 @@
 - Local skills live under `.pi/skills/`.
 - Registry lives at `.atl/skill-registry.md`.
 - CI release validation runs `go test ./...`, installer syntax validation, and installer smoke tests before building release archives.
+- Existing managed runtime assets are embedded under `internal/install/assets/pi/` and installed through `internal/install` services.
 
 ## Last Refresh Note
-Refreshed after the repo gained a working Go CLI/TUI implementation, install flow, tests, and release automation; previous registry notes describing a minimal pre-code state are obsolete.
+Refreshed after validating the active Go CLI/TUI repo layout, current Pi-first runtime asset embedding, Go built-in test/coverage workflow, installer/release automation, and the portable agent-pack direction for multi-harness config rendering.

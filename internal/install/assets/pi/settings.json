@@ -1,13 +1,20 @@
 {
+  "packages": [
+    "git:github.com/alferio94/lore-pi-subagents"
+  ],
+  "theme": "alferio",
   "lore": {
     "server_url": "{{LORE_SERVER_URL}}",
     "auth_mode": "cli-request",
     "binary_path": "{{LORE_BINARY_PATH}}",
     "config_dir": "{{LORE_CONFIG_DIR}}",
-    "managed_extensions": [
-      "extensions/lore-memory.ts",
-      "extensions/lore-delegation.ts",
-      "extensions/lore-footer.ts"
-    ]
+    "managed_extensions": {{LORE_MANAGED_EXTENSIONS}},
+    "agent_pack": {
+      "pack_id": "{{LORE_PACK_ID}}",
+      "persona_name": "{{LORE_PERSONA_NAME}}",
+      "profile_ids": {{LORE_PROFILE_IDS}},
+      "role_names": {{LORE_ROLE_NAMES}},
+      "sdd_phases": {{LORE_SDD_PHASES}}
+    }
   }
 }

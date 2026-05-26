@@ -1,3 +1,5 @@
+// LEGACY QUARANTINED ASSET: lore-cli no longer installs this extension.
+// Keep it only for historical reference and cleanup tests; do not treat its worker envelope schema as the current contract.
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type SelectItem, SelectList, Text, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
@@ -15,17 +17,7 @@ const BASE_DIR = path.join(os.homedir(), ".local", "share", "pi", "delegations")
 const SDD_MODELS_FILE = path.join(AGENT_DIR, "sdd-models.json");
 const SETTINGS_FILE = path.join(AGENT_DIR, "settings.json");
 
-const SDD_PHASES = [
-  "sdd-init",
-  "sdd-explore",
-  "sdd-propose",
-  "sdd-spec",
-  "sdd-design",
-  "sdd-tasks",
-  "sdd-apply",
-  "sdd-verify",
-  "sdd-archive",
-] as const;
+const SDD_PHASES = {{LORE_SDD_PHASES}} as const;
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
 

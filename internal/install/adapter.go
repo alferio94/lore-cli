@@ -1,0 +1,108 @@
+package install
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/alferio94/lore-cli/internal/agentpack"
+)
+
+type CapabilityID string
+
+type MergeMode string
+
+const (
+	CapabilityAgentPack     CapabilityID = "agent-pack"
+	CapabilityPiExtensions  CapabilityID = "pi-extensions"
+	CapabilityLoreServerMCP CapabilityID = "lore-server-mcp"
+
+	MergeModeReplace      MergeMode = "replace"
+	MergeModeAdditiveJSON MergeMode = "additive-json"
+)
+
+type Capability struct {
+	ID               CapabilityID
+	Component        ComponentID
+	Description      string
+	Optional         bool
+	EnabledByDefault bool
+}
+
+type RenderRequest struct {
+	Target          TargetID
+	Definition      agentpack.Definition
+	Components      []ComponentID
+	ServerURL       string
+	LoreBinaryPath  string
+	LoreConfigDir   string
+	LoreCLIVersion  string
+	SettingsPath    string
+	RuntimeContract RuntimeContract
+}
+
+type RenderedFile struct {
+	Component    ComponentID
+	RelativePath string
+	MergeMode    MergeMode
+	Content      []byte
+}
+
+type HarnessAdapter interface {
+	ID() TargetID
+	Title() string
+	Capabilities() map[CapabilityID]Capability
+	Supports(ComponentID) bool
+	Render(context.Context, RenderRequest) ([]RenderedFile, error)
+	RenderManagedAgents(context.Context, RenderRequest) ([]RenderedFile, error)
+}
+
+type Registry struct {
+	adapters map[TargetID]HarnessAdapter
+}
+
+func NewRegistry(adapters ...HarnessAdapter) (*Registry, error) {
+	registry := &Registry{adapters: make(map[TargetID]HarnessAdapter, len(adapters))}
+	for _, adapter := range adapters {
+		if adapter == nil {
+			return nil, fmt.Errorf("adapter is nil")
+		}
+		if _, exists := registry.adapters[adapter.ID()]; exists {
+			return nil, fmt.Errorf("duplicate adapter %q", adapter.ID())
+		}
+		registry.adapters[adapter.ID()] = adapter
+	}
+	return registry, nil
+}
+
+func (r *Registry) Resolve(target TargetID) (HarnessAdapter, error) {
+	if r == nil {
+		return nil, fmt.Errorf("adapter registry is not configured")
+	}
+	adapter, ok := r.adapters[target]
+	if !ok {
+		return nil, fmt.Errorf("target %q is not registered", target)
+	}
+	return adapter, nil
+}
+
+func (r RenderRequest) Validate() error {
+	if r.Target == "" {
+		return fmt.Errorf("target is required")
+	}
+	if err := r.Definition.Validate(); err != nil {
+		return fmt.Errorf("definition: %w", err)
+	}
+	if _, err := NormalizeComponentSelection(r.Target, r.Components); err != nil {
+		return err
+	}
+	return nil
+}
+
+func containsComponent(components []ComponentID, target ComponentID) bool {
+	for _, component := range components {
+		if component == target {
+			return true
+		}
+	}
+	return false
+}

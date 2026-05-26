@@ -1,6 +1,7 @@
 package install
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -42,13 +43,14 @@ type FullPiBackupResult struct {
 }
 
 type PiInstallPlan struct {
-	Request            PiInstallRequest
-	Layout             PiLayout
-	ExistingPi         ExistingPiState
-	ManagedBackupRoot  string
-	ManagedFileActions []ManagedFileAction
-	FullBackup         *FullPiBackupPlan
-	Snapshot           string
+	Request               PiInstallRequest
+	Layout                PiLayout
+	ExistingPi            ExistingPiState
+	ManagedBackupRoot     string
+	ManagedFileActions    []ManagedFileAction
+	ManagedAgentConflicts []string
+	FullBackup            *FullPiBackupPlan
+	Snapshot              string
 }
 
 type InstallCommandOptions struct {
@@ -63,6 +65,13 @@ func (s Service) PlanPiInstall(req PiInstallRequest) (PiInstallPlan, error) {
 	if req.Now.IsZero() {
 		req.Now = time.Now().UTC()
 	}
+	components, err := req.normalizedComponents()
+	if err != nil {
+		return PiInstallPlan{}, err
+	}
+	req.Target = req.targetOrDefault()
+	req.Components = components
+	req.Definition = req.definitionOrDefault()
 	layout := ResolvePiLayout(req.HomeDir)
 	managedBackupRoot := filepath.Join(layout.AgentDir, "backups", req.Now.UTC().Format("20060102T150405Z"))
 	plan := PiInstallPlan{Request: req, Layout: layout, ManagedBackupRoot: managedBackupRoot}
@@ -94,6 +103,19 @@ func (s Service) PlanPiInstall(req PiInstallRequest) (PiInstallPlan, error) {
 	actions, err := planManagedFileActions(rendered, managedBackupRoot)
 	if err != nil {
 		return PiInstallPlan{}, err
+	}
+	overlayActions, overlayConflicts, err := planManagedAgentOverlayActions(layout, req, managedBackupRoot)
+	if err != nil {
+		return PiInstallPlan{}, err
+	}
+	actions = append(actions, overlayActions...)
+	plan.ManagedAgentConflicts = append(plan.ManagedAgentConflicts, overlayConflicts...)
+	cleanupAction, err := planLegacyDelegationCleanup(layout, managedBackupRoot)
+	if err != nil {
+		return PiInstallPlan{}, err
+	}
+	if cleanupAction != nil {
+		actions = append(actions, *cleanupAction)
 	}
 	plan.ManagedFileActions = actions
 
@@ -160,6 +182,74 @@ func (s Service) ExecutePiInstall(plan PiInstallPlan, opts InstallCommandOptions
 	return result, nil
 }
 
+func planManagedAgentOverlayActions(layout PiLayout, req PiInstallRequest, backupRoot string) ([]ManagedFileAction, []string, error) {
+	existing, err := LoadManifest(layout.ManifestPath)
+	if err != nil {
+		if !strings.Contains(err.Error(), "read manifest") {
+			return nil, nil, err
+		}
+		existing = Manifest{}
+	}
+	renderRequest, err := req.renderRequest()
+	if err != nil {
+		return nil, nil, err
+	}
+	renderRequest.SettingsPath = layout.SettingsPath
+	registry, err := NewRegistry(defaultPiAdapter())
+	if err != nil {
+		return nil, nil, err
+	}
+	adapter, err := registry.Resolve(renderRequest.Target)
+	if err != nil {
+		return nil, nil, err
+	}
+	rendered, err := adapter.RenderManagedAgents(context.Background(), renderRequest)
+	if err != nil {
+		return nil, nil, err
+	}
+	managedPaths := make(map[string]struct{}, len(existing.ManagedAgentOverlays))
+	for _, overlay := range existing.ManagedAgentOverlays {
+		managedPaths[filepath.Clean(overlay.Path)] = struct{}{}
+	}
+	actions := make([]ManagedFileAction, 0, len(rendered)+len(existing.ManagedAgentOverlays))
+	conflicts := make([]string, 0)
+	renderedPaths := make(map[string]struct{}, len(rendered))
+	for _, file := range rendered {
+		absolutePath := absolutePiPath(layout, file.RelativePath)
+		renderedPaths[filepath.Clean(absolutePath)] = struct{}{}
+		if _, err := os.ReadFile(absolutePath); err == nil {
+			if _, managed := managedPaths[filepath.Clean(absolutePath)]; !managed {
+				conflicts = append(conflicts, file.RelativePath)
+				continue
+			}
+		} else if !os.IsNotExist(err) {
+			return nil, nil, fmt.Errorf("read managed overlay candidate %s: %w", file.RelativePath, err)
+		}
+		_, action, err := planRenderedFileAction(renderedPiFile{component: file.Component, relativePath: file.RelativePath, absolutePath: absolutePath, content: file.Content, mergeMode: file.MergeMode}, backupRoot)
+		if err != nil {
+			return nil, nil, err
+		}
+		actions = append(actions, action)
+	}
+	for _, overlay := range existing.ManagedAgentOverlays {
+		cleanPath := filepath.Clean(overlay.Path)
+		if _, keep := renderedPaths[cleanPath]; keep {
+			continue
+		}
+		relativePath, err := filepath.Rel(layout.AgentDir, overlay.Path)
+		if err != nil {
+			return nil, nil, fmt.Errorf("resolve managed overlay cleanup path %s: %w", overlay.Path, err)
+		}
+		actions = append(actions, ManagedFileAction{
+			RelativePath: filepath.ToSlash(relativePath),
+			AbsolutePath: overlay.Path,
+			Action:       "delete",
+			BackupPath:   filepath.Join(backupRoot, filepath.ToSlash(relativePath)),
+		})
+	}
+	return actions, conflicts, nil
+}
+
 func validateInstallResultAgainstPlan(plan PiInstallPlan, result PiInstallResult) error {
 	planned := map[string]string{}
 	for _, action := range plan.ManagedFileActions {
@@ -171,6 +261,9 @@ func validateInstallResultAgainstPlan(plan PiInstallPlan, result PiInstallResult
 	}
 	for _, path := range result.Summary.Updated {
 		actual[path] = "update"
+	}
+	for _, path := range result.Summary.Deleted {
+		actual[path] = "delete"
 	}
 	for _, path := range result.Summary.Unchanged {
 		actual[path] = "unchanged"

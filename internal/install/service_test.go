@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alferio94/lore-cli/internal/agentpack"
 	"github.com/alferio94/lore-cli/internal/auth"
 	"github.com/alferio94/lore-cli/internal/config"
 	"github.com/alferio94/lore-cli/internal/httpclient"
@@ -24,6 +25,9 @@ func TestDefaultTargetsPreferPiAndMarkOthersComingSoon(t *testing.T) {
 	if got := targets[0]; got.ID != TargetPi || !got.Available || !got.Recommended {
 		t.Fatalf("targets[0] = %+v, want available recommended Pi", got)
 	}
+	if got := targets[0].Description; !containsAll(got, "Pi-native Lore extensions", "MCP") {
+		t.Fatalf("targets[0].Description = %q, want Pi-native extension guardrails", got)
+	}
 	for _, want := range []TargetID{TargetClaudeCode, TargetOpenCode, TargetCodex, TargetAntigravity} {
 		target := findTarget(targets, want)
 		if target.Available {
@@ -31,6 +35,40 @@ func TestDefaultTargetsPreferPiAndMarkOthersComingSoon(t *testing.T) {
 		}
 		if got := target.Availability; got != "Coming soon" {
 			t.Fatalf("target %s availability = %q, want Coming soon", want, got)
+		}
+	}
+}
+
+func TestResolveInstallTargetKeepsPiDefaultAndRejectsRoadmapTargets(t *testing.T) {
+	selected, err := ResolveInstallTarget("")
+	if err != nil {
+		t.Fatalf("ResolveInstallTarget(\"\") error = %v, want nil", err)
+	}
+	if selected.ID != TargetPi || !selected.Available || !selected.Recommended {
+		t.Fatalf("ResolveInstallTarget(\"\") = %+v, want recommended Pi", selected)
+	}
+
+	selected, err = ResolveInstallTarget(TargetPi)
+	if err != nil {
+		t.Fatalf("ResolveInstallTarget(pi) error = %v, want nil", err)
+	}
+	if selected.ID != TargetPi {
+		t.Fatalf("ResolveInstallTarget(pi) = %+v, want Pi", selected)
+	}
+
+	if _, err := ResolveInstallTarget(TargetClaudeCode); err == nil || !containsAll(err.Error(), string(TargetClaudeCode), "Coming soon", "Pi-native Lore extensions") {
+		t.Fatalf("ResolveInstallTarget(claude-code) error = %v, want roadmap guardrail", err)
+	}
+	if _, err := ResolveInstallTarget(TargetID("unknown-target")); err == nil || !containsAll(err.Error(), "unknown target") {
+		t.Fatalf("ResolveInstallTarget(unknown-target) error = %v, want unknown target rejection", err)
+	}
+}
+
+func TestFormatTargetSelectionExplainsPiNativePathAndMCPDeferral(t *testing.T) {
+	formatted := FormatTargetSelection(DefaultTargets())
+	for _, want := range []string{"Choose an install target:", "Pi — Recommended", "Pi-native Lore extensions", "Coming soon", "Only Pi is selectable in this slice.", "Pi MCP remains explicitly disabled by default."} {
+		if !strings.Contains(formatted, want) {
+			t.Fatalf("FormatTargetSelection() = %q, want substring %q", formatted, want)
 		}
 	}
 }
@@ -43,8 +81,8 @@ func TestResolvePiLayoutModelsManagedPaths(t *testing.T) {
 	if got, want := layout.ManifestPath, "/tmp/home/.pi/agent/lore-install.json"; got != want {
 		t.Fatalf("ManifestPath = %q, want %q", got, want)
 	}
-	if len(layout.ManagedFiles) != 4 {
-		t.Fatalf("ManagedFiles = %v, want 4 managed paths", layout.ManagedFiles)
+	if len(layout.ManagedFiles) != 3 {
+		t.Fatalf("ManagedFiles = %v, want 3 managed paths", layout.ManagedFiles)
 	}
 }
 
@@ -152,6 +190,52 @@ func TestPreflightBlocksMissingConfigAndAuthFailure(t *testing.T) {
 	})
 }
 
+func TestExplainEndpointErrorKeepsDiagnosticsActionableAndTokenSafe(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{
+			name: "network",
+			err:  &httpclient.NetworkError{URL: "https://lore.example/readyz", Err: errors.New("secret-token transport failure")},
+			want: "network request failed",
+		},
+		{
+			name: "readiness",
+			err:  &httpclient.ReadinessError{APIError: httpclient.APIError{StatusCode: 503, Code: "not_ready", Message: "migrations pending", RequestID: "req-ready"}},
+			want: "service not ready: migrations pending (request_id=req-ready)",
+		},
+		{
+			name: "api with request id",
+			err:  &httpclient.APIError{StatusCode: 500, Code: "internal", Message: "temporary failure", RequestID: "req-api"},
+			want: "temporary failure (request_id=req-api)",
+		},
+		{
+			name: "api without request id",
+			err:  &httpclient.APIError{StatusCode: 400, Code: "bad_request", Message: "invalid payload"},
+			want: "invalid payload",
+		},
+		{
+			name: "generic",
+			err:  errors.New("plain failure"),
+			want: "plain failure",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := explainEndpointError(tt.err)
+			if got != tt.want {
+				t.Fatalf("explainEndpointError() = %q, want %q", got, tt.want)
+			}
+			if strings.Contains(got, "secret-token") {
+				t.Fatalf("explainEndpointError() leaked token: %q", got)
+			}
+		})
+	}
+}
+
 func assertCheck(t *testing.T, got output.Check, wantName, wantStatus string) {
 	t.Helper()
 	if got.Name != wantName || got.Status != wantStatus {
@@ -236,6 +320,9 @@ func (*stubClient) ListMemories(context.Context, string, httpclient.ListMemories
 func (*stubClient) RequestJSON(context.Context, string, string, string, json.RawMessage) (httpclient.RequestJSONResult, error) {
 	panic("unexpected RequestJSON call")
 }
+func (*stubClient) MCPJSONRPC(context.Context, string, string, json.RawMessage) (httpclient.RequestJSONResult, error) {
+	panic("unexpected MCPJSONRPC call")
+}
 func (*stubClient) MCPCall(context.Context, string, string, json.RawMessage) (httpclient.RequestJSONResult, error) {
 	panic("unexpected MCPCall call")
 }
@@ -251,6 +338,9 @@ func TestInstallPiWritesManagedFilesBackupsAndManifest(t *testing.T) {
 	}
 	if err := os.WriteFile(layout.SettingsPath, []byte("{\n  \"theme\": \"night\"\n}\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile settings.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(layout.ExtensionsDir, "lore-delegation.ts"), []byte("legacy delegation"), 0o644); err != nil {
+		t.Fatalf("WriteFile lore-delegation.ts: %v", err)
 	}
 
 	now := time.Date(2026, 5, 18, 19, 0, 0, 0, time.UTC)
@@ -269,24 +359,37 @@ func TestInstallPiWritesManagedFilesBackupsAndManifest(t *testing.T) {
 	if len(result.Summary.Failed) != 0 {
 		t.Fatalf("Failed = %v, want none", result.Summary.Failed)
 	}
-	if len(result.Summary.Created) != 2 {
-		t.Fatalf("Created = %v, want 2 created extension files", result.Summary.Created)
+	if len(result.Summary.Created) != 11 {
+		t.Fatalf("Created = %v, want 1 extension file plus 10 managed overlays", result.Summary.Created)
 	}
 	if len(result.Summary.Updated) != 2 {
 		t.Fatalf("Updated = %v, want settings + lore-memory", result.Summary.Updated)
 	}
-	if len(result.Summary.BackedUp) != 2 {
-		t.Fatalf("BackedUp = %v, want 2 backups", result.Summary.BackedUp)
+	if len(result.Summary.Deleted) != 1 || result.Summary.Deleted[0] != filepath.Join("extensions", "lore-delegation.ts") {
+		t.Fatalf("Deleted = %v, want legacy delegation cleanup", result.Summary.Deleted)
+	}
+	if len(result.Summary.BackedUp) != 3 {
+		t.Fatalf("BackedUp = %v, want 3 backups including deleted legacy delegation", result.Summary.BackedUp)
 	}
 	if result.Manifest.AuthMode != "cli-request" || result.Manifest.ServerURL != "https://lore.example" {
 		t.Fatalf("Manifest = %+v, want cli-request manifest with server URL", result.Manifest)
 	}
-	if result.Manifest.BackupRoot == "" || len(result.Manifest.ManagedFiles) != 4 {
-		t.Fatalf("Manifest = %+v, want backup root and managed files", result.Manifest)
+	if got, want := result.Manifest.SchemaVersion, PortableManifestSchemaVersion; got != want {
+		t.Fatalf("Manifest.SchemaVersion = %q, want %q", got, want)
+	}
+	if result.Manifest.BackupRoot == "" || len(result.Manifest.ManagedFiles) != 3 || len(result.Manifest.ManagedAgentOverlays) != 10 {
+		t.Fatalf("Manifest = %+v, want backup root, managed files, and managed overlays", result.Manifest)
+	}
+	if got := result.Manifest.Components; !equalComponentIDs(got, []ComponentID{ComponentCorePack, ComponentPiExtensions}) {
+		t.Fatalf("Manifest.Components = %v, want core-pack + pi-extensions", got)
 	}
 	for i, want := range layout.ManagedFiles {
-		if got := result.Manifest.ManagedFiles[i]; got != want {
-			t.Fatalf("Manifest.ManagedFiles[%d] = %q, want %q", i, got, want)
+		managed := result.Manifest.ManagedFiles[i]
+		if got := managed.Path; got != want {
+			t.Fatalf("Manifest.ManagedFiles[%d].Path = %q, want %q", i, got, want)
+		}
+		if managed.Component == "" || managed.ContentHash == "" {
+			t.Fatalf("Manifest.ManagedFiles[%d] = %+v, want component and content hash", i, managed)
 		}
 	}
 
@@ -337,31 +440,15 @@ func TestInstallPiWritesManagedFilesBackupsAndManifest(t *testing.T) {
 		}
 	}
 
-	delegationContent, err := os.ReadFile(filepath.Join(layout.ExtensionsDir, "lore-delegation.ts"))
-	if err != nil {
-		t.Fatalf("ReadFile lore-delegation.ts: %v", err)
+	if _, err := os.Stat(filepath.Join(layout.ExtensionsDir, "lore-delegation.ts")); !os.IsNotExist(err) {
+		t.Fatalf("lore-delegation.ts stat error = %v, want file removed after cleanup", err)
 	}
-	if got := string(delegationContent); !containsAll(got,
-		"export default function",
-		"ExtensionAPI",
-		"pi.registerCommand(\"lore-models\"",
-		"sdd-init",
-		"No model configured for Pi delegations. Use /lore-models to select a default or phase model.",
-		"No available models detected. Configure/login to a Pi provider and API key, then use /lore-models.",
-		"getAvailableModelsSafe(",
-		"Promise.resolve(registry.getAvailable.call(registry))",
-		"findModelSafe(ctx, parsed.provider, parsed.id)",
-		"pi.registerShortcut(\"ctrl+space\"",
-		"name: \"delegate\"",
-		"name: \"delegation_read\"",
-		"name: \"delegation_list\"") {
-		t.Fatalf("lore-delegation.ts missing local delegation/model-routing markers: %q", got)
-	} else if strings.Contains(got, "lore_delegate") || strings.Contains(got, "/v1/sessions") {
-		t.Fatalf("lore-delegation.ts contains unsupported remote delegation contract: %q", got)
-	} else if strings.Contains(got, "pi.registerCommand(\"sdd-models\"") {
-		t.Fatalf("lore-delegation.ts still contains removed /sdd-models alias: %q", got)
-	} else if !strings.Contains(got, "anchor: \"center\",\n      width: \"96%\",\n      minWidth: 72,\n      maxHeight: \"80%\",") {
-		t.Fatalf("lore-delegation.ts missing centered subagents overlay marker: %q", got)
+	delegationBackup, err := os.ReadFile(filepath.Join(result.Manifest.BackupRoot, "extensions", "lore-delegation.ts"))
+	if err != nil {
+		t.Fatalf("ReadFile backup lore-delegation.ts: %v", err)
+	}
+	if got := string(delegationBackup); got != "legacy delegation" {
+		t.Fatalf("delegation backup content = %q, want original content", got)
 	}
 
 	footerContent, err := os.ReadFile(filepath.Join(layout.ExtensionsDir, "lore-footer.ts"))
@@ -388,12 +475,33 @@ func TestInstallPiWritesManagedFilesBackupsAndManifest(t *testing.T) {
 	if got := settings["theme"]; got != "night" {
 		t.Fatalf("settings theme = %v, want preserved existing key", got)
 	}
+	alferioTheme, err := os.ReadFile(layout.AlferioThemePath)
+	if err != nil {
+		t.Fatalf("ReadFile alferio theme: %v", err)
+	}
+	if got := string(alferioTheme); !containsAll(got, `"name": "alferio"`, `"accent"`) {
+		t.Fatalf("alferio theme = %q, want bootstrap theme content", got)
+	}
 	loreSettings, ok := settings["lore"].(map[string]any)
 	if !ok {
 		t.Fatalf("settings lore block missing: %v", settings)
 	}
 	if got := loreSettings["auth_mode"]; got != "cli-request" {
 		t.Fatalf("settings lore.auth_mode = %v, want cli-request", got)
+	}
+	agentPack, ok := loreSettings["agent_pack"].(map[string]any)
+	if !ok {
+		t.Fatalf("settings lore.agent_pack missing: %v", loreSettings)
+	}
+	if got := agentPack["persona_name"]; got != "Lore" {
+		t.Fatalf("settings lore.agent_pack.persona_name = %v, want Lore", got)
+	}
+	packages, ok := settings["packages"].([]any)
+	if !ok {
+		t.Fatalf("settings packages missing: %v", settings)
+	}
+	if len(packages) != 1 || packages[0] != piRemoteSubagentsPackage {
+		t.Fatalf("settings packages = %v, want [%q]", packages, piRemoteSubagentsPackage)
 	}
 
 	manifestContent, err := os.ReadFile(layout.ManifestPath)
@@ -414,6 +522,149 @@ func TestInstallPiWritesManagedFilesBackupsAndManifest(t *testing.T) {
 	}
 	if got := string(backupContent); got != "legacy token=secret-token" {
 		t.Fatalf("backup content = %q, want original content", got)
+	}
+}
+
+func TestMergeJSONAdditivePackagesPreservesOrderAndIdempotence(t *testing.T) {
+	merged, err := mergeJSONAdditive(
+		[]byte(`{"packages":["pkg-a","pkg-b"],"lore":{"existing":true},"theme":"night"}`),
+		[]byte(`{"packages":["pkg-b","`+piRemoteSubagentsPackage+`"],"lore":{"auth_mode":"cli-request"},"theme":"alferio"}`),
+	)
+	if err != nil {
+		t.Fatalf("mergeJSONAdditive error = %v, want nil", err)
+	}
+
+	var settings map[string]any
+	if err := json.Unmarshal(merged, &settings); err != nil {
+		t.Fatalf("Unmarshal merged settings: %v", err)
+	}
+	packages, ok := settings["packages"].([]any)
+	if !ok {
+		t.Fatalf("packages = %T, want []any", settings["packages"])
+	}
+	if got, want := packages, []any{"pkg-a", "pkg-b", piRemoteSubagentsPackage}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
+		t.Fatalf("packages = %v, want %v", got, want)
+	}
+	loreSettings, ok := settings["lore"].(map[string]any)
+	if !ok || loreSettings["existing"] != true || loreSettings["auth_mode"] != "cli-request" {
+		t.Fatalf("lore settings = %v, want merged lore config", settings["lore"])
+	}
+	if settings["theme"] != "night" {
+		t.Fatalf("theme = %v, want preserved existing theme", settings["theme"])
+	}
+
+	rerun, err := mergeJSONAdditive(merged, []byte(`{"packages":["`+piRemoteSubagentsPackage+`"]}`))
+	if err != nil {
+		t.Fatalf("mergeJSONAdditive rerun error = %v, want nil", err)
+	}
+	if string(rerun) != string(merged) {
+		t.Fatalf("rerun settings = %s, want idempotent merge matching first result %s", rerun, merged)
+	}
+}
+
+func TestMergeJSONAdditivePackagesPreservesUserPackageObjects(t *testing.T) {
+	merged, err := mergeJSONAdditive(
+		[]byte(`{"packages":[{"url":"git:github.com/example/custom","label":"custom"},"pkg-a"]}`),
+		[]byte(`{"packages":["pkg-a","`+piRemoteSubagentsPackage+`"]}`),
+	)
+	if err != nil {
+		t.Fatalf("mergeJSONAdditive error = %v, want nil", err)
+	}
+
+	var settings map[string]any
+	if err := json.Unmarshal(merged, &settings); err != nil {
+		t.Fatalf("Unmarshal merged settings: %v", err)
+	}
+	packages, ok := settings["packages"].([]any)
+	if !ok {
+		t.Fatalf("packages = %T, want []any", settings["packages"])
+	}
+	if len(packages) != 3 {
+		t.Fatalf("packages = %v, want preserved object + pkg-a + lore package", packages)
+	}
+	first, ok := packages[0].(map[string]any)
+	if !ok || first["url"] != "git:github.com/example/custom" || first["label"] != "custom" {
+		t.Fatalf("first package = %#v, want preserved user package object", packages[0])
+	}
+	if packages[1] != "pkg-a" || packages[2] != piRemoteSubagentsPackage {
+		t.Fatalf("packages = %v, want preserved order with idempotent lore package append", packages)
+	}
+
+	rerun, err := mergeJSONAdditive(merged, []byte(`{"packages":["`+piRemoteSubagentsPackage+`"]}`))
+	if err != nil {
+		t.Fatalf("mergeJSONAdditive rerun error = %v, want nil", err)
+	}
+	if string(rerun) != string(merged) {
+		t.Fatalf("rerun settings = %s, want idempotent merge for preserved object packages %s", rerun, merged)
+	}
+}
+
+func TestInstallPiBootstrapsAlferioThemeOnFreshInstallAndPreservesUserThemeOnRerun(t *testing.T) {
+	homeDir := t.TempDir()
+	layout := ResolvePiLayout(homeDir)
+	req := PiInstallRequest{
+		HomeDir:        homeDir,
+		ServerURL:      "https://lore.example",
+		LoreBinaryPath: "/usr/local/bin/lore",
+		LoreConfigDir:  filepath.Join(homeDir, ".lore"),
+		LoreCLIVersion: "v1.2.3",
+		Now:            time.Date(2026, 5, 20, 1, 0, 0, 0, time.UTC),
+	}
+
+	if _, err := (Service{}).InstallPi(req); err != nil {
+		t.Fatalf("fresh InstallPi error: %v", err)
+	}
+
+	settingsContent, err := os.ReadFile(layout.SettingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile settings.json: %v", err)
+	}
+	var settings map[string]any
+	if err := json.Unmarshal(settingsContent, &settings); err != nil {
+		t.Fatalf("Unmarshal settings.json: %v", err)
+	}
+	if got := settings["theme"]; got != "alferio" {
+		t.Fatalf("fresh settings theme = %v, want alferio bootstrap", got)
+	}
+	bootstrappedTheme, err := os.ReadFile(layout.AlferioThemePath)
+	if err != nil {
+		t.Fatalf("ReadFile alferio theme: %v", err)
+	}
+	if got := string(bootstrappedTheme); !containsAll(got, `"name": "alferio"`, `"accent"`) {
+		t.Fatalf("bootstrapped theme = %q, want alferio theme asset", got)
+	}
+
+	customTheme := []byte(`{"name":"alferio","palette":{"accent":"#123456"}}
+`)
+	if err := os.WriteFile(layout.AlferioThemePath, customTheme, 0o600); err != nil {
+		t.Fatalf("WriteFile custom alferio theme: %v", err)
+	}
+	if err := os.WriteFile(layout.SettingsPath, []byte(`{"theme":"night","packages":["`+piRemoteSubagentsPackage+`"]}
+`), 0o600); err != nil {
+		t.Fatalf("WriteFile custom settings: %v", err)
+	}
+
+	if _, err := (Service{}).InstallPi(req); err != nil {
+		t.Fatalf("rerun InstallPi error: %v", err)
+	}
+
+	rerunSettingsContent, err := os.ReadFile(layout.SettingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile rerun settings.json: %v", err)
+	}
+	settings = map[string]any{}
+	if err := json.Unmarshal(rerunSettingsContent, &settings); err != nil {
+		t.Fatalf("Unmarshal rerun settings.json: %v", err)
+	}
+	if got := settings["theme"]; got != "night" {
+		t.Fatalf("rerun settings theme = %v, want preserved existing user theme", got)
+	}
+	preservedTheme, err := os.ReadFile(layout.AlferioThemePath)
+	if err != nil {
+		t.Fatalf("ReadFile preserved alferio theme: %v", err)
+	}
+	if string(preservedTheme) != string(customTheme) {
+		t.Fatalf("preserved theme = %q, want user-customized alferio theme preserved", preservedTheme)
 	}
 }
 
@@ -440,9 +691,8 @@ text: formatContent(payload.data)
 /v1/memories /v1/projects /v1/skills
 secret-token
 `),
-		"extensions/lore-delegation.ts": []byte("export default function (pi: ExtensionAPI) { ctx.ui.setStatus(\"lore-delegation\", \"\"); }"),
-		"extensions/lore-footer.ts":     []byte("export default function (pi: ExtensionAPI) { ctx.ui.setFooter(() => ({ render() { return []; } })); } getContextUsage getExtensionStatuses"),
-		"settings.json":                 []byte(`{"lore":{"server_url":"https://lore.example"}}`),
+		"extensions/lore-footer.ts": []byte("export default function (pi: ExtensionAPI) { ctx.ui.setFooter(() => ({ render() { return []; } })); } getContextUsage getExtensionStatuses"),
+		"settings.json":             []byte(`{"packages":["` + piRemoteSubagentsPackage + `"],"lore":{"server_url":"https://lore.example"}}`),
 	}, PiInstallRequest{ServerURL: "https://lore.example", SavedToken: "secret-token"})
 	if len(findings) != 1 {
 		t.Fatalf("len(findings) = %d, want 1", len(findings))
@@ -474,10 +724,9 @@ text: formatContent(payload.data)
 /v1/memories /v1/projects /v1/skills /v1/search /v1/observations /v1/context /v1/timeline /v1/stats /v1/sessions
 `)
 	findings := validateManagedContents(map[string][]byte{
-		"extensions/lore-memory.ts":     validMemory,
-		"extensions/lore-delegation.ts": []byte("export default function (pi: ExtensionAPI) { ctx.ui.setStatus(\"lore-delegation\", \"\"); }"),
-		"extensions/lore-footer.ts":     []byte("export default function (pi: ExtensionAPI) { ctx.ui.setFooter(() => ({ render() { return []; } })); } getContextUsage getExtensionStatuses"),
-		"settings.json":                 []byte(`{"lore":{"server_url":"https://lore.example"}}`),
+		"extensions/lore-memory.ts": validMemory,
+		"extensions/lore-footer.ts": []byte("export default function (pi: ExtensionAPI) { ctx.ui.setFooter(() => ({ render() { return []; } })); } getContextUsage getExtensionStatuses"),
+		"settings.json":             []byte(`{"packages":["` + piRemoteSubagentsPackage + `"],"lore":{"server_url":"https://lore.example"}}`),
 	}, PiInstallRequest{ServerURL: "https://lore.example", SavedToken: "secret-token"})
 
 	if len(findings) != 6 {
@@ -494,9 +743,8 @@ func TestValidateRenderedPiFilesRejectsMissingDefaultFactoryBeforeWrites(t *test
 	layout := ResolvePiLayout(t.TempDir())
 	files := []renderedPiFile{
 		{relativePath: managedPiExtensionRelativePaths[0], absolutePath: filepath.Join(layout.ExtensionsDir, "lore-memory.ts"), content: []byte("lore api request without factory")},
-		{relativePath: managedPiExtensionRelativePaths[1], absolutePath: filepath.Join(layout.ExtensionsDir, "lore-delegation.ts"), content: []byte("export default function (pi: ExtensionAPI) {}")},
-		{relativePath: managedPiExtensionRelativePaths[2], absolutePath: filepath.Join(layout.ExtensionsDir, "lore-footer.ts"), content: []byte("export default function (pi: ExtensionAPI) { ctx.ui.setFooter(() => ({ render() { return []; } })); } getContextUsage getExtensionStatuses")},
-		{relativePath: "settings.json", absolutePath: layout.SettingsPath, content: []byte(`{}`), mergeJSON: true},
+		{relativePath: managedPiExtensionRelativePaths[1], absolutePath: filepath.Join(layout.ExtensionsDir, "lore-footer.ts"), content: []byte("export default function (pi: ExtensionAPI) { ctx.ui.setFooter(() => ({ render() { return []; } })); } getContextUsage getExtensionStatuses")},
+		{relativePath: "settings.json", absolutePath: layout.SettingsPath, content: []byte(`{"packages":["` + piRemoteSubagentsPackage + `"]}`), mergeMode: MergeModeAdditiveJSON},
 	}
 
 	err := validateRenderedPiFiles(files)
@@ -562,24 +810,109 @@ func TestLoadManifestRoundTripsAndMatchesPiLayout(t *testing.T) {
 	if manifest.LoreBinary != "/usr/local/bin/lore" || manifest.LoreConfigDir != "/tmp/lore-config" {
 		t.Fatalf("manifest = %+v, want persisted binary and config dir", manifest)
 	}
+	if got, want := manifest.SchemaVersion, PortableManifestSchemaVersion; got != want {
+		t.Fatalf("manifest schema_version = %q, want %q", got, want)
+	}
 }
 
 func TestManifestValidateRejectsManagedFileMismatch(t *testing.T) {
 	layout := ResolvePiLayout("/tmp/home")
 	manifest := Manifest{
-		SchemaVersion: "1",
-		Target:        string(TargetPi),
+		SchemaVersion: PortableManifestSchemaVersion,
+		Target:        TargetPi,
 		AuthMode:      "cli-request",
 		ServerURL:     "https://lore.example",
 		LoreBinary:    "/usr/local/bin/lore",
 		LoreConfigDir: "/tmp/lore-config",
-		ManagedFiles:  []string{"/tmp/home/.pi/agent/extensions/lore-memory.ts"},
+		Components:    []ComponentID{ComponentCorePack, ComponentPiExtensions},
+		ManagedFiles:  []ManagedFileRecord{{Path: "/tmp/home/.pi/agent/extensions/lore-memory.ts", Component: ComponentCorePack, MergeMode: MergeModeReplace, ContentHash: "abc"}},
 		BackupRoot:    "/tmp/home/.pi/agent/backups/20260518T193000Z",
 		InstalledAt:   time.Date(2026, 5, 18, 19, 30, 0, 0, time.UTC).Format(time.RFC3339),
 	}
 
 	if err := manifest.Validate(layout); err == nil || !strings.Contains(err.Error(), "managed_files") {
 		t.Fatalf("Validate error = %v, want managed_files mismatch", err)
+	}
+}
+
+func TestLoadManifestUpgradesLegacyPiManifest(t *testing.T) {
+	homeDir := t.TempDir()
+	layout := ResolvePiLayout(homeDir)
+	if err := os.MkdirAll(filepath.Dir(layout.ManifestPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll manifest dir: %v", err)
+	}
+	legacy := `{
+  "schema_version": "1",
+  "target": "pi",
+  "auth_mode": "cli-request",
+  "server_url": "https://lore.example",
+  "lore_binary_path": "/usr/local/bin/lore",
+  "lore_config_dir": "/tmp/lore-config",
+  "managed_files": [
+    "/tmp/home/.pi/agent/extensions/lore-memory.ts",
+    "/tmp/home/.pi/agent/extensions/lore-delegation.ts",
+    "/tmp/home/.pi/agent/extensions/lore-footer.ts",
+    "/tmp/home/.pi/agent/settings.json"
+  ],
+  "backup_root": "/tmp/home/.pi/agent/backups/20260518T193000Z",
+  "installed_at": "2026-05-18T19:30:00Z",
+  "lore_cli_version": "v1.2.3"
+}
+`
+	if err := os.WriteFile(layout.ManifestPath, []byte(legacy), 0o600); err != nil {
+		t.Fatalf("WriteFile manifest: %v", err)
+	}
+
+	manifest, err := LoadManifest(layout.ManifestPath)
+	if err != nil {
+		t.Fatalf("LoadManifest error: %v", err)
+	}
+	if got, want := manifest.SchemaVersion, PortableManifestSchemaVersion; got != want {
+		t.Fatalf("schema_version = %q, want upgraded %q", got, want)
+	}
+	if got := manifest.Components; !equalComponentIDs(got, []ComponentID{ComponentCorePack, ComponentPiExtensions}) {
+		t.Fatalf("Components = %v, want default Pi components", got)
+	}
+	if len(manifest.ManagedFiles) != 3 {
+		t.Fatalf("len(ManagedFiles) = %d, want 3 without legacy delegation", len(manifest.ManagedFiles))
+	}
+	for _, managed := range manifest.ManagedFiles {
+		if strings.Contains(managed.Path, "lore-delegation.ts") {
+			t.Fatalf("legacy delegation path unexpectedly preserved in upgraded manifest: %+v", managed)
+		}
+	}
+}
+
+func TestPlanPiInstallRejectsUnsupportedExplicitComponent(t *testing.T) {
+	homeDir := t.TempDir()
+	_, err := Service{}.PlanPiInstall(PiInstallRequest{
+		HomeDir:        homeDir,
+		ServerURL:      "https://lore.example",
+		LoreBinaryPath: "/usr/local/bin/lore",
+		LoreConfigDir:  filepath.Join(homeDir, ".lore"),
+		LoreCLIVersion: "v1.2.3",
+		Target:         TargetPi,
+		Components:     []ComponentID{ComponentCorePack, ComponentPiExtensions, ComponentLoreServerMCP},
+		Now:            time.Date(2026, 5, 19, 0, 5, 0, 0, time.UTC),
+	})
+	if err == nil || !containsAll(err.Error(), "component", string(ComponentLoreServerMCP), string(TargetPi)) {
+		t.Fatalf("Validate error = %v, want managed_files mismatch", err)
+	}
+}
+
+func TestPlanPiInstallRejectsNonPiTargetEnablement(t *testing.T) {
+	homeDir := t.TempDir()
+	_, err := Service{}.PlanPiInstall(PiInstallRequest{
+		HomeDir:        homeDir,
+		ServerURL:      "https://lore.example",
+		LoreBinaryPath: "/usr/local/bin/lore",
+		LoreConfigDir:  filepath.Join(homeDir, ".lore"),
+		LoreCLIVersion: "v1.2.3",
+		Target:         TargetClaudeCode,
+		Now:            time.Date(2026, 5, 19, 0, 6, 0, 0, time.UTC),
+	})
+	if err == nil || !containsAll(err.Error(), string(TargetClaudeCode), "not available yet", "Coming soon") {
+		t.Fatalf("PlanPiInstall error = %v, want non-Pi target guardrail", err)
 	}
 }
 
@@ -597,10 +930,10 @@ func TestInstallPiReportsValidationFailuresAndSummary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("InstallPi error: %v", err)
 	}
-	if len(result.Summary.Failed) != 3 {
-		t.Fatalf("Failed = %v, want 3 validation failures for managed extensions", result.Summary.Failed)
+	if len(result.Summary.Failed) != 2 {
+		t.Fatalf("Failed = %v, want 2 validation failures for managed extensions containing the token-shaped fixture", result.Summary.Failed)
 	}
-	for _, want := range []string{"extensions/lore-memory.ts", "extensions/lore-delegation.ts", "extensions/lore-footer.ts"} {
+	for _, want := range []string{"extensions/lore-memory.ts", "extensions/lore-footer.ts"} {
 		if !containsSummaryEntry(result.Summary.Failed, want, "contains saved auth material") {
 			t.Fatalf("Failed = %v, want secret-safe validation entry for %s", result.Summary.Failed, want)
 		}
@@ -610,11 +943,14 @@ func TestInstallPiReportsValidationFailuresAndSummary(t *testing.T) {
 			t.Fatalf("Failed = %v, want no raw token echo", result.Summary.Failed)
 		}
 	}
-	if len(result.Summary.Created) != 4 || len(result.Summary.Updated) != 0 || len(result.Summary.Unchanged) != 0 {
-		t.Fatalf("summary = %+v, want 4 created files and no updates/unchanged entries", result.Summary)
+	if len(result.Summary.Created) != 13 || len(result.Summary.Updated) != 0 || len(result.Summary.Unchanged) != 0 {
+		t.Fatalf("summary = %+v, want 3 managed files plus 10 overlays and no updates/unchanged entries", result.Summary)
 	}
 	if result.Manifest.AuthMode != "cli-request" || result.Manifest.CLIVersion != "v1.2.3" {
 		t.Fatalf("manifest = %+v, want persisted cli-request metadata", result.Manifest)
+	}
+	if got, want := result.Manifest.SchemaVersion, PortableManifestSchemaVersion; got != want {
+		t.Fatalf("manifest schema_version = %q, want %q", got, want)
 	}
 }
 
@@ -700,19 +1036,19 @@ func TestPlanPiInstallReportsManagedFileActions(t *testing.T) {
 			if err := os.WriteFile(file.absolutePath, file.content, 0o600); err != nil {
 				t.Fatalf("WriteFile unchanged fixture: %v", err)
 			}
-		case filepath.Join("extensions", "lore-delegation.ts"):
-			if err := os.WriteFile(file.absolutePath, []byte("legacy-delegation"), 0o600); err != nil {
-				t.Fatalf("WriteFile updated fixture: %v", err)
-			}
 		}
+	}
+	if err := os.WriteFile(filepath.Join(layout.ExtensionsDir, "lore-delegation.ts"), []byte("legacy-delegation"), 0o600); err != nil {
+		t.Fatalf("WriteFile legacy delegation fixture: %v", err)
 	}
 
 	plan, err := Service{}.PlanPiInstall(req)
 	if err != nil {
 		t.Fatalf("PlanPiInstall error: %v", err)
 	}
-	if got := len(plan.ManagedFileActions); got != 4 {
-		t.Fatalf("len(ManagedFileActions) = %d, want 4", got)
+
+	if got := len(plan.ManagedFileActions); got != 14 {
+		t.Fatalf("len(ManagedFileActions) = %d, want 3 managed files + 10 overlays + legacy cleanup", got)
 	}
 	actions := map[string]ManagedFileAction{}
 	for _, action := range plan.ManagedFileActions {
@@ -721,10 +1057,10 @@ func TestPlanPiInstallReportsManagedFileActions(t *testing.T) {
 	if got := actions[filepath.Join("extensions", "lore-memory.ts")].Action; got != "unchanged" {
 		t.Fatalf("lore-memory action = %q, want unchanged", got)
 	}
-	if got := actions[filepath.Join("extensions", "lore-delegation.ts")]; got.Action != "update" || !strings.HasPrefix(got.BackupPath, plan.ManagedBackupRoot) {
-		t.Fatalf("lore-delegation action = %+v, want update under %s", got, plan.ManagedBackupRoot)
+	if got := actions[filepath.Join("extensions", "lore-delegation.ts")]; got.Action != "delete" || !strings.HasPrefix(got.BackupPath, plan.ManagedBackupRoot) {
+		t.Fatalf("lore-delegation action = %+v, want delete under %s", got, plan.ManagedBackupRoot)
 	}
-	for _, relativePath := range []string{filepath.Join("extensions", "lore-footer.ts"), "settings.json"} {
+	for _, relativePath := range []string{filepath.Join("extensions", "lore-footer.ts"), "settings.json", filepath.Join("agents", "lore-managed-lore-worker.md"), filepath.Join("agents", "lore-managed-sdd-apply.md")} {
 		if got := actions[relativePath].Action; got != "create" {
 			t.Fatalf("%s action = %q, want create", relativePath, got)
 		}
@@ -786,6 +1122,297 @@ func TestExecutePiInstallAbortsOnPlanApplyDrift(t *testing.T) {
 	layout := ResolvePiLayout(homeDir)
 	if _, statErr := os.Stat(layout.ManifestPath); !os.IsNotExist(statErr) {
 		t.Fatalf("ManifestPath stat error = %v, want no writes on drift", statErr)
+	}
+}
+
+func TestExecutePiInstallRerunDoesNotDriftWhenManagedOverlaysAreUnchanged(t *testing.T) {
+	homeDir := t.TempDir()
+	req := PiInstallRequest{
+		HomeDir:        homeDir,
+		ServerURL:      "https://lore.example",
+		LoreBinaryPath: "/usr/local/bin/lore",
+		LoreConfigDir:  filepath.Join(homeDir, ".lore"),
+		LoreCLIVersion: "v1.2.3",
+		Now:            time.Date(2026, 5, 19, 0, 0, 1, 0, time.UTC),
+	}
+
+	if _, err := (Service{}).InstallPi(req); err != nil {
+		t.Fatalf("seed InstallPi error: %v", err)
+	}
+
+	plan, err := (Service{}).PlanPiInstall(req)
+	if err != nil {
+		t.Fatalf("PlanPiInstall rerun error: %v", err)
+	}
+	if got := len(plan.ManagedFileActions); got != 13 {
+		t.Fatalf("len(ManagedFileActions) = %d, want 13 managed files + overlays without theme bootstrap accounting", got)
+	}
+	for _, action := range plan.ManagedFileActions {
+		if action.Action != "unchanged" {
+			t.Fatalf("planned action for %s = %q, want unchanged on converged rerun", action.RelativePath, action.Action)
+		}
+	}
+
+	result, err := (Service{}).ExecutePiInstall(plan, InstallCommandOptions{AssumeYes: true})
+	if err != nil {
+		t.Fatalf("ExecutePiInstall rerun error: %v", err)
+	}
+	if len(result.Summary.Created) != 0 || len(result.Summary.Updated) != 0 || len(result.Summary.Deleted) != 0 {
+		t.Fatalf("summary = %+v, want no create/update/delete actions on converged rerun", result.Summary)
+	}
+	if got := len(result.Summary.Unchanged); got != 13 {
+		t.Fatalf("len(Unchanged) = %d, want 13 managed files + overlays recorded for plan validation", got)
+	}
+	if containsSummaryEntry(result.Summary.Unchanged, filepath.Join("themes", "alferio.json")) {
+		t.Fatalf("Unchanged = %v, want theme bootstrap excluded from managed plan/summary accounting", result.Summary.Unchanged)
+	}
+}
+
+func TestInstallPiRerunConvergesWithoutDelegationRegeneration(t *testing.T) {
+	homeDir := t.TempDir()
+	layout := ResolvePiLayout(homeDir)
+	if err := os.MkdirAll(layout.ExtensionsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll extensions: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(layout.ExtensionsDir, "lore-delegation.ts"), []byte("legacy delegation"), 0o600); err != nil {
+		t.Fatalf("WriteFile lore-delegation.ts: %v", err)
+	}
+
+	req := PiInstallRequest{
+		HomeDir:        homeDir,
+		ServerURL:      "https://lore.example",
+		LoreBinaryPath: "/usr/local/bin/lore",
+		LoreConfigDir:  filepath.Join(homeDir, ".lore"),
+		LoreCLIVersion: "v1.2.3",
+		Now:            time.Date(2026, 5, 19, 3, 0, 0, 0, time.UTC),
+	}
+	first, err := Service{}.InstallPi(req)
+	if err != nil {
+		t.Fatalf("first InstallPi error: %v", err)
+	}
+	if !containsSummaryEntry(first.Summary.Deleted, legacyPiDelegationRelativePath) {
+		t.Fatalf("first Deleted = %v, want legacy delegation cleanup", first.Summary.Deleted)
+	}
+
+	second, err := Service{}.InstallPi(req)
+	if err != nil {
+		t.Fatalf("second InstallPi error: %v", err)
+	}
+	if len(second.Summary.Deleted) != 0 {
+		t.Fatalf("second Deleted = %v, want no repeated cleanup once converged", second.Summary.Deleted)
+	}
+	if _, err := os.Stat(filepath.Join(layout.ExtensionsDir, "lore-delegation.ts")); !os.IsNotExist(err) {
+		t.Fatalf("lore-delegation.ts stat error = %v, want absent after rerun", err)
+	}
+	manifestBytes, err := os.ReadFile(layout.ManifestPath)
+	if err != nil {
+		t.Fatalf("ReadFile manifest: %v", err)
+	}
+	if strings.Contains(string(manifestBytes), "lore-delegation.ts") {
+		t.Fatalf("manifest unexpectedly references legacy delegation: %s", manifestBytes)
+	}
+}
+
+func TestInstallPiRerunIgnoresTamperedManifestForRuntimePackages(t *testing.T) {
+	homeDir := t.TempDir()
+	layout := ResolvePiLayout(homeDir)
+	req := PiInstallRequest{
+		HomeDir:        homeDir,
+		ServerURL:      "https://lore.example",
+		LoreBinaryPath: "/usr/local/bin/lore",
+		LoreConfigDir:  filepath.Join(homeDir, ".lore"),
+		LoreCLIVersion: "v1.2.3",
+		Now:            time.Date(2026, 5, 19, 3, 30, 0, 0, time.UTC),
+	}
+	if _, err := (Service{}).InstallPi(req); err != nil {
+		t.Fatalf("first InstallPi error: %v", err)
+	}
+
+	tamperedManifest := `{
+	  "schema_version": "portable-v2",
+	  "target": "pi",
+	  "auth_mode": "cli-request",
+	  "server_url": "https://lore.example",
+	  "lore_binary_path": "/usr/local/bin/lore",
+	  "lore_config_dir": "` + filepath.ToSlash(filepath.Join(homeDir, ".lore")) + `",
+	  "components": ["core-pack", "pi-extensions"],
+	  "managed_files": [
+	    {"path": "` + filepath.ToSlash(layout.ManagedFiles[0]) + `", "component": "pi-extensions", "merge_mode": "replace", "content_hash": "memory"},
+	    {"path": "` + filepath.ToSlash(layout.ManagedFiles[1]) + `", "component": "pi-extensions", "merge_mode": "replace", "content_hash": "footer"},
+	    {"path": "` + filepath.ToSlash(layout.ManagedFiles[2]) + `", "component": "core-pack", "merge_mode": "additive-json", "content_hash": "settings"},
+	    {"path": "` + filepath.ToSlash(filepath.Join(layout.ExtensionsDir, "evil-runtime.ts")) + `", "component": "pi-extensions", "merge_mode": "replace", "content_hash": "evil"}
+	  ],
+	  "packages": ["git:github.com/example/evil-runtime", "` + piRemoteSubagentsPackage + `"],
+	  "runtime_package": "git:github.com/example/evil-runtime",
+	  "backup_root": "` + filepath.ToSlash(filepath.Join(layout.AgentDir, "backups", "tampered")) + `",
+	  "installed_at": "2026-05-19T03:30:00Z",
+	  "lore_cli_version": "v1.2.3"
+	}
+`
+	if err := os.WriteFile(layout.ManifestPath, []byte(tamperedManifest), 0o600); err != nil {
+		t.Fatalf("WriteFile tampered manifest: %v", err)
+	}
+
+	second, err := Service{}.InstallPi(req)
+	if err != nil {
+		t.Fatalf("second InstallPi error: %v", err)
+	}
+	if len(second.Summary.Created) != 0 || len(second.Summary.Updated) != 0 || len(second.Summary.Deleted) != 0 {
+		t.Fatalf("second summary = %+v, want no runtime file churn from manifest tampering", second.Summary)
+	}
+
+	settingsBytes, err := os.ReadFile(layout.SettingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile settings.json: %v", err)
+	}
+	var settings struct {
+		Packages []string `json:"packages"`
+	}
+	if err := json.Unmarshal(settingsBytes, &settings); err != nil {
+		t.Fatalf("Unmarshal settings.json: %v", err)
+	}
+	if got, want := settings.Packages, []string{piRemoteSubagentsPackage}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("settings packages = %v, want %v after manifest tamper rerun", got, want)
+	}
+
+	manifestBytes, err := os.ReadFile(layout.ManifestPath)
+	if err != nil {
+		t.Fatalf("ReadFile manifest after rerun: %v", err)
+	}
+	if strings.Contains(string(manifestBytes), "git:github.com/example/evil-runtime") || strings.Contains(string(manifestBytes), "evil-runtime.ts") || strings.Contains(string(manifestBytes), `"packages"`) {
+		t.Fatalf("manifest retained tampered runtime hints: %s", manifestBytes)
+	}
+}
+
+func TestInstallPiReinstallDeletesRestoredLegacyDelegationAgain(t *testing.T) {
+	homeDir := t.TempDir()
+	layout := ResolvePiLayout(homeDir)
+	if err := os.MkdirAll(layout.ExtensionsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll extensions: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(layout.ExtensionsDir, "lore-delegation.ts"), []byte("legacy delegation"), 0o600); err != nil {
+		t.Fatalf("WriteFile lore-delegation.ts: %v", err)
+	}
+
+	req := PiInstallRequest{
+		HomeDir:        homeDir,
+		ServerURL:      "https://lore.example",
+		LoreBinaryPath: "/usr/local/bin/lore",
+		LoreConfigDir:  filepath.Join(homeDir, ".lore"),
+		LoreCLIVersion: "v1.2.3",
+		Now:            time.Date(2026, 5, 19, 4, 0, 0, 0, time.UTC),
+	}
+	first, err := Service{}.InstallPi(req)
+	if err != nil {
+		t.Fatalf("first InstallPi error: %v", err)
+	}
+	backupPath := filepath.Join(first.Manifest.BackupRoot, legacyPiDelegationRelativePath)
+	backupContent, err := os.ReadFile(backupPath)
+	if err != nil {
+		t.Fatalf("ReadFile legacy delegation backup: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(layout.ExtensionsDir, "lore-delegation.ts"), backupContent, 0o600); err != nil {
+		t.Fatalf("restore lore-delegation.ts: %v", err)
+	}
+
+	second, err := Service{}.InstallPi(req)
+	if err != nil {
+		t.Fatalf("second InstallPi error: %v", err)
+	}
+	if !containsSummaryEntry(second.Summary.Deleted, legacyPiDelegationRelativePath) {
+		t.Fatalf("second Deleted = %v, want restored legacy cleanup", second.Summary.Deleted)
+	}
+	if _, err := os.Stat(filepath.Join(layout.ExtensionsDir, "lore-delegation.ts")); !os.IsNotExist(err) {
+		t.Fatalf("lore-delegation.ts stat error = %v, want absent after reinstall cleanup", err)
+	}
+}
+
+func TestInstallPiManagedOverlayConflictsAndContractCompatibility(t *testing.T) {
+	homeDir := t.TempDir()
+	layout := ResolvePiLayout(homeDir)
+	if err := os.MkdirAll(layout.ManagedAgentsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll managed agents: %v", err)
+	}
+	collisionPath := filepath.Join(layout.ManagedAgentsDir, "lore-managed-lore-worker.md")
+	if err := os.WriteFile(collisionPath, []byte("user owned override"), 0o600); err != nil {
+		t.Fatalf("WriteFile collision: %v", err)
+	}
+
+	req := PiInstallRequest{
+		HomeDir:        homeDir,
+		ServerURL:      "https://lore.example",
+		LoreBinaryPath: "/usr/local/bin/lore",
+		LoreConfigDir:  filepath.Join(homeDir, ".lore"),
+		LoreCLIVersion: "v1.2.3",
+		Now:            time.Date(2026, 5, 19, 5, 0, 0, 0, time.UTC),
+	}
+	result, err := Service{}.InstallPi(req)
+	if err != nil {
+		t.Fatalf("InstallPi error: %v", err)
+	}
+	if !containsSummaryEntry(result.Summary.Conflicted, "lore-managed-lore-worker.md") {
+		t.Fatalf("Conflicted = %v, want preserved user-owned collision", result.Summary.Conflicted)
+	}
+	if len(result.Manifest.ManagedAgentOverlays) != len(agentpack.DefaultDefinition().ManagedAgents)-1 {
+		t.Fatalf("ManagedAgentOverlays = %+v, want all non-conflicting managed overlays recorded", result.Manifest.ManagedAgentOverlays)
+	}
+	if containsSummaryEntry(result.Summary.Updated, "lore-managed-lore-worker.md") {
+		t.Fatalf("Updated = %v, want user-owned collision skipped", result.Summary.Updated)
+	}
+
+	if _, err := (Service{}).InstallPi(req.WithRuntimeContract(RuntimeContract{Version: 99})); err == nil || !containsAll(err.Error(), "contract", "agentResolution") {
+		t.Fatalf("InstallPi incompatible contract error = %v, want fail-fast compatibility rejection", err)
+	}
+}
+
+func TestInstallPiManagedOverlayRerunDeletesStaleTrackedOverlay(t *testing.T) {
+	homeDir := t.TempDir()
+	layout := ResolvePiLayout(homeDir)
+	req := PiInstallRequest{
+		HomeDir:        homeDir,
+		ServerURL:      "https://lore.example",
+		LoreBinaryPath: "/usr/local/bin/lore",
+		LoreConfigDir:  filepath.Join(homeDir, ".lore"),
+		LoreCLIVersion: "v1.2.3",
+		Now:            time.Date(2026, 5, 19, 6, 0, 0, 0, time.UTC),
+	}
+	first, err := Service{}.InstallPi(req)
+	if err != nil {
+		t.Fatalf("first InstallPi error: %v", err)
+	}
+
+	stalePath := filepath.Join(layout.ManagedAgentsDir, "lore-managed-obsolete.md")
+	if err := os.WriteFile(stalePath, []byte("stale managed overlay"), 0o600); err != nil {
+		t.Fatalf("WriteFile stale overlay: %v", err)
+	}
+	manifest := first.Manifest
+	manifest.ManagedAgentOverlays = append(manifest.ManagedAgentOverlays, ManagedAgentOverlayRecord{
+		AgentName:   "obsolete",
+		Path:        stalePath,
+		ContentHash: contentHash([]byte("stale managed overlay")),
+	})
+	manifestBytes, err := marshalManifest(manifest)
+	if err != nil {
+		t.Fatalf("marshalManifest() error = %v", err)
+	}
+	if err := os.WriteFile(layout.ManifestPath, manifestBytes, 0o600); err != nil {
+		t.Fatalf("WriteFile manifest: %v", err)
+	}
+
+	second, err := Service{}.InstallPi(req)
+	if err != nil {
+		t.Fatalf("second InstallPi error: %v", err)
+	}
+	if _, err := os.Stat(stalePath); !os.IsNotExist(err) {
+		t.Fatalf("stale overlay stat error = %v, want removed stale managed overlay", err)
+	}
+	if !containsSummaryEntry(second.Summary.Deleted, "lore-managed-obsolete.md") {
+		t.Fatalf("Deleted = %v, want stale managed overlay cleanup", second.Summary.Deleted)
+	}
+	for _, overlay := range second.Manifest.ManagedAgentOverlays {
+		if overlay.AgentName == "obsolete" {
+			t.Fatalf("ManagedAgentOverlays = %+v, want stale overlay removed from manifest", second.Manifest.ManagedAgentOverlays)
+		}
 	}
 }
 

@@ -492,6 +492,42 @@ func TestMCPCallConvertsJSONRPCError(t *testing.T) {
 	}
 }
 
+func TestMCPJSONRPCPostsMethodAndParamsAndDecodesResult(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got, want := r.Method, http.MethodPost; got != want {
+			t.Fatalf("method = %q, want %q", got, want)
+		}
+		var body struct {
+			Method string         `json:"method"`
+			Params map[string]any `json:"params"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		if body.Method != "tools/list" || len(body.Params) != 0 {
+			t.Fatalf("JSON-RPC body = %+v", body)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"jsonrpc": "2.0", "id": "lore-cli-mcp", "result": map[string]any{"tools": []map[string]any{{"name": "lore_me"}}}})
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server.URL, time.Second)
+	result, err := client.MCPJSONRPC(context.Background(), "secret-token", "tools/list", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("MCPJSONRPC() error = %v", err)
+	}
+	if string(result.Data) != `{"tools":[{"name":"lore_me"}]}` {
+		t.Fatalf("result.Data = %s, want tools list", result.Data)
+	}
+}
+
+func TestMCPJSONRPCRejectsNonObjectParams(t *testing.T) {
+	client := newTestClient(t, "https://example.test", time.Second)
+	if _, err := client.MCPJSONRPC(context.Background(), "secret-token", "tools/list", json.RawMessage(`[]`)); err == nil || !strings.Contains(err.Error(), "JSON object") {
+		t.Fatalf("MCPJSONRPC() err = %v, want object rejection", err)
+	}
+}
+
 func TestRequestJSONErrorFallsBackToHeaderRequestID(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Request-Id", "req-skills-500")

@@ -13,18 +13,31 @@ import (
 	"github.com/alferio94/lore-cli/internal/auth"
 	"github.com/alferio94/lore-cli/internal/config"
 	"github.com/alferio94/lore-cli/internal/httpclient"
+	"github.com/alferio94/lore-cli/internal/install"
 	"github.com/alferio94/lore-cli/internal/output"
 	"github.com/alferio94/lore-cli/internal/version"
 )
 
 func TestInteractiveActionsExposeAppHelpers(t *testing.T) {
-	store := &fakeStore{path: "/tmp/lore/config.json", loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token"}}
+	homeDir := t.TempDir()
+	store := &fakeStore{path: filepath.Join(t.TempDir(), "config.json"), loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token"}}
 	client := &fakeClient{subject: httpclient.Subject{UserID: "user-1", Kind: "user", TokenSource: "api_token"}}
 	app, _, _ := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
+	app.UserHomeDir = func() (string, error) { return homeDir, nil }
+	app.ExecutablePath = func() (string, error) { return "/usr/local/bin/lore", nil }
+	app.BuildInfo = version.Info{Version: "v1.2.3"}
 
 	actions := app.InteractiveActions()
 	if _, err := actions.Login(context.Background(), " https://example.test ", " secret-token "); err != nil {
 		t.Fatalf("Login() error = %v", err)
+	}
+	plan, planReport, ok := actions.PlanPiInstall(context.Background())
+	if !ok || plan.Request.Target != install.TargetPi || planReport.Title != "Lore install" {
+		t.Fatalf("PlanPiInstall() = plan:%+v report:%+v ok:%t, want Pi install plan", plan, planReport, ok)
+	}
+	installReport := actions.Install(context.Background())
+	if installReport.ExitCode != 0 || installReport.Title != "Lore install" {
+		t.Fatalf("Install() = %+v, want successful Pi install report", installReport)
 	}
 	if _, err := actions.Logout(context.Background()); err != nil {
 		t.Fatalf("Logout() error = %v", err)
