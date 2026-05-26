@@ -136,7 +136,7 @@ func TestInstallTargetSelectionSurfacesPiDefaultAndAntigravityMVPGuidance(t *tes
 	}
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(model)
-	for _, want := range []string{"Pi remains the default recommended path.", "Antigravity", "prompt + skills", "optional", "Choose an install target:"} {
+	for _, want := range []string{"Pi remains the default recommended path.", "Antigravity", "prompt + skills", "optional", "Choose an install target:", "Selected target: Pi"} {
 		if !strings.Contains(m.statusBody, want) {
 			t.Fatalf("statusBody = %q, want updated install guidance containing %q", m.statusBody, want)
 		}
@@ -146,6 +146,74 @@ func TestInstallTargetSelectionSurfacesPiDefaultAndAntigravityMVPGuidance(t *tes
 	}
 	if strings.Contains(m.statusBody, "Claude Code — Recommended") {
 		t.Fatalf("statusBody = %q, did not expect non-Pi targets to be marked recommended", m.statusBody)
+	}
+}
+
+func TestInstallTargetSelectionAllowsAntigravityExecutionWithoutPiBackupPrompt(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	if err := os.MkdirAll(filepath.Join(homeDir, ".pi"), 0o755); err != nil {
+		t.Fatalf("MkdirAll ~/.pi: %v", err)
+	}
+
+	legacyCalls := 0
+	targetCalls := 0
+	var gotTarget install.TargetID
+	m := newModel(cli.InteractiveActions{
+		Install: func(context.Context) cli.ActionReport {
+			legacyCalls++
+			return cli.ActionReport{Title: "legacy install", ExitCode: 0}
+		},
+		InstallTarget: func(_ context.Context, target install.TargetID) cli.ActionReport {
+			targetCalls++
+			gotTarget = target
+			return cli.ActionReport{Title: "Lore install", ExitCode: 0, Checks: []output.Check{{Name: "install", Status: output.StatusOK, Detail: "install_target=antigravity"}}}
+		},
+	})
+	m = moveSelectionToInstall(t, m)
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = updated.(model)
+	if got := m.selectedInstallTarget().ID; got != install.TargetAntigravity {
+		t.Fatalf("selected target = %q, want antigravity", got)
+	}
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	if cmd == nil {
+		t.Fatal("enter on Antigravity should start install")
+	}
+	if m.installBackupDecisionPending {
+		t.Fatal("Antigravity should not trigger Pi full-backup confirmation")
+	}
+	updated, _ = m.Update(cmd())
+	m = updated.(model)
+	if legacyCalls != 0 || targetCalls != 1 {
+		t.Fatalf("legacyCalls=%d targetCalls=%d, want 0 and 1", legacyCalls, targetCalls)
+	}
+	if gotTarget != install.TargetAntigravity {
+		t.Fatalf("InstallTarget got %q, want antigravity", gotTarget)
+	}
+	if !strings.Contains(m.statusBody, "install_target=antigravity") {
+		t.Fatalf("statusBody = %q, want Antigravity execution summary", m.statusBody)
+	}
+}
+
+func TestInstallTargetSelectionMovesBetweenSupportedTargetsOnly(t *testing.T) {
+	m := moveSelectionToInstall(t, newModel(cli.InteractiveActions{}))
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	if got := m.selectedInstallTarget().ID; got != install.TargetPi {
+		t.Fatalf("selected target = %q, want pi", got)
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = updated.(model)
+	if got := m.selectedInstallTarget().ID; got != install.TargetAntigravity {
+		t.Fatalf("selected target after down = %q, want antigravity", got)
+	}
+	if strings.Contains(m.statusBody, "Selected target: Claude Code") {
+		t.Fatalf("statusBody = %q, want roadmap targets visible but not selected", m.statusBody)
 	}
 }
 

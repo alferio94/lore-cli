@@ -118,6 +118,8 @@ func currentModeLabel(m model) string {
 		return "Update confirmation"
 	case m.installBackupDecisionPending:
 		return "Install confirmation"
+	case m.installSelectionPending:
+		return "Install target selection"
 	case m.loading:
 		return "Running action"
 	default:

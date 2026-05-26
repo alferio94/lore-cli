@@ -528,6 +528,68 @@ func TestMCPJSONRPCRejectsNonObjectParams(t *testing.T) {
 	}
 }
 
+func TestMCPForwardReturnsResult(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{"jsonrpc": "2.0", "id": "lore-cli-mcp", "result": map[string]any{"tools": []map[string]any{{"name": "lore_me"}}}})
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server.URL, time.Second)
+	result, err := client.MCPForward(context.Background(), "secret-token", "tools/list", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("MCPForward() error = %v", err)
+	}
+	if string(result) != `{"tools":[{"name":"lore_me"}]}` {
+		t.Fatalf("result = %s, want tools list", result)
+	}
+}
+
+func TestMCPForwardShapesTokenSafeErrors(t *testing.T) {
+	tests := []struct {
+		name       string
+		client     func(t *testing.T) *HTTPClient
+		wantSubstr string
+	}{
+		{
+			name: "api error with request id",
+			client: func(t *testing.T) *HTTPClient {
+				t.Helper()
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					writeJSON(w, http.StatusUnauthorized, map[string]any{"error": map[string]any{"code": "unauthorized", "message": "invalid token", "request_id": "req-mcp-auth"}})
+				}))
+				t.Cleanup(server.Close)
+				return newTestClient(t, server.URL, time.Second)
+			},
+			wantSubstr: "upstream tools/list failed: authentication failed: invalid token (request_id=req-mcp-auth)",
+		},
+		{
+			name: "network error",
+			client: func(t *testing.T) *HTTPClient {
+				t.Helper()
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+				url := srv.URL
+				srv.Close()
+				return newTestClient(t, url, 50*time.Millisecond)
+			},
+			wantSubstr: "upstream tools/call failed: network request failed",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := tt.client(t)
+			_, err := client.MCPForward(context.Background(), "secret-token", map[string]string{"api error with request id": "tools/list", "network error": "tools/call"}[tt.name], json.RawMessage(`{}`))
+			var forwardErr *MCPForwardError
+			if !errors.As(err, &forwardErr) || !strings.Contains(forwardErr.Error(), tt.wantSubstr) {
+				t.Fatalf("MCPForward() err = %T %v, want substring %q", err, err, tt.wantSubstr)
+			}
+			if strings.Contains(forwardErr.Error(), "secret-token") {
+				t.Fatalf("MCPForward() error leaked token: %q", forwardErr.Error())
+			}
+		})
+	}
+}
+
 func TestRequestJSONErrorFallsBackToHeaderRequestID(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Request-Id", "req-skills-500")

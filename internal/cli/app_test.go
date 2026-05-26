@@ -1291,47 +1291,61 @@ func TestComponentFlagParsesRepeatedCommaSeparatedValues(t *testing.T) {
 	}
 }
 
-func TestMCPProxyCommandRequiresExplicitBridgeSelectionAndSavedAuth(t *testing.T) {
+func TestMCPServeCommandRequiresExplicitBridgeSelectionAndSavedAuth(t *testing.T) {
 	store := &fakeStore{path: "/tmp/lore/config.json", loadErr: config.ErrNotFound}
 	app, stdout, stderr := newTestApp(store, nil)
 
 	if exitCode := app.Run([]string{"mcp"}); exitCode != 1 {
 		t.Fatalf("mcp exitCode = %d, want 1 stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
 	}
-	if got := stderr.String(); !strings.Contains(got, "Usage: lore mcp <proxy>") || !strings.Contains(got, "opt-in") {
-		t.Fatalf("stderr = %q, want explicit opt-in bridge selection usage", got)
+	if got := stderr.String(); !strings.Contains(got, "Usage: lore mcp <serve|proxy>") || !strings.Contains(got, "canonical") {
+		t.Fatalf("stderr = %q, want explicit serve/proxy bridge selection usage", got)
 	}
 
 	stdout.Reset()
 	stderr.Reset()
-	if exitCode := app.Run([]string{"mcp", "proxy", "unexpected"}); exitCode != 1 {
-		t.Fatalf("mcp proxy unexpected exitCode = %d, want 1 stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	if exitCode := app.Run([]string{"mcp", "serve", "unexpected"}); exitCode != 1 {
+		t.Fatalf("mcp serve unexpected exitCode = %d, want 1 stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
 	}
-	if got := stderr.String(); !strings.Contains(got, "Usage: lore mcp proxy") || !strings.Contains(got, "auth-safe") || !strings.Contains(got, "default Pi install path") {
-		t.Fatalf("stderr = %q, want proxy usage guidance", got)
+	if got := stderr.String(); !strings.Contains(got, "Usage: lore mcp serve") || !strings.Contains(got, "auth-safe") || !strings.Contains(got, "default Pi install path") {
+		t.Fatalf("stderr = %q, want serve usage guidance", got)
 	}
 
 	stdout.Reset()
 	stderr.Reset()
-	if exitCode := app.Run([]string{"mcp", "proxy"}); exitCode != 1 {
-		t.Fatalf("mcp proxy exitCode = %d, want 1 stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	if exitCode := app.Run([]string{"mcp", "serve"}); exitCode != 1 {
+		t.Fatalf("mcp serve exitCode = %d, want 1 stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
 	}
-	if got := stderr.String(); !strings.Contains(got, "mcp proxy failed: no saved login state") || !strings.Contains(got, "password login") || !strings.Contains(got, "--token") {
+	if got := stderr.String(); !strings.Contains(got, "mcp serve failed: no saved login state") || !strings.Contains(got, "password login") || !strings.Contains(got, "--token") {
 		t.Fatalf("stderr = %q, want saved-auth remediation", got)
 	}
 }
 
-func TestMCPProxyCommandUsesSavedAuthAndFramesJSONRPC(t *testing.T) {
-	store := &fakeStore{path: "/tmp/lore/config.json", loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token"}}
-	client := &fakeClient{mcpJSONRPCResult: httpclient.RequestJSONResult{StatusCode: 200, RequestID: "req-proxy", Data: json.RawMessage(`{"protocolVersion":"2025-03-26"}`)}}
+func TestMCPProxyAliasUsesServeContract(t *testing.T) {
+	store := &fakeStore{path: "/tmp/lore/config.json", loadErr: config.ErrNotFound}
+	app, _, stderr := newTestApp(store, nil)
+
+	if exitCode := app.Run([]string{"mcp", "proxy", "unexpected"}); exitCode != 1 {
+		t.Fatalf("mcp proxy unexpected exitCode = %d, want 1 stderr=%q", exitCode, stderr.String())
+	}
+	if got := stderr.String(); !strings.Contains(got, "Usage: lore mcp proxy") || !strings.Contains(got, "deprecated") || !strings.Contains(got, "lore mcp serve") {
+		t.Fatalf("stderr = %q, want deprecated alias guidance", got)
+	}
+}
+
+func TestMCPServeCommandUsesSavedAuthAndFramesJSONRPC(t *testing.T) {
+	store := &fakeStore{path: "/tmp/lore/config.json", loaded: config.Config{ServerURL: "https://example.test", CredentialAccount: "acct-1"}}
+	creds := &fakeCredentialStore{secrets: map[string]string{auth.ServiceName + ":acct-1": "secret-token"}}
+	client := &fakeClient{mcpForwardResult: json.RawMessage(`{"protocolVersion":"2025-03-26"}`)}
 	app, stdout, stderr := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
+	app.Auth = auth.Manager{ConfigStore: store, Credentials: creds}
 	app.Stdin = strings.NewReader(testMCPFrame(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"tester"}}}`))
 
-	if exitCode := app.Run([]string{"mcp", "proxy"}); exitCode != 0 {
-		t.Fatalf("mcp proxy exitCode = %d, want 0 stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	if exitCode := app.Run([]string{"mcp", "serve"}); exitCode != 0 {
+		t.Fatalf("mcp serve exitCode = %d, want 0 stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
 	}
-	if client.mcpJSONRPCToken != "secret-token" || client.mcpJSONRPCMethod != "initialize" || string(client.mcpJSONRPCParams) != `{"clientInfo":{"name":"tester"}}` {
-		t.Fatalf("MCPJSONRPC token/method/params = %q/%q/%s", client.mcpJSONRPCToken, client.mcpJSONRPCMethod, client.mcpJSONRPCParams)
+	if client.mcpForwardToken != "secret-token" || client.mcpForwardMethod != "initialize" || string(client.mcpForwardParams) != `{"clientInfo":{"name":"tester"}}` {
+		t.Fatalf("MCPForward token/method/params = %q/%q/%s", client.mcpForwardToken, client.mcpForwardMethod, client.mcpForwardParams)
 	}
 	payload := readTestMCPFrame(t, stdout.String())
 	var envelope struct {
@@ -1342,7 +1356,33 @@ func TestMCPProxyCommandUsesSavedAuthAndFramesJSONRPC(t *testing.T) {
 		t.Fatalf("json.Unmarshal(payload): %v", err)
 	}
 	if string(envelope.ID) != `1` || string(envelope.Result) != `{"protocolVersion":"2025-03-26"}` {
-		t.Fatalf("proxy response = %s", payload)
+		t.Fatalf("serve response = %s", payload)
+	}
+	assertNoTokenLeak(t, stdout.String(), stderr.String(), "secret-token")
+}
+
+func TestMCPServeCommandShapesUpstreamFailuresWithoutLeakingSavedToken(t *testing.T) {
+	store := &fakeStore{path: "/tmp/lore/config.json", loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token"}}
+	client := &fakeClient{mcpForwardErr: &httpclient.MCPForwardError{Message: "upstream tools/call failed: network request failed"}}
+	app, stdout, stderr := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
+	app.Stdin = strings.NewReader(testMCPFrame(`{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"lore_project_context","arguments":{}}}`))
+
+	if exitCode := app.Run([]string{"mcp", "serve"}); exitCode != 0 {
+		t.Fatalf("mcp serve exitCode = %d, want 0 stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+	payload := readTestMCPFrame(t, stdout.String())
+	var envelope struct {
+		ID    json.RawMessage `json:"id"`
+		Error struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(payload, &envelope); err != nil {
+		t.Fatalf("json.Unmarshal(payload): %v", err)
+	}
+	if string(envelope.ID) != `9` || envelope.Error.Code != -32000 || !strings.Contains(envelope.Error.Message, "upstream tools/call failed") {
+		t.Fatalf("serve error response = %s", payload)
 	}
 	assertNoTokenLeak(t, stdout.String(), stderr.String(), "secret-token")
 }
@@ -1605,6 +1645,11 @@ type fakeClient struct {
 	mcpJSONRPCParams  json.RawMessage
 	mcpJSONRPCResult  httpclient.RequestJSONResult
 	mcpJSONRPCErr     error
+	mcpForwardToken   string
+	mcpForwardMethod  string
+	mcpForwardParams  json.RawMessage
+	mcpForwardResult  json.RawMessage
+	mcpForwardErr     error
 }
 
 func (c *fakeClient) Health(_ context.Context) error { return c.healthErr }
@@ -1663,6 +1708,16 @@ func (c *fakeClient) MCPJSONRPC(_ context.Context, token, method string, params 
 		return httpclient.RequestJSONResult{}, c.mcpJSONRPCErr
 	}
 	return c.mcpJSONRPCResult, nil
+}
+
+func (c *fakeClient) MCPForward(_ context.Context, token, method string, params json.RawMessage) (json.RawMessage, error) {
+	c.mcpForwardToken = token
+	c.mcpForwardMethod = method
+	c.mcpForwardParams = params
+	if c.mcpForwardErr != nil {
+		return nil, c.mcpForwardErr
+	}
+	return c.mcpForwardResult, nil
 }
 
 func (c *fakeClient) MCPCall(_ context.Context, token, toolName string, arguments json.RawMessage) (httpclient.RequestJSONResult, error) {

@@ -202,6 +202,10 @@ func (r PiInstallRequest) renderRequest() (RenderRequest, error) {
 		LoreCLIVersion:  strings.TrimSpace(r.LoreCLIVersion),
 		RuntimeContract: r.runtimeContractOrDefault(),
 	}
+	if r.Definition.SchemaVersion == 0 {
+		request.Assets = agentpack.DefaultOperationalAssets()
+		request.Definition = request.Assets.Definition()
+	}
 	if err := request.Validate(); err != nil {
 		return RenderRequest{}, err
 	}
@@ -514,22 +518,7 @@ func bootstrapPiTheme(layout PiLayout) error {
 }
 
 func mergeJSONAdditive(existing, desired []byte) ([]byte, error) {
-	base := map[string]any{}
-	if len(strings.TrimSpace(string(existing))) > 0 {
-		if err := json.Unmarshal(existing, &base); err != nil {
-			return nil, fmt.Errorf("decode existing settings.json: %w", err)
-		}
-	}
-	overlay := map[string]any{}
-	if err := json.Unmarshal(desired, &overlay); err != nil {
-		return nil, fmt.Errorf("decode rendered settings.json: %w", err)
-	}
-	merged := mergeMaps(base, overlay)
-	data, err := json.MarshalIndent(merged, "", "  ")
-	if err != nil {
-		return nil, fmt.Errorf("encode merged settings.json: %w", err)
-	}
-	return append(data, '\n'), nil
+	return mergeJSONObject(existing, desired, "settings.json", "settings.json", "settings.json")
 }
 
 func mergeMaps(base, overlay map[string]any) map[string]any {

@@ -2,6 +2,7 @@ package install
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -255,6 +256,45 @@ func TestDefaultPiAdapterRenderManagedAgentsUsesCanonicalAgentpack(t *testing.T)
 	}
 	if got := string(files[proposePath].Content); !containsAll(got, "phase: propose", "You execute the SDD propose phase.") || strings.Contains(got, "phase: proposal") {
 		t.Fatalf("propose managed overlay content = %q, want render-time propose phase mapping", got)
+	}
+}
+
+func TestDefaultPiAdapterCanonicalAssetsStayByteCompatibleWithProjectedDefinition(t *testing.T) {
+	adapter := defaultPiAdapter()
+	assets := agentpack.DefaultOperationalAssets()
+	definitionRequest := RenderRequest{
+		Target:     TargetPi,
+		Definition: assets.Definition(),
+		Components: []ComponentID{ComponentCorePack, ComponentPiExtensions},
+	}
+	assetRequest := RenderRequest{
+		Target:     TargetPi,
+		Assets:     assets,
+		Components: []ComponentID{ComponentCorePack, ComponentPiExtensions},
+	}
+
+	definitionFiles, err := adapter.Render(context.Background(), definitionRequest)
+	if err != nil {
+		t.Fatalf("Render(definition) error = %v, want nil", err)
+	}
+	assetFiles, err := adapter.Render(context.Background(), assetRequest)
+	if err != nil {
+		t.Fatalf("Render(assets) error = %v, want nil", err)
+	}
+	if !reflect.DeepEqual(assetFiles, definitionFiles) {
+		t.Fatalf("Render(assets) drifted from projected definition\nassets=%+v\ndefinition=%+v", assetFiles, definitionFiles)
+	}
+
+	definitionAgents, err := adapter.RenderManagedAgents(context.Background(), definitionRequest)
+	if err != nil {
+		t.Fatalf("RenderManagedAgents(definition) error = %v, want nil", err)
+	}
+	assetAgents, err := adapter.RenderManagedAgents(context.Background(), assetRequest)
+	if err != nil {
+		t.Fatalf("RenderManagedAgents(assets) error = %v, want nil", err)
+	}
+	if !reflect.DeepEqual(assetAgents, definitionAgents) {
+		t.Fatalf("RenderManagedAgents(assets) drifted from projected definition\nassets=%+v\ndefinition=%+v", assetAgents, definitionAgents)
 	}
 }
 

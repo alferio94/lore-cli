@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -333,6 +334,9 @@ func (*stubClient) RequestJSON(context.Context, string, string, string, json.Raw
 }
 func (*stubClient) MCPJSONRPC(context.Context, string, string, json.RawMessage) (httpclient.RequestJSONResult, error) {
 	panic("unexpected MCPJSONRPC call")
+}
+func (*stubClient) MCPForward(context.Context, string, string, json.RawMessage) (json.RawMessage, error) {
+	panic("unexpected MCPForward call")
 }
 func (*stubClient) MCPCall(context.Context, string, string, json.RawMessage) (httpclient.RequestJSONResult, error) {
 	panic("unexpected MCPCall call")
@@ -959,6 +963,46 @@ func TestPlanAntigravityInstallReportsPromptSkillsActions(t *testing.T) {
 	}
 }
 
+func TestPlanAntigravityInstallDefaultCanonicalAssetsMatchProjectedDefinition(t *testing.T) {
+	homeDir := t.TempDir()
+	now := time.Date(2026, 5, 25, 13, 15, 0, 0, time.UTC)
+	assets := agentpack.DefaultOperationalAssets()
+
+	canonicalPlan, err := Service{}.PlanAntigravityInstall(InstallRequest{
+		HomeDir:        homeDir,
+		ServerURL:      "https://lore.example",
+		LoreBinaryPath: "/usr/local/bin/lore",
+		LoreConfigDir:  filepath.Join(homeDir, ".lore"),
+		LoreCLIVersion: "v1.2.3",
+		Target:         TargetAntigravity,
+		Now:            now,
+	})
+	if err != nil {
+		t.Fatalf("PlanAntigravityInstall(canonical) error: %v", err)
+	}
+
+	projectedPlan, err := Service{}.PlanAntigravityInstall(InstallRequest{
+		HomeDir:        homeDir,
+		ServerURL:      "https://lore.example",
+		LoreBinaryPath: "/usr/local/bin/lore",
+		LoreConfigDir:  filepath.Join(homeDir, ".lore"),
+		LoreCLIVersion: "v1.2.3",
+		Target:         TargetAntigravity,
+		Definition:     assets.Definition(),
+		Now:            now,
+	})
+	if err != nil {
+		t.Fatalf("PlanAntigravityInstall(projected definition) error: %v", err)
+	}
+
+	if !reflect.DeepEqual(canonicalPlan.Files, projectedPlan.Files) {
+		t.Fatalf("plan files drifted between canonical assets and projected definition\ncanonical=%+v\nprojected=%+v", canonicalPlan.Files, projectedPlan.Files)
+	}
+	if !reflect.DeepEqual(canonicalPlan.Layout, projectedPlan.Layout) {
+		t.Fatalf("plan layout drifted between canonical assets and projected definition\ncanonical=%+v\nprojected=%+v", canonicalPlan.Layout, projectedPlan.Layout)
+	}
+}
+
 func TestExecuteAntigravityInstallWritesPromptSkillsAndManifest(t *testing.T) {
 	homeDir := t.TempDir()
 	now := time.Date(2026, 5, 25, 13, 30, 0, 0, time.UTC)
@@ -999,6 +1043,20 @@ func TestExecuteAntigravityInstallWritesPromptSkillsAndManifest(t *testing.T) {
 	if strings.Contains(promptText, "agents/lore-managed") || strings.Contains(promptText, ".pi/agent") {
 		t.Fatalf("prompt content leaked Pi semantics: %q", promptText)
 	}
+	skillPath := filepath.Join(homeDir, ".gemini", "antigravity-cli", "skills", "sdd-apply", "SKILL.md")
+	skillContent, err := os.ReadFile(skillPath)
+	if err != nil {
+		t.Fatalf("ReadFile(skill) error: %v", err)
+	}
+	skillText := string(skillContent)
+	if !containsAll(skillText, "~/.gemini/antigravity-cli/skills/sdd-apply/SKILL.md", "~/.gemini/antigravity-cli/skills/_shared/sdd-phase-common.md") {
+		t.Fatalf("skill content = %q, want Antigravity skill paths", skillText)
+	}
+	for _, forbidden := range []string{"~/.pi/agent/skills/", "agents/lore-managed", "managedBy:", "phase:", "skillPolicyMode:"} {
+		if strings.Contains(skillText, forbidden) {
+			t.Fatalf("skill content = %q, want %q omitted from Antigravity skill output", skillText, forbidden)
+		}
+	}
 	manifestPath := filepath.Join(homeDir, ".gemini", "antigravity-cli", "lore-install.json")
 	manifest, err := LoadManifest(manifestPath)
 	if err != nil {
@@ -1009,6 +1067,57 @@ func TestExecuteAntigravityInstallWritesPromptSkillsAndManifest(t *testing.T) {
 	}
 	if err := manifest.ValidateForLayout(result.Layout, managedManifestPaths(manifest), filepath.Join(result.Layout.RootDir, "backups")); err != nil {
 		t.Fatalf("ValidateForLayout(antigravity) error: %v", err)
+	}
+}
+
+func TestExecuteAntigravityInstallMergesMCPConfigAtGeminiConfigPath(t *testing.T) {
+	homeDir := t.TempDir()
+	now := time.Date(2026, 5, 25, 13, 45, 0, 0, time.UTC)
+	mcpPath := filepath.Join(homeDir, ".gemini", "config", "mcp_config.json")
+	if err := os.MkdirAll(filepath.Dir(mcpPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(mcp config dir) error: %v", err)
+	}
+	if err := os.WriteFile(mcpPath, []byte("   \n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(empty mcp config) error: %v", err)
+	}
+
+	service := Service{}
+	plan, err := service.PlanAntigravityInstall(InstallRequest{
+		HomeDir:        homeDir,
+		ServerURL:      "https://lore.example",
+		LoreBinaryPath: "/usr/local/bin/lore",
+		LoreConfigDir:  filepath.Join(homeDir, ".lore"),
+		LoreCLIVersion: "v1.2.3",
+		Target:         TargetAntigravity,
+		Components:     []ComponentID{ComponentCorePack, ComponentLoreServerMCP},
+		Now:            now,
+	})
+	if err != nil {
+		t.Fatalf("PlanAntigravityInstall(with MCP) error: %v", err)
+	}
+
+	result, err := service.ExecuteAntigravityInstall(plan, InstallCommandOptions{})
+	if err != nil {
+		t.Fatalf("ExecuteAntigravityInstall(with MCP) error: %v", err)
+	}
+	if !containsSummaryEntry(result.Summary.Updated, filepath.ToSlash(filepath.Join("..", "config", "mcp_config.json")), "") {
+		t.Fatalf("Updated = %v, want managed MCP config update entry", result.Summary.Updated)
+	}
+	mcpContent, err := os.ReadFile(mcpPath)
+	if err != nil {
+		t.Fatalf("ReadFile(mcp config) error: %v", err)
+	}
+	mcpText := string(mcpContent)
+	if !containsAll(mcpText, `"mcpServers"`, `"lore"`, `"/usr/local/bin/lore"`) {
+		t.Fatalf("mcp config = %q, want Lore MCP server written to ~/.gemini/config", mcpText)
+	}
+	manifestPath := filepath.Join(homeDir, ".gemini", "antigravity-cli", "lore-install.json")
+	manifest, err := LoadManifest(manifestPath)
+	if err != nil {
+		t.Fatalf("LoadManifest(antigravity with MCP) error: %v", err)
+	}
+	if !containsSummaryEntry(managedManifestPaths(manifest), filepath.ToSlash(filepath.Join(".gemini", "config", "mcp_config.json")), "") {
+		t.Fatalf("manifest managed paths = %v, want ~/.gemini/config/mcp_config.json", managedManifestPaths(manifest))
 	}
 }
 
@@ -1105,6 +1214,42 @@ func TestPlanPiInstallReportsExistingPiAndBackupPathOutsidePiDir(t *testing.T) {
 	piRoot := filepath.Join(homeDir, ".pi")
 	if plan.FullBackup.BackupPath == piRoot || strings.HasPrefix(plan.FullBackup.BackupPath, piRoot+string(os.PathSeparator)) {
 		t.Fatalf("FullBackup.BackupPath = %q, want path outside %q", plan.FullBackup.BackupPath, piRoot)
+	}
+}
+
+func TestPlanPiInstallDefaultCanonicalAssetsMatchProjectedDefinition(t *testing.T) {
+	homeDir := t.TempDir()
+	now := time.Date(2026, 5, 25, 14, 0, 0, 0, time.UTC)
+	base := PiInstallRequest{
+		HomeDir:        homeDir,
+		ServerURL:      "https://lore.example",
+		LoreBinaryPath: "/usr/local/bin/lore",
+		LoreConfigDir:  filepath.Join(homeDir, ".lore"),
+		LoreCLIVersion: "v1.2.3",
+		Now:            now,
+	}
+
+	defaultPlan, err := Service{}.PlanPiInstall(base)
+	if err != nil {
+		t.Fatalf("PlanPiInstall(default) error: %v", err)
+	}
+	definitionPlan, err := Service{}.PlanPiInstall(PiInstallRequest{
+		HomeDir:        base.HomeDir,
+		ServerURL:      base.ServerURL,
+		LoreBinaryPath: base.LoreBinaryPath,
+		LoreConfigDir:  base.LoreConfigDir,
+		LoreCLIVersion: base.LoreCLIVersion,
+		Definition:     agentpack.DefaultDefinition(),
+		Now:            base.Now,
+	})
+	if err != nil {
+		t.Fatalf("PlanPiInstall(projected definition) error: %v", err)
+	}
+	if !reflect.DeepEqual(defaultPlan.ManagedFileActions, definitionPlan.ManagedFileActions) {
+		t.Fatalf("PlanPiInstall(default assets) drifted from projected definition\ndefault=%+v\ndefinition=%+v", defaultPlan.ManagedFileActions, definitionPlan.ManagedFileActions)
+	}
+	if !reflect.DeepEqual(defaultPlan.ManagedAgentConflicts, definitionPlan.ManagedAgentConflicts) {
+		t.Fatalf("PlanPiInstall(default assets) conflicts drifted\ndefault=%+v\ndefinition=%+v", defaultPlan.ManagedAgentConflicts, definitionPlan.ManagedAgentConflicts)
 	}
 }
 

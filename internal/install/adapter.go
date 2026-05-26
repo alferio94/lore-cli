@@ -33,6 +33,7 @@ type Capability struct {
 type RenderRequest struct {
 	Target          TargetID
 	Definition      agentpack.Definition
+	Assets          agentpack.OperationalAssets
 	Components      []ComponentID
 	ServerURL       string
 	LoreBinaryPath  string
@@ -91,13 +92,31 @@ func (r RenderRequest) Validate() error {
 	if r.Target == "" {
 		return fmt.Errorf("target is required")
 	}
-	if err := r.Definition.Validate(); err != nil {
+	if err := r.effectiveDefinition().Validate(); err != nil {
 		return fmt.Errorf("definition: %w", err)
 	}
 	if _, err := NormalizeComponentSelection(r.Target, r.Components); err != nil {
 		return err
 	}
 	return nil
+}
+
+func (r RenderRequest) effectiveDefinition() agentpack.Definition {
+	if r.Assets.PackID != "" {
+		return r.Assets.Definition()
+	}
+	if r.Definition.SchemaVersion == 0 {
+		return agentpack.DefaultDefinition()
+	}
+	return r.Definition
+}
+
+func (r RenderRequest) effectiveManagedAgents(resolver agentpack.SkillPathResolver) []agentpack.ManagedAgent {
+	if r.Assets.PackID != "" {
+		return r.Assets.ManagedAgents(resolver)
+	}
+	definition := r.effectiveDefinition()
+	return append([]agentpack.ManagedAgent(nil), definition.ManagedAgents...)
 }
 
 func defaultInstallRegistry() (*Registry, error) {

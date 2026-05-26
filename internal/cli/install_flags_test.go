@@ -71,44 +71,82 @@ func TestInstallCommandSupportsAntigravityDryRunAndApply(t *testing.T) {
 	app.ExecutablePath = func() (string, error) { return "/usr/local/bin/lore", nil }
 	app.BuildInfo = version.Info{Version: "v1.2.3"}
 
-	if exitCode := app.Run([]string{"install", "--dry-run", "--target", "antigravity"}); exitCode != 0 {
-		t.Fatalf("install --dry-run --target antigravity exitCode = %d, want 0, stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
-	}
-	out := stdout.String()
-	for _, want := range []string{"install_target=antigravity", "runtime=antigravity-prompt-skills", "components=core-pack", "mode=dry-run", "managed_action=create:../GEMINI.md", "managed_action=create:skills/sdd-apply/SKILL.md", "managed_action=create:lore-install.json"} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("stdout = %q, want substring %q", out, want)
+	t.Run("core pack only", func(t *testing.T) {
+		if exitCode := app.Run([]string{"install", "--dry-run", "--target", "antigravity"}); exitCode != 0 {
+			t.Fatalf("install --dry-run --target antigravity exitCode = %d, want 0, stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
 		}
-	}
-	if _, err := os.Stat(filepath.Join(homeDir, ".gemini", "GEMINI.md")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("GEMINI.md stat err = %v, want no prompt writes after dry-run", err)
-	}
-	assertNoTokenLeak(t, out, stderr.String(), "secret-token=antigravity-wording")
+		out := stdout.String()
+		for _, want := range []string{"install_target=antigravity", "runtime=antigravity-prompt-skills", "components=core-pack", "mode=dry-run", "managed_action=create:../GEMINI.md", "managed_action=create:skills/sdd-apply/SKILL.md", "managed_action=create:lore-install.json"} {
+			if !strings.Contains(out, want) {
+				t.Fatalf("stdout = %q, want substring %q", out, want)
+			}
+		}
+		if strings.Contains(out, "mcp_config.json") {
+			t.Fatalf("stdout = %q, want optional MCP config omitted unless selected", out)
+		}
+		if _, err := os.Stat(filepath.Join(homeDir, ".gemini", "GEMINI.md")); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("GEMINI.md stat err = %v, want no prompt writes after dry-run", err)
+		}
+		assertNoTokenLeak(t, out, stderr.String(), "secret-token=antigravity-wording")
+		stdout.Reset()
+		stderr.Reset()
+	})
 
-	stdout.Reset()
-	stderr.Reset()
-	if exitCode := app.Run([]string{"install", "--target", "antigravity"}); exitCode != 0 {
-		t.Fatalf("install --target antigravity exitCode = %d, want 0, stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
-	}
-	out = stdout.String()
-	for _, want := range []string{"install_target=antigravity", "runtime=antigravity-prompt-skills", "managed_action=create:../GEMINI.md", "managed_action=create:skills/sdd-apply/SKILL.md", "managed_action=create:lore-install.json"} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("stdout = %q, want substring %q", out, want)
+	t.Run("optional mcp config uses lore mcp serve", func(t *testing.T) {
+		if exitCode := app.Run([]string{"install", "--target", "antigravity", "--component", "lore-server-mcp"}); exitCode != 0 {
+			t.Fatalf("install --target antigravity --component lore-server-mcp exitCode = %d, want 0, stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
 		}
-	}
-	if strings.Contains(out, "Coming soon") {
-		t.Fatalf("stdout = %q, want real Antigravity install flow instead of roadmap wording", out)
-	}
-	for _, path := range []string{
-		filepath.Join(homeDir, ".gemini", "GEMINI.md"),
-		filepath.Join(homeDir, ".gemini", "antigravity-cli", "skills", "sdd-apply", "SKILL.md"),
-		filepath.Join(homeDir, ".gemini", "antigravity-cli", "lore-install.json"),
-	} {
-		if _, err := os.Stat(path); err != nil {
-			t.Fatalf("stat %s error = %v, want installed Antigravity artifact", path, err)
+		out := stdout.String()
+		for _, want := range []string{"install_target=antigravity", "runtime=antigravity-prompt-skills", "components=core-pack,lore-server-mcp", "managed_action=create:../config/mcp_config.json", "managed_action=create:lore-install.json"} {
+			if !strings.Contains(out, want) {
+				t.Fatalf("stdout = %q, want substring %q", out, want)
+			}
 		}
-	}
-	assertNoTokenLeak(t, out, stderr.String(), "secret-token=antigravity-wording")
+		if strings.Contains(out, "Coming soon") {
+			t.Fatalf("stdout = %q, want real Antigravity install flow instead of roadmap wording", out)
+		}
+		for _, path := range []string{
+			filepath.Join(homeDir, ".gemini", "GEMINI.md"),
+			filepath.Join(homeDir, ".gemini", "antigravity-cli", "skills", "sdd-apply", "SKILL.md"),
+			filepath.Join(homeDir, ".gemini", "antigravity-cli", "lore-install.json"),
+			filepath.Join(homeDir, ".gemini", "config", "mcp_config.json"),
+		} {
+			if _, err := os.Stat(path); err != nil {
+				t.Fatalf("stat %s error = %v, want installed Antigravity artifact", path, err)
+			}
+		}
+		skillBody, err := os.ReadFile(filepath.Join(homeDir, ".gemini", "antigravity-cli", "skills", "sdd-apply", "SKILL.md"))
+		if err != nil {
+			t.Fatalf("ReadFile(installed antigravity skill) error = %v", err)
+		}
+		skillText := string(skillBody)
+		for _, want := range []string{"~/.gemini/antigravity-cli/skills/sdd-apply/SKILL.md", "~/.gemini/antigravity-cli/skills/_shared/sdd-phase-common.md"} {
+			if !strings.Contains(skillText, want) {
+				t.Fatalf("installed Antigravity skill = %q, want substring %q", skillText, want)
+			}
+		}
+		for _, forbidden := range []string{"~/.pi/agent/skills/", "agents/lore-managed", "managedBy:", "phase:", "skillPolicyMode:"} {
+			if strings.Contains(skillText, forbidden) {
+				t.Fatalf("installed Antigravity skill = %q, want %q omitted", skillText, forbidden)
+			}
+		}
+		mcpBody, err := os.ReadFile(filepath.Join(homeDir, ".gemini", "config", "mcp_config.json"))
+		if err != nil {
+			t.Fatalf("ReadFile(mcp_config.json) error = %v", err)
+		}
+		mcpText := string(mcpBody)
+		for _, want := range []string{`"command": "/usr/local/bin/lore"`, `"args": [`, `"mcp"`, `"serve"`} {
+			if !strings.Contains(mcpText, want) {
+				t.Fatalf("mcp_config.json = %q, want substring %q", mcpText, want)
+			}
+		}
+		for _, forbidden := range []string{"https://example.test", "secret-token", "Authorization", "daemon", "autostart"} {
+			if strings.Contains(mcpText, forbidden) {
+				t.Fatalf("mcp_config.json = %q, want %q omitted", mcpText, forbidden)
+			}
+		}
+		assertNoTokenLeak(t, out, stderr.String(), "secret-token=antigravity-wording")
+	})
 }
 
 func TestInstallCommandRejectsUnsupportedPiMCPComponent(t *testing.T) {

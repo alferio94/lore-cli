@@ -71,6 +71,8 @@ type model struct {
 	statusTitle                  string
 	statusBody                   string
 	statusTone                   string
+	installTargets               []install.Target
+	installTargetIndex           int
 	installSelectionPending      bool
 	installBackupDecisionPending bool
 	installPlan                  *install.PiInstallPlan
@@ -108,8 +110,19 @@ func newModel(actions cli.InteractiveActions) model {
 	passwordInput.EchoMode = textinput.EchoPassword
 	passwordInput.EchoCharacter = '•'
 
+	installTargets := install.DefaultTargets()
+	installTargetIndex := 0
+	for i, target := range installTargets {
+		if target.ID == install.DefaultInstallTarget() {
+			installTargetIndex = i
+			break
+		}
+	}
+
 	m := model{
-		actions: actions,
+		actions:            actions,
+		installTargets:     installTargets,
+		installTargetIndex: installTargetIndex,
 		items: []menuItem{
 			{key: "status", title: "Status", description: "Inspect config, health, readiness, and authenticated identity."},
 			{key: "login", title: "Login", description: "Use email + password to mint a reusable token, store only that token in secure credential storage, and keep --token as CLI compatibility mode."},
@@ -260,6 +273,18 @@ func (m model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
+	if m.installSelectionPending {
+		switch msg.String() {
+		case "up", "k":
+			m.moveInstallTargetSelection(-1)
+			m.statusBody = m.renderInstallTargetSelection()
+			return m, nil
+		case "down", "j":
+			m.moveInstallTargetSelection(1)
+			m.statusBody = m.renderInstallTargetSelection()
+			return m, nil
+		}
+	}
 	switch msg.String() {
 	case "ctrl+c", "q":
 		m.quitting = true
@@ -384,7 +409,7 @@ func (m model) activateSelection() (tea.Model, tea.Cmd) {
 			m.installSelectionPending = true
 			m.focus = focusDetail
 			m.statusTitle = "Install Lore"
-			m.statusBody = install.FormatTargetSelection(install.DefaultTargets())
+			m.statusBody = m.renderInstallTargetSelection()
 			m.statusTone = toneInfo
 			return m, nil
 		}
@@ -426,7 +451,8 @@ func (m model) activateSelection() (tea.Model, tea.Cmd) {
 }
 
 func (m model) startInstallFlow() (tea.Model, tea.Cmd) {
-	if m.actions.PlanPiInstall != nil {
+	selectedTarget := m.selectedInstallTarget()
+	if selectedTarget.ID == install.TargetPi && m.actions.PlanPiInstall != nil {
 		plan, report, ok := m.actions.PlanPiInstall(context.Background())
 		if !ok {
 			m.focus = focusDetail
@@ -446,23 +472,31 @@ func (m model) startInstallFlow() (tea.Model, tea.Cmd) {
 		}
 		return m.runInstallWithPlan(plan)
 	}
-	if homeDir, err := os.UserHomeDir(); err == nil {
-		currentUser, currentErr := user.Current()
-		if currentErr != nil || currentUser.HomeDir != homeDir {
-			plan := install.PiInstallPlan{Layout: install.ResolvePiLayout(homeDir)}
-			if info, statErr := os.Lstat(plan.Layout.PiDir); statErr == nil {
-				plan.ExistingPi = install.ExistingPiState{Exists: true, Path: plan.Layout.PiDir, Mode: info.Mode(), Size: info.Size(), ModTime: info.ModTime().UTC()}
-				m.installPlan = &plan
-				m.installBackupDecisionPending = true
-				m.focus = focusDetail
-				m.statusTitle = "Full backup before install?"
-				m.statusBody = fmt.Sprintf("Existing ~/.pi detected at %s. Create a full backup before Lore mutates managed Pi files? Press y to continue with a full backup, or n to continue without it.", plan.ExistingPi.Path)
-				m.statusTone = toneInfo
-				return m, nil
+	if selectedTarget.ID == install.TargetPi {
+		if homeDir, err := os.UserHomeDir(); err == nil {
+			currentUser, currentErr := user.Current()
+			if currentErr != nil || currentUser.HomeDir != homeDir {
+				plan := install.PiInstallPlan{Layout: install.ResolvePiLayout(homeDir)}
+				if info, statErr := os.Lstat(plan.Layout.PiDir); statErr == nil {
+					plan.ExistingPi = install.ExistingPiState{Exists: true, Path: plan.Layout.PiDir, Mode: info.Mode(), Size: info.Size(), ModTime: info.ModTime().UTC()}
+					m.installPlan = &plan
+					m.installBackupDecisionPending = true
+					m.focus = focusDetail
+					m.statusTitle = "Full backup before install?"
+					m.statusBody = fmt.Sprintf("Existing ~/.pi detected at %s. Create a full backup before Lore mutates managed Pi files? Press y to continue with a full backup, or n to continue without it.", plan.ExistingPi.Path)
+					m.statusTone = toneInfo
+					return m, nil
+				}
 			}
 		}
 	}
-	if m.actions.Install == nil {
+	if m.actions.InstallTarget != nil {
+		return m.runAsync(actionInstall, "Install Lore", func(ctx context.Context) actionMsg {
+			report := m.actions.InstallTarget(ctx, selectedTarget.ID)
+			return actionMsg{kind: actionInstall, title: report.Title, body: renderReport(report), isError: report.ExitCode != 0}
+		})
+	}
+	if selectedTarget.ID != install.DefaultInstallTarget() || m.actions.Install == nil {
 		return m, nil
 	}
 	return m.runAsync(actionInstall, "Install Lore", func(ctx context.Context) actionMsg {
@@ -480,6 +514,12 @@ func (m model) confirmInstallBackupDecision(includeBackup bool) (tea.Model, tea.
 	}
 	if m.installPlan != nil {
 		return m.runInstallWithPlan(*m.installPlan)
+	}
+	if m.actions.InstallTarget != nil {
+		return m.runAsync(actionInstall, "Install Lore", func(ctx context.Context) actionMsg {
+			report := m.actions.InstallTarget(ctx, install.TargetPi)
+			return actionMsg{kind: actionInstall, title: report.Title, body: renderReport(report), isError: report.ExitCode != 0}
+		})
 	}
 	if m.actions.Install == nil {
 		return m, nil
@@ -512,6 +552,12 @@ func (m model) runInstallWithPlan(plan install.PiInstallPlan) (tea.Model, tea.Cm
 			return actionMsg{kind: actionInstall, title: report.Title, body: renderReport(report), isError: report.ExitCode != 0}
 		})
 	}
+	if m.actions.InstallTarget != nil {
+		return m.runAsync(actionInstall, "Install Lore", func(ctx context.Context) actionMsg {
+			report := m.actions.InstallTarget(ctx, install.TargetPi)
+			return actionMsg{kind: actionInstall, title: report.Title, body: renderReport(report), isError: report.ExitCode != 0}
+		})
+	}
 	if m.actions.Install == nil {
 		return m, nil
 	}
@@ -519,6 +565,53 @@ func (m model) runInstallWithPlan(plan install.PiInstallPlan) (tea.Model, tea.Cm
 		report := m.actions.Install(ctx)
 		return actionMsg{kind: actionInstall, title: report.Title, body: renderReport(report), isError: report.ExitCode != 0}
 	})
+}
+
+func (m *model) moveInstallTargetSelection(step int) {
+	if len(m.installTargets) == 0 {
+		return
+	}
+	index := m.installTargetIndex
+	for attempts := 0; attempts < len(m.installTargets); attempts++ {
+		index = (index + step + len(m.installTargets)) % len(m.installTargets)
+		if m.installTargets[index].Available {
+			m.installTargetIndex = index
+			return
+		}
+	}
+}
+
+func (m model) selectedInstallTarget() install.Target {
+	if len(m.installTargets) == 0 {
+		return install.Target{ID: install.DefaultInstallTarget(), Title: "Pi", Available: true, Recommended: true}
+	}
+	if m.installTargetIndex < 0 || m.installTargetIndex >= len(m.installTargets) {
+		return m.installTargets[0]
+	}
+	return m.installTargets[m.installTargetIndex]
+}
+
+func (m model) renderInstallTargetSelection() string {
+	var b strings.Builder
+	selected := m.selectedInstallTarget()
+	b.WriteString("Choose an install target:\n")
+	for i, target := range m.installTargets {
+		prefix := "- "
+		if i == m.installTargetIndex {
+			prefix = "› "
+		}
+		label := target.Title
+		if target.Recommended {
+			label += " — Recommended"
+		}
+		if target.Available {
+			fmt.Fprintf(&b, "%s%s: %s\n", prefix, label, target.Description)
+			continue
+		}
+		fmt.Fprintf(&b, "%s%s: %s (%s)\n", prefix, label, target.Description, target.Availability)
+	}
+	fmt.Fprintf(&b, "\nSelected target: %s. Use ↑/↓ to switch between supported targets and Enter to continue. Pi remains the default recommended path. Pi MCP stays disabled by default while Antigravity MCP is optional.", selected.Title)
+	return b.String()
 }
 
 func (m model) submitLogin() (tea.Model, tea.Cmd) {

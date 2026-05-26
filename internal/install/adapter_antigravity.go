@@ -78,19 +78,21 @@ func ResolveAntigravityLayout(homeDir string) HarnessLayout {
 	manifestPath := filepath.Join(rootDir, "lore-install.json")
 	sharedPromptPath := filepath.Join(geminiDir, "GEMINI.md")
 	skillsDir := filepath.Join(rootDir, "skills")
-	mcpPath := filepath.Join(rootDir, "mcp_config.json")
+	geminiConfigDir := filepath.Join(geminiDir, "config")
+	mcpPath := filepath.Join(geminiConfigDir, "mcp_config.json")
 	return HarnessLayout{
 		Target:       TargetAntigravity,
 		RootDir:      rootDir,
 		ManifestPath: manifestPath,
 		Paths: map[string]string{
-			"gemini_dir":      geminiDir,
-			"shared_prompt":   sharedPromptPath,
-			"skills_dir":      skillsDir,
-			"manifest":        manifestPath,
-			"mcp_config":      mcpPath,
-			"harness_root":    rootDir,
-			"antigravity_dir": rootDir,
+			"gemini_dir":        geminiDir,
+			"gemini_config_dir": geminiConfigDir,
+			"shared_prompt":     sharedPromptPath,
+			"skills_dir":        skillsDir,
+			"manifest":          manifestPath,
+			"mcp_config":        mcpPath,
+			"harness_root":      rootDir,
+			"antigravity_dir":   rootDir,
 		},
 	}
 }
@@ -109,22 +111,23 @@ func (a antigravityAdapter) Render(_ context.Context, req RenderRequest) ([]Rend
 		}
 	}
 
+	definition := req.effectiveDefinition()
 	rendered := []RenderedFile{{
 		Component:    ComponentCorePack,
 		RelativePath: filepath.ToSlash(filepath.Join("..", "GEMINI.md")),
 		MergeMode:    MergeMode("marker-merge"),
-		Content:      renderAntigravityPrompt(req.Definition),
+		Content:      renderAntigravityPrompt(definition),
 	}}
-	rendered = append(rendered, renderAntigravitySkills(req.Definition)...)
+	rendered = append(rendered, renderAntigravitySkills(req)...)
 	if containsComponent(components, ComponentLoreServerMCP) {
-		content, err := renderAntigravityMCPConfig(strings.TrimSpace(req.ServerURL))
+		content, err := renderAntigravityMCPConfig(strings.TrimSpace(req.LoreBinaryPath))
 		if err != nil {
 			return nil, err
 		}
 		rendered = append(rendered, RenderedFile{
 			Component:    ComponentLoreServerMCP,
-			RelativePath: "mcp_config.json",
-			MergeMode:    MergeModeReplace,
+			RelativePath: filepath.ToSlash(filepath.Join("..", "config", "mcp_config.json")),
+			MergeMode:    MergeModeAdditiveJSON,
 			Content:      content,
 		})
 	}
@@ -161,18 +164,16 @@ func renderAntigravityPrompt(definition agentpack.Definition) []byte {
 	return []byte(text)
 }
 
-func renderAntigravitySkills(definition agentpack.Definition) []RenderedFile {
-	if definition.SchemaVersion == 0 {
-		definition = agentpack.DefaultDefinition()
-	}
-	rendered := make([]RenderedFile, 0, len(definition.ManagedAgents))
-	for _, agent := range definition.ManagedAgents {
+func renderAntigravitySkills(req RenderRequest) []RenderedFile {
+	managedAgents := req.effectiveManagedAgents(agentpack.AntigravitySkillPathResolver())
+	rendered := make([]RenderedFile, 0, len(managedAgents))
+	for _, agent := range managedAgents {
 		content := strings.Join([]string{
 			"---",
 			fmt.Sprintf("name: %s", agent.Name),
 			fmt.Sprintf("description: %s", agent.Description),
 			"---",
-			strings.ReplaceAll(agent.Body, "~/.pi/agent/skills/", "~/.gemini/antigravity-cli/skills/"),
+			agent.Body,
 		}, "\n")
 		if !strings.HasSuffix(content, "\n") {
 			content += "\n"
@@ -188,13 +189,16 @@ func renderAntigravitySkills(definition agentpack.Definition) []RenderedFile {
 	return rendered
 }
 
-func renderAntigravityMCPConfig(serverURL string) ([]byte, error) {
-	if serverURL == "" {
-		serverURL = "http://localhost"
+func renderAntigravityMCPConfig(loreBinaryPath string) ([]byte, error) {
+	if loreBinaryPath == "" {
+		loreBinaryPath = "lore"
 	}
 	payload := map[string]any{
-		"mcpServers": map[string]map[string]string{
-			"lore": {"url": serverURL},
+		"mcpServers": map[string]any{
+			"lore": map[string]any{
+				"command": loreBinaryPath,
+				"args":    []string{"mcp", "serve"},
+			},
 		},
 	}
 	data, err := json.MarshalIndent(payload, "", "  ")
@@ -280,7 +284,7 @@ func antigravityAbsolutePath(layout HarnessLayout, relativePath string) string {
 	switch cleanRelativePath {
 	case filepath.ToSlash(filepath.Join("..", "GEMINI.md")):
 		return layout.Paths["shared_prompt"]
-	case "mcp_config.json":
+	case filepath.ToSlash(filepath.Join("..", "config", "mcp_config.json")):
 		return layout.Paths["mcp_config"]
 	default:
 		return filepath.Join(layout.RootDir, filepath.FromSlash(cleanRelativePath))

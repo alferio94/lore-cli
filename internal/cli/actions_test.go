@@ -52,6 +52,10 @@ func TestInteractiveActionsExposeAppHelpers(t *testing.T) {
 	if installReport.ExitCode != 0 || installReport.Title != "Lore install" {
 		t.Fatalf("Install() = %+v, want successful Pi install report", installReport)
 	}
+	antigravityReport := actions.InstallTarget(context.Background(), install.TargetAntigravity)
+	if antigravityReport.ExitCode != 0 || antigravityReport.Title != "Lore install" {
+		t.Fatalf("InstallTarget(antigravity) = %+v, want successful Antigravity install report", antigravityReport)
+	}
 	foundInstallSummary := false
 	for _, check := range installReport.Checks {
 		if check.Name == "install" && strings.Contains(check.Detail, "install_target=pi") {
@@ -61,6 +65,16 @@ func TestInteractiveActionsExposeAppHelpers(t *testing.T) {
 	}
 	if !foundInstallSummary {
 		t.Fatalf("Install() checks = %+v, want unchanged Pi install summary", installReport.Checks)
+	}
+	foundAntigravitySummary := false
+	for _, check := range antigravityReport.Checks {
+		if check.Name == "install" && strings.Contains(check.Detail, "install_target=antigravity") {
+			foundAntigravitySummary = true
+			break
+		}
+	}
+	if !foundAntigravitySummary {
+		t.Fatalf("InstallTarget(antigravity) checks = %+v, want Antigravity install summary", antigravityReport.Checks)
 	}
 	if _, err := actions.Logout(context.Background()); err != nil {
 		t.Fatalf("Logout() error = %v", err)

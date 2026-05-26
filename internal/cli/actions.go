@@ -114,6 +114,7 @@ type InteractiveActions struct {
 	Status           func(ctx context.Context) ActionReport
 	Doctor           func(ctx context.Context) ActionReport
 	Install          func(ctx context.Context) ActionReport
+	InstallTarget    func(ctx context.Context, target install.TargetID) ActionReport
 	PlanPiInstall    func(ctx context.Context) (install.PiInstallPlan, ActionReport, bool)
 	ExecutePiInstall func(ctx context.Context, plan install.PiInstallPlan) ActionReport
 	CheckForUpdate   func(ctx context.Context) UpdateAvailability
@@ -129,6 +130,9 @@ func (a *App) InteractiveActions() InteractiveActions {
 		Status:         a.statusAction,
 		Doctor:         a.doctorAction,
 		Install:        a.installAction,
+		InstallTarget: func(ctx context.Context, target install.TargetID) ActionReport {
+			return a.installActionWithOptions(ctx, installCommandOptions{Target: target})
+		},
 		PlanPiInstall: func(ctx context.Context) (install.PiInstallPlan, ActionReport, bool) {
 			return a.planPiInstallAction(ctx, installCommandOptions{})
 		},

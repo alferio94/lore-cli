@@ -86,6 +86,25 @@ func TestServeReturnsMethodNotFoundForUnsupportedMethod(t *testing.T) {
 	}
 }
 
+func TestSupportedMethodsRegistryMatchesMVPBoundary(t *testing.T) {
+	for _, method := range []string{"initialize", "tools/list", "tools/call"} {
+		if _, ok := SupportedMethods[method]; !ok {
+			t.Fatalf("SupportedMethods[%q] missing", method)
+		}
+		if !isSupportedMethod(method) {
+			t.Fatalf("isSupportedMethod(%q) = false, want true", method)
+		}
+	}
+	for _, method := range []string{"notifications/initialized", "prompts/list"} {
+		if _, ok := SupportedMethods[method]; ok {
+			t.Fatalf("SupportedMethods[%q] unexpectedly present", method)
+		}
+		if isSupportedMethod(method) {
+			t.Fatalf("isSupportedMethod(%q) = true, want false", method)
+		}
+	}
+}
+
 func TestUpstreamFuncCallDelegates(t *testing.T) {
 	called := false
 	upstream := UpstreamFunc(func(_ context.Context, method string, params json.RawMessage) (json.RawMessage, error) {
@@ -186,6 +205,35 @@ func TestServeReturnsParseValidationAndUpstreamErrors(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestServeReturnsFrameReadErrorsAsJSONRPCResponses(t *testing.T) {
+	input := strings.NewReader("Content-Length: nope\r\n\r\n" + testFrame(`{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}`))
+	upstream := &fakeUpstream{results: map[string]json.RawMessage{"tools/list": json.RawMessage(`{"tools":[]}`)}}
+	var output bytes.Buffer
+
+	if err := Serve(context.Background(), input, &output, upstream); err != nil {
+		t.Fatalf("Serve() error = %v, want nil", err)
+	}
+
+	reader := bufio.NewReader(&output)
+	first := decodeProxyFrame(t, reader)
+	second := decodeProxyFrame(t, reader)
+
+	var firstEnvelope struct {
+		ID    json.RawMessage `json:"id"`
+		Error struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(first, &firstEnvelope); err != nil {
+		t.Fatalf("json.Unmarshal(first): %v", err)
+	}
+	if string(firstEnvelope.ID) != `null` || firstEnvelope.Error.Code != -32700 || !strings.Contains(firstEnvelope.Error.Message, "invalid Content-Length") {
+		t.Fatalf("first response = %s", first)
+	}
+	assertProxyResult(t, second, `2`, `{"tools":[]}`)
 }
 
 func TestReadFrameRejectsHeaderProblems(t *testing.T) {

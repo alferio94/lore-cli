@@ -16,9 +16,6 @@ func (s Service) PlanAntigravityInstall(req InstallRequest) (InstallPlan, error)
 	if req.Now.IsZero() {
 		req.Now = time.Now().UTC()
 	}
-	if req.Definition.SchemaVersion == 0 {
-		req.Definition = agentpack.DefaultDefinition()
-	}
 	components, err := NormalizeComponentSelection(TargetAntigravity, req.Components)
 	if err != nil {
 		return InstallPlan{}, err
@@ -122,7 +119,7 @@ func renderAntigravityFiles(req InstallRequest) ([]RenderedFile, error) {
 	if err != nil {
 		return nil, err
 	}
-	return adapter.Render(context.Background(), RenderRequest{
+	renderReq := RenderRequest{
 		Target:         TargetAntigravity,
 		Definition:     req.Definition,
 		Components:     req.Components,
@@ -130,7 +127,12 @@ func renderAntigravityFiles(req InstallRequest) ([]RenderedFile, error) {
 		LoreBinaryPath: req.LoreBinaryPath,
 		LoreConfigDir:  req.LoreConfigDir,
 		LoreCLIVersion: req.LoreCLIVersion,
-	})
+	}
+	if req.Definition.SchemaVersion == 0 {
+		renderReq.Assets = agentpack.DefaultOperationalAssets()
+		renderReq.Definition = renderReq.Assets.Definition()
+	}
+	return adapter.Render(context.Background(), renderReq)
 }
 
 func planAntigravityManagedFileActions(layout HarnessLayout, rendered []RenderedFile, backupRoot string) ([]PlanFileAction, map[string][]byte, []string, error) {
@@ -158,8 +160,14 @@ func planAntigravityRenderedFileAction(layout HarnessLayout, file RenderedFile, 
 	if err != nil && !os.IsNotExist(err) {
 		return nil, PlanFileAction{}, fmt.Errorf("read existing file: %w", err)
 	}
-	if filepath.ToSlash(file.RelativePath) == filepath.ToSlash(filepath.Join("..", "GEMINI.md")) {
+	switch filepath.ToSlash(file.RelativePath) {
+	case filepath.ToSlash(filepath.Join("..", "GEMINI.md")):
 		desired, err = mergeAntigravityPrompt(existing, desired)
+		if err != nil {
+			return nil, PlanFileAction{}, err
+		}
+	case filepath.ToSlash(filepath.Join("..", "config", "mcp_config.json")):
+		desired, err = mergeAntigravityMCPConfig(existing, desired)
 		if err != nil {
 			return nil, PlanFileAction{}, err
 		}
@@ -265,8 +273,12 @@ func lookupPlanFileAction(actions []PlanFileAction, relativePath string) PlanFil
 }
 
 func antigravityBackupRelativePath(relativePath string) string {
-	if filepath.ToSlash(relativePath) == filepath.ToSlash(filepath.Join("..", "GEMINI.md")) {
+	switch filepath.ToSlash(relativePath) {
+	case filepath.ToSlash(filepath.Join("..", "GEMINI.md")):
 		return filepath.ToSlash(filepath.Join("shared", "GEMINI.md"))
+	case filepath.ToSlash(filepath.Join("..", "config", "mcp_config.json")):
+		return filepath.ToSlash(filepath.Join("shared", "config", "mcp_config.json"))
+	default:
+		return filepath.ToSlash(strings.TrimPrefix(filepath.ToSlash(relativePath), "./"))
 	}
-	return filepath.ToSlash(strings.TrimPrefix(filepath.ToSlash(relativePath), "./"))
 }

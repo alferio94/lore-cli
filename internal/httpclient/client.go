@@ -168,6 +168,15 @@ func (c *HTTPClient) MCPJSONRPC(ctx context.Context, token, method string, param
 	return c.mcpRequest(ctx, token, "lore-cli-mcp", method, params)
 }
 
+// MCPForward performs a token-safe authenticated JSON-RPC request for the local MCP stdio bridge.
+func (c *HTTPClient) MCPForward(ctx context.Context, token, method string, params json.RawMessage) (json.RawMessage, error) {
+	result, err := c.mcpRequest(ctx, token, "lore-cli-mcp", method, params)
+	if err != nil {
+		return nil, newMCPForwardError(method, err)
+	}
+	return result.Data, nil
+}
+
 // MCPCall performs an allowlisted JSON-RPC tools/call request against /v1/mcp.
 func (c *HTTPClient) MCPCall(ctx context.Context, token, toolName string, arguments json.RawMessage) (RequestJSONResult, error) {
 	toolName, args, err := ValidateBrokerMCPCall(toolName, arguments)
@@ -205,6 +214,30 @@ func ValidateBrokerMCPCall(toolName string, arguments json.RawMessage) (string, 
 		return "", nil, errors.New("args-json must decode to a JSON object")
 	}
 	return trimmedTool, trimmedArgs, nil
+}
+
+func newMCPForwardError(method string, err error) error {
+	op := strings.TrimSpace(method)
+	if op == "" {
+		op = "mcp request"
+	}
+	var networkErr *NetworkError
+	if errors.As(err, &networkErr) {
+		return &MCPForwardError{Message: fmt.Sprintf("upstream %s failed: network request failed", op)}
+	}
+	var unauthorized *UnauthorizedError
+	if errors.As(err, &unauthorized) {
+		return &MCPForwardError{Message: fmt.Sprintf("upstream %s failed: %s", op, unauthorized.Error())}
+	}
+	var apiErr *APIError
+	if errors.As(err, &apiErr) {
+		message := apiErr.Message
+		if strings.TrimSpace(apiErr.RequestID) != "" {
+			message = fmt.Sprintf("%s (request_id=%s)", message, apiErr.RequestID)
+		}
+		return &MCPForwardError{Message: fmt.Sprintf("upstream %s failed: %s", op, message)}
+	}
+	return &MCPForwardError{Message: fmt.Sprintf("upstream %s failed: %s", op, err.Error())}
 }
 
 func (c *HTTPClient) mcpRequest(ctx context.Context, token, requestID, method string, params json.RawMessage) (RequestJSONResult, error) {

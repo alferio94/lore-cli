@@ -41,6 +41,24 @@ type rpcError struct {
 	Message string `json:"message"`
 }
 
+type frameReadError struct {
+	Code    int
+	Message string
+}
+
+func (e *frameReadError) Error() string {
+	if e == nil {
+		return "invalid MCP frame"
+	}
+	return e.Message
+}
+
+var SupportedMethods = map[string]struct{}{
+	"initialize": {},
+	"tools/list": {},
+	"tools/call": {},
+}
+
 func Serve(ctx context.Context, in io.Reader, out io.Writer, upstream Upstream) error {
 	if upstream == nil {
 		return errors.New("mcp upstream is not configured")
@@ -51,6 +69,13 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, upstream Upstream) 
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				return nil
+			}
+			var frameErr *frameReadError
+			if errors.As(err, &frameErr) {
+				if writeErr := writeResponse(out, responseEnvelope{JSONRPC: "2.0", ID: json.RawMessage("null"), Error: &rpcError{Code: frameErr.Code, Message: frameErr.Message}}); writeErr != nil {
+					return writeErr
+				}
+				continue
 			}
 			return err
 		}
@@ -83,12 +108,8 @@ func handleFrame(ctx context.Context, out io.Writer, upstream Upstream, payload 
 }
 
 func isSupportedMethod(method string) bool {
-	switch method {
-	case "initialize", "tools/list", "tools/call":
-		return true
-	default:
-		return false
-	}
+	_, ok := SupportedMethods[method]
+	return ok
 }
 
 func normalizeID(id json.RawMessage) json.RawMessage {
@@ -123,36 +144,48 @@ func writeResponse(out io.Writer, response responseEnvelope) error {
 
 func readFrame(reader *bufio.Reader) ([]byte, error) {
 	contentLength := -1
+	var frameErr *frameReadError
 	for {
 		line, err := reader.ReadString('\n')
 		if err != nil {
 			if errors.Is(err, io.EOF) && line == "" {
+				if frameErr != nil {
+					return nil, frameErr
+				}
 				return nil, io.EOF
 			}
-			return nil, fmt.Errorf("read MCP frame header: %w", err)
+			return nil, &frameReadError{Code: -32700, Message: "invalid MCP frame: could not read frame header"}
 		}
 		trimmed := strings.TrimRight(line, "\r\n")
 		if trimmed == "" {
 			break
 		}
+		if frameErr != nil {
+			continue
+		}
 		name, value, ok := strings.Cut(trimmed, ":")
 		if !ok {
-			return nil, fmt.Errorf("invalid MCP frame header %q", trimmed)
+			frameErr = &frameReadError{Code: -32700, Message: fmt.Sprintf("invalid MCP frame header %q", trimmed)}
+			continue
 		}
 		if strings.EqualFold(strings.TrimSpace(name), "Content-Length") {
 			length, err := strconv.Atoi(strings.TrimSpace(value))
 			if err != nil || length < 0 {
-				return nil, fmt.Errorf("invalid Content-Length %q", strings.TrimSpace(value))
+				frameErr = &frameReadError{Code: -32700, Message: fmt.Sprintf("invalid Content-Length %q", strings.TrimSpace(value))}
+				continue
 			}
 			contentLength = length
 		}
 	}
+	if frameErr != nil {
+		return nil, frameErr
+	}
 	if contentLength < 0 {
-		return nil, errors.New("missing Content-Length header")
+		return nil, &frameReadError{Code: -32700, Message: "missing Content-Length header"}
 	}
 	payload := make([]byte, contentLength)
 	if _, err := io.ReadFull(reader, payload); err != nil {
-		return nil, fmt.Errorf("read MCP frame payload: %w", err)
+		return nil, &frameReadError{Code: -32700, Message: "invalid MCP frame payload"}
 	}
 	return payload, nil
 }

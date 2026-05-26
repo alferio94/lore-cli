@@ -351,20 +351,24 @@ func (a *App) runUpdate(args []string) int {
 
 func (a *App) runMCP(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(a.Stderr, "Usage: lore mcp <proxy>")
-		fmt.Fprintln(a.Stderr, "Use the opt-in local Lore Server MCP bridge; it is not part of the default Pi install path.")
+		fmt.Fprintln(a.Stderr, "Usage: lore mcp <serve|proxy>")
+		fmt.Fprintln(a.Stderr, "Use the canonical local Lore Server MCP stdio bridge; it remains separate from the default Pi install path.")
 		return 1
 	}
 
-	switch args[0] {
-	case "proxy":
-		fs := newFlagSet("mcp proxy", a.Stderr)
+	runServe := func(commandName string, alias bool, subargs []string) int {
+		fs := newFlagSet("mcp "+commandName, a.Stderr)
 		fs.Usage = func() {
-			fmt.Fprintln(a.Stderr, "Usage: lore mcp proxy")
+			fmt.Fprintf(a.Stderr, "Usage: lore mcp %s\n", commandName)
 			fmt.Fprintln(a.Stderr, "Start the local auth-safe Lore Server MCP stdio bridge using saved Lore login state.")
-			fmt.Fprintln(a.Stderr, "This opt-in bridge is intentionally separate from the default Pi install path.")
+			if alias {
+				fmt.Fprintln(a.Stderr, "This deprecated compatibility alias forwards to the canonical lore mcp serve command.")
+			} else {
+				fmt.Fprintln(a.Stderr, "Use this canonical bridge instead of wiring raw tokens into a harness.")
+			}
+			fmt.Fprintln(a.Stderr, "This bridge is intentionally separate from the default Pi install path.")
 		}
-		if err := fs.Parse(args[1:]); err != nil {
+		if err := fs.Parse(subargs); err != nil {
 			return 1
 		}
 		if fs.NArg() != 0 {
@@ -373,23 +377,26 @@ func (a *App) runMCP(args []string) int {
 		}
 		client, session, err := a.loadAuthenticatedClient()
 		if err != nil {
-			fmt.Fprintf(a.Stderr, "mcp proxy failed: %s\n", err)
+			fmt.Fprintf(a.Stderr, "mcp %s failed: %s\n", commandName, err)
 			return 1
 		}
 		if err := mcp.Serve(context.Background(), a.Stdin, a.Stdout, mcp.UpstreamFunc(func(ctx context.Context, method string, params json.RawMessage) (json.RawMessage, error) {
-			result, err := client.MCPJSONRPC(ctx, session.Token, method, params)
-			if err != nil {
-				return nil, err
-			}
-			return result.Data, nil
+			return client.MCPForward(ctx, session.Token, method, params)
 		})); err != nil {
-			fmt.Fprintf(a.Stderr, "mcp proxy failed: %v\n", err)
+			fmt.Fprintf(a.Stderr, "mcp %s failed: %v\n", commandName, err)
 			return 1
 		}
 		return 0
+	}
+
+	switch args[0] {
+	case "serve":
+		return runServe("serve", false, args[1:])
+	case "proxy":
+		return runServe("proxy", true, args[1:])
 	default:
-		fmt.Fprintln(a.Stderr, "Usage: lore mcp <proxy>")
-		fmt.Fprintln(a.Stderr, "Use the opt-in local Lore Server MCP bridge; it is not part of the default Pi install path.")
+		fmt.Fprintln(a.Stderr, "Usage: lore mcp <serve|proxy>")
+		fmt.Fprintln(a.Stderr, "Use the canonical local Lore Server MCP stdio bridge; it remains separate from the default Pi install path.")
 		return 1
 	}
 }

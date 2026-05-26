@@ -116,10 +116,12 @@ func (a piAdapter) RenderManagedAgents(_ context.Context, req RenderRequest) ([]
 	if contract.Version == 0 {
 		contract = defaultRuntimeContract()
 	}
-	rendered := make([]RenderedFile, 0, len(req.Definition.ManagedAgents))
-	for _, agent := range req.Definition.ManagedAgents {
+	definition := req.effectiveDefinition()
+	managedAgents := req.effectiveManagedAgents(agentpack.PiSkillPathResolver())
+	rendered := make([]RenderedFile, 0, len(managedAgents))
+	for _, agent := range managedAgents {
 		relativePath := filepath.ToSlash(filepath.Join("agents", contract.AgentResolution.ManagedFilenamePrefix+agent.Name+".md"))
-		content := renderManagedAgentMarkdown(agent, req.Definition.PackID, contract)
+		content := renderManagedAgentMarkdown(agent, definition.PackID, contract)
 		rendered = append(rendered, RenderedFile{Component: ComponentCorePack, RelativePath: relativePath, MergeMode: MergeModeReplace, Content: []byte(content)})
 	}
 	sort.Slice(rendered, func(i, j int) bool { return rendered[i].RelativePath < rendered[j].RelativePath })
@@ -223,7 +225,7 @@ func piTemplateReplacements(definition agentpack.Definition, components []Compon
 }
 
 func renderRequestReplacements(req RenderRequest, components []ComponentID) (map[string]string, error) {
-	replacements, err := piTemplateReplacements(req.Definition, components)
+	replacements, err := piTemplateReplacements(req.effectiveDefinition(), components)
 	if err != nil {
 		return nil, err
 	}

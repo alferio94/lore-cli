@@ -13,10 +13,11 @@ import (
 
 func TestAntigravityAdapterRenderProducesPromptSkillsAndOptionalMCPWithoutPiArtifacts(t *testing.T) {
 	adapter := defaultAntigravityAdapter()
+	assets := agentpack.DefaultOperationalAssets()
 
 	files, err := adapter.Render(context.Background(), RenderRequest{
 		Target:     TargetAntigravity,
-		Definition: agentpack.DefaultDefinition(),
+		Assets:     assets,
 		Components: []ComponentID{ComponentCorePack},
 	})
 	if err != nil {
@@ -40,19 +41,33 @@ func TestAntigravityAdapterRenderProducesPromptSkillsAndOptionalMCPWithoutPiArti
 	if !containsAll(string(prompt.Content), "<!-- lore-cli:antigravity:start -->", "append", "~/.gemini/antigravity-cli/skills") {
 		t.Fatalf("prompt content = %q, want managed Antigravity markers and skills guidance", string(prompt.Content))
 	}
-	if _, ok := byPath[filepath.ToSlash(filepath.Join("skills", "sdd-apply", "SKILL.md"))]; !ok {
+	if strings.Contains(string(prompt.Content), "~/.pi/agent") || strings.Contains(string(prompt.Content), "agents/lore-managed") {
+		t.Fatalf("prompt content = %q, want Antigravity-owned prompt semantics without Pi path leakage", string(prompt.Content))
+	}
+
+	applySkill, ok := byPath[filepath.ToSlash(filepath.Join("skills", "sdd-apply", "SKILL.md"))]
+	if !ok {
 		t.Fatalf("Render(core-pack) paths = %v, want skills/sdd-apply/SKILL.md", sortedRenderedPaths(files))
+	}
+	if !containsAll(string(applySkill.Content), "~/.gemini/antigravity-cli/skills/sdd-apply/SKILL.md", "~/.gemini/antigravity-cli/skills/_shared/sdd-phase-common.md", "You execute the SDD apply phase.") {
+		t.Fatalf("sdd-apply skill = %q, want Antigravity skill paths and canonical apply semantics", string(applySkill.Content))
+	}
+	for _, forbidden := range []string{"~/.pi/agent/skills/", "agents/lore-managed", "managedBy:", "managedLayer:", "managedPackId:", "phase:", "skillPolicyMode:"} {
+		if strings.Contains(string(applySkill.Content), forbidden) {
+			t.Fatalf("sdd-apply skill = %q, want %q omitted from Antigravity skill output", string(applySkill.Content), forbidden)
+		}
 	}
 	if _, ok := byPath[filepath.ToSlash(filepath.Join("skills", "lore-worker", "SKILL.md"))]; !ok {
 		t.Fatalf("Render(core-pack) paths = %v, want skills/lore-worker/SKILL.md", sortedRenderedPaths(files))
 	}
-	if _, ok := byPath["mcp_config.json"]; ok {
+	mcpRelativePath := filepath.ToSlash(filepath.Join("..", "config", "mcp_config.json"))
+	if _, ok := byPath[mcpRelativePath]; ok {
 		t.Fatal("Render(core-pack) unexpectedly produced optional mcp_config.json")
 	}
 
 	withMCP, err := adapter.Render(context.Background(), RenderRequest{
 		Target:     TargetAntigravity,
-		Definition: agentpack.DefaultDefinition(),
+		Assets:     assets,
 		Components: []ComponentID{ComponentCorePack, ComponentLoreServerMCP},
 	})
 	if err != nil {
@@ -62,8 +77,21 @@ func TestAntigravityAdapterRenderProducesPromptSkillsAndOptionalMCPWithoutPiArti
 	for _, file := range withMCP {
 		mcpFiles[file.RelativePath] = file
 	}
-	if got := string(mcpFiles["mcp_config.json"].Content); !containsAll(got, `"mcpServers"`, `"lore"`) {
-		t.Fatalf("mcp_config.json = %q, want Lore MCP stub config", got)
+	mcpFile, ok := mcpFiles[mcpRelativePath]
+	if !ok {
+		t.Fatalf("Render(core-pack+mcp) paths = %v, want %s", sortedRenderedPaths(withMCP), mcpRelativePath)
+	}
+	if mcpFile.MergeMode != MergeModeAdditiveJSON {
+		t.Fatalf("mcp merge mode = %q, want additive-json", mcpFile.MergeMode)
+	}
+	got := string(mcpFile.Content)
+	if !containsAll(got, `"mcpServers"`, `"lore"`, `"command"`, `"lore"`, `"args"`, `"mcp"`, `"serve"`) {
+		t.Fatalf("mcp_config.json = %q, want Lore MCP stdio command config", got)
+	}
+	for _, forbidden := range []string{"https://", "http://", "Authorization", "token"} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("mcp_config.json = %q, want %q omitted from optional MCP config", got, forbidden)
+		}
 	}
 }
 
@@ -71,7 +99,7 @@ func TestAntigravityPromptMergeRefreshesManagedBlockWithoutDuplicates(t *testing
 	adapter := defaultAntigravityAdapter()
 	files, err := adapter.Render(context.Background(), RenderRequest{
 		Target:     TargetAntigravity,
-		Definition: agentpack.DefaultDefinition(),
+		Assets:     agentpack.DefaultOperationalAssets(),
 		Components: []ComponentID{ComponentCorePack},
 	})
 	if err != nil {
@@ -104,14 +132,39 @@ func TestAntigravityPromptMergeRefreshesManagedBlockWithoutDuplicates(t *testing
 	}
 }
 
+func TestAntigravityMCPConfigMergePreservesExistingServersAndTreatsEmptyAsObject(t *testing.T) {
+	managed, err := renderAntigravityMCPConfig("/usr/local/bin/lore")
+	if err != nil {
+		t.Fatalf("renderAntigravityMCPConfig() error = %v, want nil", err)
+	}
+
+	emptyMerged, err := mergeAntigravityMCPConfig([]byte("\n"), managed)
+	if err != nil {
+		t.Fatalf("mergeAntigravityMCPConfig(empty) error = %v, want nil", err)
+	}
+	if !containsAll(string(emptyMerged), `"mcpServers"`, `"lore"`, `"/usr/local/bin/lore"`) {
+		t.Fatalf("empty merge = %q, want Lore MCP config written over empty file", string(emptyMerged))
+	}
+
+	existing := []byte(`{"mcpServers":{"existing":{"command":"keep-me"}},"topLevel":true}`)
+	merged, err := mergeAntigravityMCPConfig(existing, managed)
+	if err != nil {
+		t.Fatalf("mergeAntigravityMCPConfig(existing) error = %v, want nil", err)
+	}
+	if !containsAll(string(merged), `"existing"`, `"keep-me"`, `"lore"`, `"/usr/local/bin/lore"`, `"topLevel": true`) {
+		t.Fatalf("merged config = %q, want existing servers preserved plus Lore MCP entry", string(merged))
+	}
+}
+
 func TestAntigravityManifestTracksPromptAndSkillsWithoutPiOverlays(t *testing.T) {
 	homeDir := t.TempDir()
 	layout := ResolveAntigravityLayout(homeDir)
 	adapter := defaultAntigravityAdapter()
+	assets := agentpack.DefaultOperationalAssets()
 
 	files, err := adapter.Render(context.Background(), RenderRequest{
 		Target:     TargetAntigravity,
-		Definition: agentpack.DefaultDefinition(),
+		Assets:     assets,
 		Components: []ComponentID{ComponentCorePack},
 	})
 	if err != nil {
@@ -125,7 +178,6 @@ func TestAntigravityManifestTracksPromptAndSkillsWithoutPiOverlays(t *testing.T)
 		LoreCLIVersion: "v0.1.0",
 		Target:         TargetAntigravity,
 		Components:     []ComponentID{ComponentCorePack},
-		Definition:     agentpack.DefaultDefinition(),
 		Now:            time.Date(2026, 5, 25, 12, 0, 0, 0, time.UTC),
 	}
 	manifest, managedPaths, err := buildAntigravityManifest(layout, req, files)
