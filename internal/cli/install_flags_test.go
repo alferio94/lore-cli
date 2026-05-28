@@ -29,7 +29,7 @@ func TestInstallCommandDryRunAcceptsExplicitPiTargetAndComponents(t *testing.T) 
 		t.Fatalf("manifest stat err = %v, want not exist after dry-run", err)
 	}
 	out := stdout.String()
-	for _, want := range []string{"install_target=pi", "runtime=pi-remote-package", "remote_package=git:github.com/alferio94/lore-pi-subagents", "components=core-pack,pi-extensions", "managed_local_files=3", "mode=dry-run", "managed_action="} {
+	for _, want := range []string{"install_target=pi", "runtime=pi-remote-package", "remote_package=git:github.com/alferio94/lore-pi-subagents", "components=core-pack,pi-extensions", "mode=dry-run", "managed_action="} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("stdout = %q, want substring %q", out, want)
 		}

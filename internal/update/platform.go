@@ -24,6 +24,7 @@ const (
 type BinaryTarget struct {
 	ExecutablePath string
 	ResolvedPath   string
+	ResolvedSymPath string
 	PathPath       string
 	GOOS           string
 	GOARCH         string
@@ -42,15 +43,27 @@ func resolveBinaryTarget(opts resolveTargetOptions) (BinaryTarget, error) {
 	execPath := filepath.Clean(strings.TrimSpace(opts.ExecPath))
 	pathPath := filepath.Clean(strings.TrimSpace(opts.LookPath))
 	resolved := execPath
+	// resolvedSym tracks symlink resolution specifically for the executable file
+	// itself, used only for the symlinked-target safety check.
+	resolvedSym := execPath
 	if info, err := os.Lstat(execPath); err == nil && info.Mode()&os.ModeSymlink != 0 {
 		if linkTarget, err := os.Readlink(execPath); err == nil {
 			if !filepath.IsAbs(linkTarget) {
 				linkTarget = filepath.Join(filepath.Dir(execPath), linkTarget)
 			}
-			resolved = filepath.Clean(linkTarget)
+			resolvedSym = filepath.Clean(linkTarget)
+			resolved = resolvedSym
 		}
 	} else if realPath, err := filepath.EvalSymlinks(execPath); err == nil {
 		resolved = filepath.Clean(realPath)
+		// Only propagate resolvedSym from EvalSymlinks when the executable
+		// itself is inside a symlinked directory. The target is unsafe only
+		// when the binary is a symlink to a different path, not when the
+		// containing directory happens to resolve through a symlink chain
+		// (e.g. /tmp → /private/tmp on macOS).
+		if realPath == execPath {
+			resolvedSym = execPath
+		}
 	}
 
 	target := BinaryTarget{
@@ -67,7 +80,7 @@ func resolveBinaryTarget(opts resolveTargetOptions) (BinaryTarget, error) {
 		target.Reason = ReasonPathMismatch
 		return target, nil
 	}
-	if resolved != execPath {
+	if resolvedSym != execPath {
 		target.Status = TargetStatusUnsafe
 		target.Reason = ReasonSymlinkedTarget
 	}

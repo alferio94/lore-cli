@@ -7,9 +7,10 @@ import (
 type ComponentID string
 
 const (
-	ComponentCorePack      ComponentID = "core-pack"
-	ComponentLoreServerMCP ComponentID = "lore-server-mcp"
-	ComponentPiExtensions  ComponentID = "pi-extensions"
+	ComponentCorePack       ComponentID = "core-pack"
+	ComponentLoreServerMCP  ComponentID = "lore-server-mcp"
+	ComponentPiExtensions   ComponentID = "pi-extensions"
+	ComponentExtendedSkills  ComponentID = "extended-skills"
 )
 
 const (
@@ -56,12 +57,21 @@ func ComponentCatalog() map[ComponentID]Component {
 				TargetPi: true,
 			},
 		},
+		ComponentExtendedSkills: {
+			ID:          ComponentExtendedSkills,
+			Title:       "Extended Skills",
+			Description: "Portable skill bundle: skill-creator, skill-registry, and judgment-day.",
+			DefaultForTarget: map[TargetID]bool{
+				TargetPi:          true,
+				TargetAntigravity: true,
+			},
+		},
 	}
 }
 
 func DefaultComponentSelection(target TargetID) []ComponentID {
 	catalog := ComponentCatalog()
-	ordered := []ComponentID{ComponentCorePack, ComponentPiExtensions, ComponentLoreServerMCP}
+	ordered := []ComponentID{ComponentCorePack, ComponentPiExtensions, ComponentLoreServerMCP, ComponentExtendedSkills}
 	supported := supportedComponentsForTarget(target)
 	selection := make([]ComponentID, 0, len(ordered))
 	for _, id := range ordered {

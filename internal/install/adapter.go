@@ -12,11 +12,12 @@ type CapabilityID string
 type MergeMode string
 
 const (
-	CapabilityAgentPack     CapabilityID = "agent-pack"
-	CapabilityPiExtensions  CapabilityID = "pi-extensions"
-	CapabilityPrompt        CapabilityID = "prompt"
-	CapabilitySkills        CapabilityID = "skills"
-	CapabilityLoreServerMCP CapabilityID = "lore-server-mcp"
+	CapabilityAgentPack      CapabilityID = "agent-pack"
+	CapabilityPiExtensions   CapabilityID = "pi-extensions"
+	CapabilityPrompt         CapabilityID = "prompt"
+	CapabilitySkills         CapabilityID = "skills"
+	CapabilityLoreServerMCP  CapabilityID = "lore-server-mcp"
+	CapabilityExtendedSkills  CapabilityID = "extended-skills"
 
 	MergeModeReplace      MergeMode = "replace"
 	MergeModeAdditiveJSON MergeMode = "additive-json"
@@ -58,6 +59,10 @@ type HarnessAdapter interface {
 	Supports(ComponentID) bool
 	Render(context.Context, RenderRequest) ([]RenderedFile, error)
 	RenderManagedAgents(context.Context, RenderRequest) ([]RenderedFile, error)
+	// RenderExtendedSkills renders extended skills for the target harness.
+	// For Antigravity, this returns nil since extended skills are handled in Render.
+	// For Pi, this renders to CLI-managed skill paths only, excluding user-owned paths.
+	RenderExtendedSkills(context.Context, RenderRequest, PiLayout) ([]RenderedFile, error)
 }
 
 type Registry struct {
@@ -127,6 +132,19 @@ func (r RenderRequest) effectiveManagedAgents(resolver agentpack.SkillPathResolv
 	}
 	definition := r.effectiveDefinition()
 	return append([]agentpack.ManagedAgent(nil), definition.ManagedAgents...)
+}
+
+// effectiveExtendedSkills returns the extended skills bundle resolved for the target harness.
+// It only produces output when ComponentExtendedSkills is selected in the request.
+func (r RenderRequest) effectiveExtendedSkills(resolver agentpack.SkillPathResolver) []agentpack.ManagedSkill {
+	if !containsComponent(r.Components, ComponentExtendedSkills) {
+		return nil
+	}
+	if r.Assets.PackID != "" {
+		return r.Assets.ExtendedSkills(resolver)
+	}
+	assets := agentpack.OperationalAssets{}
+	return assets.ExtendedSkills(resolver)
 }
 
 func defaultInstallRegistry() (*Registry, error) {

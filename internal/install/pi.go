@@ -131,6 +131,10 @@ func ResolvePiLayout(homeDir string) PiLayout {
 			filepath.Join(extensionsDir, "lore-memory.ts"),
 			filepath.Join(extensionsDir, "lore-footer.ts"),
 			filepath.Join(agentDir, "settings.json"),
+			// Extended skills (CLI-managed under agent dir, in relative-path sort order)
+			filepath.Join(agentDir, "skills", "judgment-day", "SKILL.md"),
+			filepath.Join(agentDir, "skills", "skill-creator", "SKILL.md"),
+			filepath.Join(agentDir, "skills", "skill-registry", "SKILL.md"),
 		},
 	}
 }
@@ -359,6 +363,13 @@ func renderPiFiles(layout PiLayout, req PiInstallRequest) ([]renderedPiFile, err
 	if err != nil {
 		return nil, err
 	}
+
+	// Include extended skills only for CLI-owned agent directory paths.
+	extendedRendered, err := adapter.RenderExtendedSkills(context.Background(), renderRequest, layout)
+	if err != nil {
+		return nil, err
+	}
+	rendered = append(rendered, extendedRendered...)
 
 	files := make([]renderedPiFile, 0, len(rendered))
 	for _, file := range rendered {

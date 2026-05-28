@@ -107,6 +107,14 @@ func (a OperationalAssets) ManagedAgents(resolver SkillPathResolver) []ManagedAg
 	return managed
 }
 
+// ManagedSkill represents a rendered non-agent skill ready for installation
+// to a harness-specific skills directory.
+type ManagedSkill struct {
+	Name        string
+	Description string
+	Body        string
+}
+
 func (a OperationalAssets) Definition() Definition {
 	return Definition{
 		SchemaVersion: SchemaVersion1,
@@ -117,6 +125,25 @@ func (a OperationalAssets) Definition() Definition {
 		Profiles:      cloneProfiles(a.Profiles),
 		ManagedAgents: a.ManagedAgents(PiSkillPathResolver()),
 	}
+}
+
+// ExtendedSkills returns the extended skills bundle rendered for the target harness.
+func (a OperationalAssets) ExtendedSkills(resolver SkillPathResolver) []ManagedSkill {
+	assets := DefaultExtendedSkills()
+	resolved := make([]ManagedSkill, 0, len(assets))
+	for _, asset := range assets {
+		resolved = append(resolved, ManagedSkill{
+			Name:        asset.Name,
+			Description: asset.Description,
+			Body:        asset.Body,
+		})
+	}
+	return resolved
+}
+
+// ExtendedSkillRef returns a SkillRef for the extended skill with the given name.
+func ExtendedSkillRef(name string) SkillRef {
+	return SkillRef{Name: "skills/" + name}
 }
 
 func cloneProfiles(profiles []Profile) []Profile {

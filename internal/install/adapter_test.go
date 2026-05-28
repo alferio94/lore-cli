@@ -10,11 +10,11 @@ import (
 )
 
 func TestDefaultComponentSelectionKeepsPiSafeAndMCPOptional(t *testing.T) {
-	if got := DefaultComponentSelection(TargetPi); !equalComponentIDs(got, []ComponentID{ComponentCorePack, ComponentPiExtensions}) {
-		t.Fatalf("DefaultComponentSelection(pi) = %v, want core-pack + pi-extensions", got)
+	if got := DefaultComponentSelection(TargetPi); !equalComponentIDs(got, []ComponentID{ComponentCorePack, ComponentPiExtensions, ComponentExtendedSkills}) {
+		t.Fatalf("DefaultComponentSelection(pi) = %v, want core-pack + pi-extensions + extended-skills", got)
 	}
-	if got := DefaultComponentSelection(TargetAntigravity); !equalComponentIDs(got, []ComponentID{ComponentCorePack, ComponentLoreServerMCP}) {
-		t.Fatalf("DefaultComponentSelection(antigravity) = %v, want core-pack + lore-server-mcp", got)
+	if got := DefaultComponentSelection(TargetAntigravity); !equalComponentIDs(got, []ComponentID{ComponentCorePack, ComponentLoreServerMCP, ComponentExtendedSkills}) {
+		t.Fatalf("DefaultComponentSelection(antigravity) = %v, want core-pack + lore-server-mcp + extended-skills", got)
 	}
 	if got := DefaultComponentSelection(TargetClaudeCode); !equalComponentIDs(got, []ComponentID{ComponentCorePack}) {
 		t.Fatalf("DefaultComponentSelection(claude-code) = %v, want core-pack only", got)

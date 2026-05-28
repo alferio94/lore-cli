@@ -49,6 +49,12 @@ func defaultAntigravityAdapter() HarnessAdapter {
 				Optional:         true,
 				EnabledByDefault: true,
 			},
+			CapabilityExtendedSkills: {
+				ID:               CapabilityExtendedSkills,
+				Component:        ComponentExtendedSkills,
+				Description:      "Portable extended skill bundle for CLI-managed non-agent skills.",
+				EnabledByDefault: true,
+			},
 		},
 	}
 }
@@ -124,6 +130,7 @@ func (a antigravityAdapter) Render(_ context.Context, req RenderRequest) ([]Rend
 		Content:      renderAntigravityPrompt(definition),
 	}}
 	rendered = append(rendered, renderAntigravitySkills(req)...)
+	rendered = append(rendered, renderAntigravityExtendedSkills(req)...)
 	agentProfile, err := renderAntigravityAgentProfile(definition)
 	if err != nil {
 		return nil, err
@@ -151,6 +158,10 @@ func (a antigravityAdapter) Render(_ context.Context, req RenderRequest) ([]Rend
 }
 
 func (a antigravityAdapter) RenderManagedAgents(context.Context, RenderRequest) ([]RenderedFile, error) {
+	return nil, nil
+}
+
+func (a antigravityAdapter) RenderExtendedSkills(context.Context, RenderRequest, PiLayout) ([]RenderedFile, error) {
 	return nil, nil
 }
 
@@ -198,6 +209,34 @@ func renderAntigravitySkills(req RenderRequest) []RenderedFile {
 		rendered = append(rendered, RenderedFile{
 			Component:    ComponentCorePack,
 			RelativePath: filepath.ToSlash(filepath.Join("skills", agent.Name, "SKILL.md")),
+			MergeMode:    MergeModeReplace,
+			Content:      []byte(content),
+		})
+	}
+	sort.Slice(rendered, func(i, j int) bool { return rendered[i].RelativePath < rendered[j].RelativePath })
+	return rendered
+}
+
+func renderAntigravityExtendedSkills(req RenderRequest) []RenderedFile {
+	extendedSkills := req.effectiveExtendedSkills(agentpack.AntigravitySkillPathResolver())
+	if len(extendedSkills) == 0 {
+		return nil
+	}
+	rendered := make([]RenderedFile, 0, len(extendedSkills))
+	for _, skill := range extendedSkills {
+		content := strings.Join([]string{
+			"---",
+			fmt.Sprintf("name: %s", skill.Name),
+			fmt.Sprintf("description: %s", skill.Description),
+			"---",
+			skill.Body,
+		}, "\n")
+		if !strings.HasSuffix(content, "\n") {
+			content += "\n"
+		}
+		rendered = append(rendered, RenderedFile{
+			Component:    ComponentExtendedSkills,
+			RelativePath: filepath.ToSlash(filepath.Join("skills", skill.Name, "SKILL.md")),
 			MergeMode:    MergeModeReplace,
 			Content:      []byte(content),
 		})

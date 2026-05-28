@@ -34,6 +34,12 @@ func defaultPiAdapter() HarnessAdapter {
 				Description:      "Keep Pi-native Lore extensions as the default backend.",
 				EnabledByDefault: true,
 			},
+			CapabilityExtendedSkills: {
+				ID:               CapabilityExtendedSkills,
+				Component:        ComponentExtendedSkills,
+				Description:      "Portable extended skill bundle for CLI-managed non-agent skills.",
+				EnabledByDefault: true,
+			},
 		},
 	}
 }
@@ -123,6 +129,46 @@ func (a piAdapter) RenderManagedAgents(_ context.Context, req RenderRequest) ([]
 		relativePath := filepath.ToSlash(filepath.Join("agents", contract.AgentResolution.ManagedFilenamePrefix+agent.Name+".md"))
 		content := renderManagedAgentMarkdown(agent, definition.PackID, contract)
 		rendered = append(rendered, RenderedFile{Component: ComponentCorePack, RelativePath: relativePath, MergeMode: MergeModeReplace, Content: []byte(content)})
+	}
+	sort.Slice(rendered, func(i, j int) bool { return rendered[i].RelativePath < rendered[j].RelativePath })
+	return rendered, nil
+}
+
+// RenderExtendedSkills renders extended skills to CLI-managed skill paths only.
+// It does NOT write to user-owned skill directories and excludes Pi-native
+// extensions. Only skills whose absolute path falls under the agent directory
+// (CLI-owned) are returned.
+func (a piAdapter) RenderExtendedSkills(_ context.Context, req RenderRequest, layout PiLayout) ([]RenderedFile, error) {
+	extendedSkills := req.effectiveExtendedSkills(agentpack.PiSkillPathResolver())
+	if len(extendedSkills) == 0 {
+		return nil, nil
+	}
+	rendered := make([]RenderedFile, 0, len(extendedSkills))
+	for _, skill := range extendedSkills {
+		relativePath := filepath.ToSlash(filepath.Join("skills", skill.Name, "SKILL.md"))
+		// Only include skills whose resolved path falls under the CLI-owned agent dir.
+		absolutePath := filepath.Join(layout.AgentDir, filepath.FromSlash(relativePath))
+		safeDir := filepath.Clean(layout.AgentDir)
+		if !strings.HasPrefix(filepath.Clean(absolutePath), safeDir+string(filepath.Separator)) {
+			// Skill path escapes agent dir — skip (user-owned or Pi-native).
+			continue
+		}
+		content := strings.Join([]string{
+			"---",
+			fmt.Sprintf("name: %s", skill.Name),
+			fmt.Sprintf("description: %s", skill.Description),
+			"---",
+			skill.Body,
+		}, "\n")
+		if !strings.HasSuffix(content, "\n") {
+			content += "\n"
+		}
+		rendered = append(rendered, RenderedFile{
+			Component:    ComponentExtendedSkills,
+			RelativePath: relativePath,
+			MergeMode:    MergeModeReplace,
+			Content:      []byte(content),
+		})
 	}
 	sort.Slice(rendered, func(i, j int) bool { return rendered[i].RelativePath < rendered[j].RelativePath })
 	return rendered, nil

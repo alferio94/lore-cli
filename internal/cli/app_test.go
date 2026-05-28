@@ -791,7 +791,7 @@ func TestInstallCommandRunsPiInstallAndPrintsSummary(t *testing.T) {
 		t.Fatalf("stale managed overlay stat err = %v, want cleanup after install", err)
 	}
 	out := stdout.String()
-	for _, want := range []string{"Lore install", "[OK] healthz", "[OK] install", "runtime=pi-remote-package", "remote_package=git:github.com/alferio94/lore-pi-subagents", "managed_local_files=3", "project_agents=disabled(default-lore-managed)", "created=11", "updated=1", "deleted=2", "conflicted=1", "managed_action=update:agents/lore-managed-lore-worker.md", "managed_action=delete:agents/lore-managed-stale-agent.md", "managed_action=delete:extensions/lore-delegation.ts", "managed_action=conflict:agents/lore-managed-sdd-archive.md", "manifest", manifestPath} {
+	for _, want := range []string{"Lore install", "[OK] healthz", "[OK] install", "runtime=pi-remote-package", "remote_package=git:github.com/alferio94/lore-pi-subagents", "managed_local_files=6", "project_agents=disabled(default-lore-managed)", "created=14", "updated=1", "deleted=2", "conflicted=1", "managed_action=update:agents/lore-managed-lore-worker.md", "managed_action=delete:agents/lore-managed-stale-agent.md", "managed_action=delete:extensions/lore-delegation.ts", "managed_action=conflict:agents/lore-managed-sdd-archive.md", "manifest", manifestPath} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("stdout = %q, want substring %q", out, want)
 		}
@@ -861,12 +861,14 @@ func TestInstallUsageIncludesPiFirstGuidance(t *testing.T) {
 		"Usage: lore install",
 		"Pi-first managed runtime",
 		"saved Lore login state",
-		"OS keychain-backed login metadata",
-		"password-first login",
-		"compatibility token",
-		"Pi stays the default recommended target",
-		"Antigravity is the supported prompt + skills MVP target",
-		"Claude Code, OpenCode, and Codex remain Coming soon",
+		"extended-skills bundle",
+		"skill-creator",
+		"skill-registry",
+		"judgment-day",
+		"Rerun lore install to refresh the extended-skills bundle",
+		"lore update does not touch skill files",
+		"Antigravity is the prompt + skills MVP target",
+		"Claude Code, OpenCode, and Codex are Coming soon",
 	} {
 		if !strings.Contains(stderr.String(), want) {
 			t.Fatalf("stderr = %q, want substring %q", stderr.String(), want)
@@ -906,7 +908,7 @@ func TestInstallCommandDryRunReportsPlanWithoutMutation(t *testing.T) {
 	}
 	out := stdout.String()
 	lowerOut := strings.ToLower(out)
-	for _, want := range []string{"dry-run", "backup", "runtime=pi-remote-package", "remote_package=git:github.com/alferio94/lore-pi-subagents", "managed_local_files=3", "manifest=", "managed_backup_root=", "full_backup_manifest=", "existing_pi_kind=directory"} {
+	for _, want := range []string{"dry-run", "backup", "runtime=pi-remote-package", "remote_package=git:github.com/alferio94/lore-pi-subagents", "managed_local_files=6", "manifest=", "managed_backup_root=", "full_backup_manifest=", "existing_pi_kind=directory"} {
 		if !strings.Contains(lowerOut, strings.ToLower(want)) {
 			t.Fatalf("stdout = %q, want dry-run plan detail containing %q", out, want)
 		}
@@ -985,7 +987,7 @@ func TestInstallCommandDryRunSurfacesManagedFileActions(t *testing.T) {
 	for _, want := range []string{
 		"runtime=pi-remote-package",
 		"remote_package=git:github.com/alferio94/lore-pi-subagents",
-		"managed_local_files=3",
+		"managed_local_files=6",
 		"project_agents=disabled(default-lore-managed)",
 		"managed_action=unchanged:extensions/lore-memory.ts",
 		"managed_action=delete:extensions/lore-delegation.ts",

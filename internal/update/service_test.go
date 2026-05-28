@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alferio94/lore-cli/internal/install"
 	"github.com/alferio94/lore-cli/internal/version"
 )
 
@@ -51,8 +52,8 @@ func TestCheckSelectsLatestReleaseAssetAndChecksum(t *testing.T) {
 	svc := Service{
 		HTTP:          server.Client(),
 		Now:           func() time.Time { return time.Date(2026, 5, 20, 22, 0, 0, 0, time.UTC) },
-		ExecPath:      func() (string, error) { return "/tmp/lore", nil },
-		LookPath:      func(string) (string, error) { return "/tmp/lore", nil },
+		ExecPath:      func() (string, error) { return "/usr/local/bin/lore", nil },
+		LookPath:      func(string) (string, error) { return "/usr/local/bin/lore", nil },
 		ConfigDir:     func() (string, error) { return cacheDir, nil },
 		GitHubBaseURL: server.URL,
 		GOOS:          "darwin",
@@ -459,4 +460,142 @@ func mustReadFile(t *testing.T, path string) []byte {
 		t.Fatalf("ReadFile(%q) error = %v", path, err)
 	}
 	return data
+}
+
+// TestUpdateServiceIgnoresExtendedSkills verifies the update service is binary-only
+// and never accesses Pi or Antigravity skill directories. Both harnesses share the
+// same update Service; the test creates skill files for both and confirms the
+// Check() output contains no skill-related references and skill files are untouched.
+func TestUpdateServiceIgnoresExtendedSkills(t *testing.T) {
+	t.Parallel()
+
+	// Set up Pi harness skill directories and a fake existing binary.
+	piHome := t.TempDir()
+	piLayout := resolvePiLayoutForTest(t, piHome)
+	piSkillDir := filepath.Join(piLayout.AgentDir, "skills", "judgment-day")
+	piSkillPath := filepath.Join(piSkillDir, "SKILL.md")
+	if err := os.MkdirAll(piSkillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll Pi skill dir: %v", err)
+	}
+	if err := os.WriteFile(piSkillPath, []byte("# Pi skill content"), 0o600); err != nil {
+		t.Fatalf("WriteFile Pi skill: %v", err)
+	}
+
+	// Set up Antigravity harness skill directories.
+	agHome := t.TempDir()
+	agLayout := resolveAntigravityLayoutForTest(t, agHome)
+	agSkillDir := filepath.Join(agLayout.Paths["skills_dir"], "skill-creator")
+	agSkillPath := filepath.Join(agSkillDir, "SKILL.md")
+	if err := os.MkdirAll(agSkillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll Antigravity skill dir: %v", err)
+	}
+	if err := os.WriteFile(agSkillPath, []byte("# Antigravity skill content"), 0o600); err != nil {
+		t.Fatalf("WriteFile Antigravity skill: %v", err)
+	}
+
+	// Write a fake existing binary so resolveTarget passes.
+	cacheDir := t.TempDir()
+	targetDir := t.TempDir()
+	targetPath := filepath.Join(targetDir, "lore")
+	if err := os.WriteFile(targetPath, []byte("current-binary"), 0o755); err != nil {
+		t.Fatalf("WriteFile target: %v", err)
+	}
+
+	// Capture base URL before server construction since httptest.Server.URL is not
+	// available inside the handler's composite literal at construction time.
+	var baseURL string
+	mockSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := fmt.Sprintf(`{"tag_name":"v0.2.6","assets":[{"name":"lore-cli_v0.2.6_darwin_arm64.tar.gz","browser_download_url":"%s/lore-cli_v0.2.6_darwin_arm64.tar.gz"},{"name":"SHA256SUMS","browser_download_url":"%s/SHA256SUMS"}]}`, baseURL, baseURL)
+		_, _ = fmt.Fprint(w, body)
+	}))
+	baseURL = mockSrv.URL // set after construction
+	defer mockSrv.Close()
+
+	svc := Service{
+		HTTP:          mockSrv.Client(),
+		Now:           func() time.Time { return time.Date(2026, 5, 28, 12, 0, 0, 0, time.UTC) },
+		ExecPath:      func() (string, error) { return targetPath, nil },
+		LookPath:      func(string) (string, error) { return targetPath, nil },
+		ConfigDir:     func() (string, error) { return cacheDir, nil },
+		GitHubBaseURL: baseURL,
+		GOOS:          "darwin",
+		GOARCH:        "arm64",
+		BuildInfo:     version.Info{Version: "v0.2.5"},
+	}
+
+	// Check: update service must return a clean binary-only plan.
+	plan, err := svc.Check(context.Background(), CheckOptions{})
+	if err != nil {
+		t.Fatalf("Check() error = %v", err)
+	}
+	if plan.Target.Status != TargetStatusOK {
+		t.Fatalf("target.Status = %q (reason=%q), want ok; executable=%q resolved=%q path=%q", plan.Target.Status, plan.Target.Reason, plan.Target.ExecutablePath, plan.Target.ResolvedPath, plan.Target.PathPath)
+	}
+	if plan.Status != StatusAvailable {
+		t.Fatalf("plan.Status = %q, want available", plan.Status)
+	}
+
+	// Assert: no skill directory paths appear in the plan.
+	planStr := fmt.Sprintf("%+v", plan)
+	if strings.Contains(planStr, "judgment-day") {
+		t.Fatal("Plan contains Pi skill path 'judgment-day'; update should be binary-only")
+	}
+	if strings.Contains(planStr, "skill-creator") {
+		t.Fatal("Plan contains Antigravity skill path 'skill-creator'; update should be binary-only")
+	}
+	if strings.Contains(planStr, "skill-registry") {
+		t.Fatal("Plan contains skill path 'skill-registry'; update should be binary-only")
+	}
+	if strings.Contains(planStr, piLayout.AgentDir) {
+		t.Fatal("Plan contains Pi agent directory; update should be binary-only")
+	}
+	if strings.Contains(planStr, agLayout.RootDir) {
+		t.Fatal("Plan contains Antigravity root directory; update should be binary-only")
+	}
+
+	// Assert: Pi and Antigravity skill files are completely untouched on disk.
+	if got := mustReadFileStr(t, piSkillPath); got != "# Pi skill content" {
+		t.Fatalf("Pi skill file was modified: %q", got)
+	}
+	if got := mustReadFileStr(t, agSkillPath); got != "# Antigravity skill content" {
+		t.Fatalf("Antigravity skill file was modified: %q", got)
+	}
+}
+
+func mustReadFileStr(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%q): %v", path, err)
+	}
+	return string(data)
+}
+
+func resolvePiLayoutForTest(t *testing.T, homeDir string) install.PiLayout {
+	t.Helper()
+	agentDir := filepath.Join(homeDir, ".pi", "agent")
+	return install.PiLayout{
+		HomeDir:          homeDir,
+		PiDir:            filepath.Join(homeDir, ".pi"),
+		AgentDir:         agentDir,
+		ExtensionsDir:     filepath.Join(agentDir, "extensions"),
+		ManagedAgentsDir: filepath.Join(agentDir, "agents"),
+		SettingsPath:     filepath.Join(agentDir, "settings.json"),
+		ManifestPath:     filepath.Join(agentDir, "lore-install.json"),
+	}
+}
+
+func resolveAntigravityLayoutForTest(t *testing.T, homeDir string) install.HarnessLayout {
+	t.Helper()
+	geminiDir := filepath.Join(homeDir, ".gemini")
+	rootDir := filepath.Join(geminiDir, "antigravity-cli")
+	return install.HarnessLayout{
+		Target:      install.TargetAntigravity,
+		RootDir:     rootDir,
+		ManifestPath: filepath.Join(rootDir, "lore-install.json"),
+		Paths: map[string]string{
+			"skills_dir": filepath.Join(rootDir, "skills"),
+			"gemini_dir": geminiDir,
+		},
+	}
 }

@@ -301,14 +301,15 @@ func (a *App) runInstall(_ InteractiveActions, args []string) int {
 	yes := fs.Bool("yes", false, "Accept the safe default full-backup behavior without prompting")
 	target := fs.String("target", string(install.DefaultInstallTarget()), "Install target (Pi stays the default recommended target; Antigravity is the prompt + skills MVP target)")
 	var components componentFlag
-	fs.Var(&components, "component", "Optional component override; repeat or use a comma-separated list (Pi supports core-pack and pi-extensions only)")
+	fs.Var(&components, "component", "Optional component override; repeat or use a comma-separated list (Pi supports core-pack and pi-extensions; Antigravity supports core-pack, lore-server-mcp, and extended-skills)")
 	fs.Usage = func() {
 		fmt.Fprintln(a.Stderr, "Usage: lore install [--dry-run] [--yes] [--target pi|antigravity] [--component <id>]")
 		fmt.Fprintln(a.Stderr, "Install the Pi-first managed runtime using saved Lore login state.")
-		fmt.Fprintln(a.Stderr, "Pi remains the default recommended path with the portable Lore agent pack plus pi-extensions; Antigravity is the supported prompt + skills MVP target with harness-owned prompt, skills, managed Gemini lore agent profile, and optional direct MCP config semantics.")
-		fmt.Fprintln(a.Stderr, "Healthy saved OS keychain-backed login metadata is reused automatically after password-first login or a compatibility token via --token; Claude Code, OpenCode, and Codex remain Coming soon.")
-		fmt.Fprintln(a.Stderr, "Pi keeps the native Lore extensions path by default; Antigravity keeps prompt + skills first, does not emulate Pi overlays, makes no auto-install guarantee, and keeps MCP optional.")
-		fmt.Fprintln(a.Stderr, "Antigravity install writes ~/.gemini/config/agents/lore.json for the managed Lore Gemini agent profile and, when optional Antigravity MCP is installed, writes ~/.gemini/config/mcp_config.json with the Lore /v1/mcp server URL plus a plaintext Authorization bearer token for Antigravity compatibility.")
+		fmt.Fprintln(a.Stderr, "Pi is the default and installs the portable Lore agent pack, pi-extensions, and an extended-skills bundle (skill-creator, skill-registry, judgment-day). Antigravity is the prompt + skills MVP target with the portable pack, lore-server-mcp, and extended-skills bundle.")
+		fmt.Fprintln(a.Stderr, "Use --component to override defaults. Without flags, a complete default install is selected. Rerun lore install to refresh the extended-skills bundle; lore update does not touch skill files or managed runtime content.")
+		fmt.Fprintln(a.Stderr, "Healthy saved OS keychain-backed login metadata is reused automatically; Claude Code, OpenCode, and Codex are Coming soon.")
+		fmt.Fprintln(a.Stderr, "Pi keeps the native Lore extensions path; Antigravity keeps prompt + skills first, does not emulate Pi overlays, makes no auto-install guarantee, and keeps MCP optional.")
+		fmt.Fprintln(a.Stderr, "Antigravity install writes ~/.gemini/config/agents/lore.json for the managed Lore profile and, when MCP is selected, writes ~/.gemini/config/mcp_config.json with the Lore /v1/mcp server URL plus a plaintext Authorization bearer token.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {

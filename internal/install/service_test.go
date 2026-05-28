@@ -93,8 +93,8 @@ func TestResolvePiLayoutModelsManagedPaths(t *testing.T) {
 	if got, want := layout.ManifestPath, "/tmp/home/.pi/agent/lore-install.json"; got != want {
 		t.Fatalf("ManifestPath = %q, want %q", got, want)
 	}
-	if len(layout.ManagedFiles) != 3 {
-		t.Fatalf("ManagedFiles = %v, want 3 managed paths", layout.ManagedFiles)
+	if len(layout.ManagedFiles) != 6 {
+		t.Fatalf("ManagedFiles = %v, want 6 managed paths (3 base + 3 extended skills)", layout.ManagedFiles)
 	}
 }
 
@@ -365,11 +365,11 @@ func TestInstallPiWritesManagedFilesBackupsAndManifest(t *testing.T) {
 	if len(result.Summary.Failed) != 0 {
 		t.Fatalf("Failed = %v, want none", result.Summary.Failed)
 	}
-	if len(result.Summary.Created) != 11 {
-		t.Fatalf("Created = %v, want 1 extension file plus 10 managed overlays", result.Summary.Created)
+	if len(result.Summary.Created) != 14 {
+		t.Fatalf("Created = %v, want 3 extensions + 3 extended skills + 1 theme + 7 agent overlays", result.Summary.Created)
 	}
 	if len(result.Summary.Updated) != 2 {
-		t.Fatalf("Updated = %v, want settings + lore-memory", result.Summary.Updated)
+		t.Fatalf("Updated = %v, want memory + settings", result.Summary.Updated)
 	}
 	if len(result.Summary.Deleted) != 1 || result.Summary.Deleted[0] != filepath.Join("extensions", "lore-delegation.ts") {
 		t.Fatalf("Deleted = %v, want legacy delegation cleanup", result.Summary.Deleted)
@@ -383,11 +383,11 @@ func TestInstallPiWritesManagedFilesBackupsAndManifest(t *testing.T) {
 	if got, want := result.Manifest.SchemaVersion, PortableManifestSchemaVersion; got != want {
 		t.Fatalf("Manifest.SchemaVersion = %q, want %q", got, want)
 	}
-	if result.Manifest.BackupRoot == "" || len(result.Manifest.ManagedFiles) != 3 || len(result.Manifest.ManagedAgentOverlays) != 10 {
-		t.Fatalf("Manifest = %+v, want backup root, managed files, and managed overlays", result.Manifest)
+	if result.Manifest.BackupRoot == "" || len(result.Manifest.ManagedFiles) != 6 || len(result.Manifest.ManagedAgentOverlays) != 10 {
+		t.Fatalf("Manifest = %+v, want backup root, managed files (3 base + 3 extended), and managed overlays", result.Manifest)
 	}
-	if got := result.Manifest.Components; !equalComponentIDs(got, []ComponentID{ComponentCorePack, ComponentPiExtensions}) {
-		t.Fatalf("Manifest.Components = %v, want core-pack + pi-extensions", got)
+	if got := result.Manifest.Components; !equalComponentIDs(got, []ComponentID{ComponentCorePack, ComponentPiExtensions, ComponentExtendedSkills}) {
+		t.Fatalf("Manifest.Components = %v, want core-pack + pi-extensions + extended-skills", got)
 	}
 	for i, want := range layout.ManagedFiles {
 		managed := result.Manifest.ManagedFiles[i]
@@ -877,8 +877,9 @@ func TestLoadManifestUpgradesLegacyPiManifest(t *testing.T) {
 	if got := manifest.Components; !equalComponentIDs(got, []ComponentID{ComponentCorePack, ComponentPiExtensions}) {
 		t.Fatalf("Components = %v, want default Pi components", got)
 	}
+	// Legacy manifests predate extended-skills; upgrade preserves base files only.
 	if len(manifest.ManagedFiles) != 3 {
-		t.Fatalf("len(ManagedFiles) = %d, want 3 without legacy delegation", len(manifest.ManagedFiles))
+		t.Fatalf("len(ManagedFiles) = %d, want 3 (legacy base files, extended skills not part of old install)", len(manifest.ManagedFiles))
 	}
 	for _, managed := range manifest.ManagedFiles {
 		if strings.Contains(managed.Path, "lore-delegation.ts") {
@@ -1242,8 +1243,8 @@ func TestInstallPiReportsValidationFailuresAndSummary(t *testing.T) {
 			t.Fatalf("Failed = %v, want no raw token echo", result.Summary.Failed)
 		}
 	}
-	if len(result.Summary.Created) != 13 || len(result.Summary.Updated) != 0 || len(result.Summary.Unchanged) != 0 {
-		t.Fatalf("summary = %+v, want 3 managed files plus 10 overlays and no updates/unchanged entries", result.Summary)
+	if len(result.Summary.Created) != 16 || len(result.Summary.Updated) != 0 || len(result.Summary.Unchanged) != 0 {
+		t.Fatalf("summary = %+v, want 6 managed files + 10 overlays (no updates/unchanged entries)", result.Summary)
 	}
 	if result.Manifest.AuthMode != "cli-request" || result.Manifest.CLIVersion != "v1.2.3" {
 		t.Fatalf("manifest = %+v, want persisted cli-request metadata", result.Manifest)
@@ -1382,8 +1383,8 @@ func TestPlanPiInstallReportsManagedFileActions(t *testing.T) {
 		t.Fatalf("PlanPiInstall error: %v", err)
 	}
 
-	if got := len(plan.ManagedFileActions); got != 14 {
-		t.Fatalf("len(ManagedFileActions) = %d, want 3 managed files + 10 overlays + legacy cleanup", got)
+	if got := len(plan.ManagedFileActions); got != 17 {
+		t.Fatalf("len(ManagedFileActions) = %d, want 6 managed files + 10 overlays + legacy cleanup", got)
 	}
 	actions := map[string]ManagedFileAction{}
 	for _, action := range plan.ManagedFileActions {
@@ -1479,8 +1480,8 @@ func TestExecutePiInstallRerunDoesNotDriftWhenManagedOverlaysAreUnchanged(t *tes
 	if err != nil {
 		t.Fatalf("PlanPiInstall rerun error: %v", err)
 	}
-	if got := len(plan.ManagedFileActions); got != 13 {
-		t.Fatalf("len(ManagedFileActions) = %d, want 13 managed files + overlays without theme bootstrap accounting", got)
+	if got := len(plan.ManagedFileActions); got != 16 {
+		t.Fatalf("len(ManagedFileActions) = %d, want 16 (6 base files + 10 overlays)", got)
 	}
 	for _, action := range plan.ManagedFileActions {
 		if action.Action != "unchanged" {
@@ -1509,8 +1510,8 @@ func TestExecutePiInstallRerunDoesNotDriftWhenManagedOverlaysAreUnchanged(t *tes
 	if len(result.Summary.Created) != 0 || len(result.Summary.Updated) != 0 || len(result.Summary.Deleted) != 0 {
 		t.Fatalf("summary = %+v, want no create/update/delete actions on converged rerun", result.Summary)
 	}
-	if got := len(result.Summary.Unchanged); got != 13 {
-		t.Fatalf("len(Unchanged) = %d, want 13 managed files + overlays recorded for plan validation", got)
+	if got := len(result.Summary.Unchanged); got != 16 {
+		t.Fatalf("len(Unchanged) = %d, want 16 (6 base files + 10 overlays)", got)
 	}
 	if containsSummaryEntry(result.Summary.Unchanged, filepath.Join("themes", "alferio.json")) {
 		t.Fatalf("Unchanged = %v, want theme bootstrap excluded from managed plan/summary accounting", result.Summary.Unchanged)
