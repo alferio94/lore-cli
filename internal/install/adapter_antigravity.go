@@ -43,10 +43,11 @@ func defaultAntigravityAdapter() HarnessAdapter {
 				Description: "Harness-owned skills installation support.",
 			},
 			CapabilityLoreServerMCP: {
-				ID:          CapabilityLoreServerMCP,
-				Component:   ComponentLoreServerMCP,
-				Description: "Optional MCP configuration support for Antigravity.",
-				Optional:    true,
+				ID:               CapabilityLoreServerMCP,
+				Component:        ComponentLoreServerMCP,
+				Description:      "Optional MCP configuration support for Antigravity.",
+				Optional:         true,
+				EnabledByDefault: true,
 			},
 		},
 	}
@@ -80,6 +81,8 @@ func ResolveAntigravityLayout(homeDir string) HarnessLayout {
 	skillsDir := filepath.Join(rootDir, "skills")
 	geminiConfigDir := filepath.Join(geminiDir, "config")
 	mcpPath := filepath.Join(geminiConfigDir, "mcp_config.json")
+	agentsDir := filepath.Join(geminiConfigDir, "agents")
+	agentProfilePath := filepath.Join(agentsDir, "lore.json")
 	return HarnessLayout{
 		Target:       TargetAntigravity,
 		RootDir:      rootDir,
@@ -91,6 +94,8 @@ func ResolveAntigravityLayout(homeDir string) HarnessLayout {
 			"skills_dir":        skillsDir,
 			"manifest":          manifestPath,
 			"mcp_config":        mcpPath,
+			"agents_dir":        agentsDir,
+			"agent_profile":     agentProfilePath,
 			"harness_root":      rootDir,
 			"antigravity_dir":   rootDir,
 		},
@@ -119,8 +124,18 @@ func (a antigravityAdapter) Render(_ context.Context, req RenderRequest) ([]Rend
 		Content:      renderAntigravityPrompt(definition),
 	}}
 	rendered = append(rendered, renderAntigravitySkills(req)...)
+	agentProfile, err := renderAntigravityAgentProfile(definition)
+	if err != nil {
+		return nil, err
+	}
+	rendered = append(rendered, RenderedFile{
+		Component:    ComponentCorePack,
+		RelativePath: filepath.ToSlash(filepath.Join("..", "config", "agents", "lore.json")),
+		MergeMode:    MergeModeReplace,
+		Content:      agentProfile,
+	})
 	if containsComponent(components, ComponentLoreServerMCP) {
-		content, err := renderAntigravityMCPConfig(strings.TrimSpace(req.LoreBinaryPath))
+		content, err := renderAntigravityMCPConfig(req.ServerURL, req.SavedToken)
 		if err != nil {
 			return nil, err
 		}
@@ -159,6 +174,8 @@ func renderAntigravityPrompt(definition agentpack.Definition) []byte {
 		fmt.Sprintf("- Managed SDD phases: `%s`", strings.Join(phases, "`, `")),
 		"",
 		"Load the Lore-managed skill files from the Antigravity skills directory when a task explicitly requires them.",
+		"For SDD, the orchestrator delegates each phase to the matching managed sdd-* phase worker when available; phase workers persist full artifacts and return compact envelopes.",
+		"Do not manually author SDD phase artifacts from the orchestrator as a shortcut unless inline execution was explicitly requested or delegation is unavailable.",
 		antigravityPromptEndMarker,
 	}, "\n") + "\n"
 	return []byte(text)
@@ -189,15 +206,59 @@ func renderAntigravitySkills(req RenderRequest) []RenderedFile {
 	return rendered
 }
 
-func renderAntigravityMCPConfig(loreBinaryPath string) ([]byte, error) {
-	if loreBinaryPath == "" {
-		loreBinaryPath = "lore"
+type antigravityAgentProfile struct {
+	ID                string `json:"id"`
+	Name              string `json:"name"`
+	Description       string `json:"description"`
+	SystemInstruction string `json:"systemInstruction"`
+	Default           bool   `json:"default"`
+}
+
+func renderAntigravityAgentProfile(definition agentpack.Definition) ([]byte, error) {
+	payload := antigravityAgentProfile{
+		ID:                "lore",
+		Name:              "Lore",
+		Description:       "Global Lore orchestrator specialized in SDD workflows and persistent context through Lore MCP",
+		SystemInstruction: renderAntigravityAgentSystemInstruction(definition),
+		Default:           true,
+	}
+	data, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("encode antigravity agent profile: %w", err)
+	}
+	return append(data, '\n'), nil
+}
+
+func renderAntigravityAgentSystemInstruction(definition agentpack.Definition) string {
+	base := strings.TrimRight(agentpack.RenderOrchestratorSystemInstruction(definition), "\n")
+	suffix := strings.Join([]string{
+		"Antigravity/Gemini runtime notes:",
+		"- Keep the shared Lore-managed skills under `~/.gemini/antigravity-cli/skills`.",
+		"- Keep the Lore-managed manifest at `~/.gemini/antigravity-cli/lore-install.json`.",
+		"- Treat `~/.gemini/GEMINI.md` as the shared prompt file and `~/.gemini/config/agents/lore.json` as the managed Gemini agent profile installed by Lore CLI.",
+		"- Optional managed MCP config lives at `~/.gemini/config/mcp_config.json`.",
+		"- Keep Antigravity on its managed prompt-and-skills path; do not assume Pi-style overlays, daemons, autostart, or background subagent parity.",
+		"- Lore MCP tools are exposed according to the user's current role and permissions, so `tools` is intentionally omitted from this profile.",
+	}, "\n")
+	return base + "\n\n" + suffix + "\n"
+}
+
+func renderAntigravityMCPConfig(serverURL, token string) ([]byte, error) {
+	normalizedServerURL := strings.TrimRight(strings.TrimSpace(serverURL), "/")
+	if normalizedServerURL == "" {
+		return nil, fmt.Errorf("server url is required")
+	}
+	trimmedToken := strings.TrimSpace(token)
+	if trimmedToken == "" {
+		return nil, fmt.Errorf("saved token is required")
 	}
 	payload := map[string]any{
 		"mcpServers": map[string]any{
 			"lore": map[string]any{
-				"command": loreBinaryPath,
-				"args":    []string{"mcp", "serve"},
+				"serverUrl": normalizedServerURL + "/v1/mcp",
+				"headers": map[string]any{
+					"Authorization": "Bearer " + trimmedToken,
+				},
 			},
 		},
 	}
@@ -286,6 +347,8 @@ func antigravityAbsolutePath(layout HarnessLayout, relativePath string) string {
 		return layout.Paths["shared_prompt"]
 	case filepath.ToSlash(filepath.Join("..", "config", "mcp_config.json")):
 		return layout.Paths["mcp_config"]
+	case filepath.ToSlash(filepath.Join("..", "config", "agents", "lore.json")):
+		return layout.Paths["agent_profile"]
 	default:
 		return filepath.Join(layout.RootDir, filepath.FromSlash(cleanRelativePath))
 	}

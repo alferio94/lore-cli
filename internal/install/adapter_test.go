@@ -13,8 +13,8 @@ func TestDefaultComponentSelectionKeepsPiSafeAndMCPOptional(t *testing.T) {
 	if got := DefaultComponentSelection(TargetPi); !equalComponentIDs(got, []ComponentID{ComponentCorePack, ComponentPiExtensions}) {
 		t.Fatalf("DefaultComponentSelection(pi) = %v, want core-pack + pi-extensions", got)
 	}
-	if got := DefaultComponentSelection(TargetAntigravity); !equalComponentIDs(got, []ComponentID{ComponentCorePack}) {
-		t.Fatalf("DefaultComponentSelection(antigravity) = %v, want core-pack only", got)
+	if got := DefaultComponentSelection(TargetAntigravity); !equalComponentIDs(got, []ComponentID{ComponentCorePack, ComponentLoreServerMCP}) {
+		t.Fatalf("DefaultComponentSelection(antigravity) = %v, want core-pack + lore-server-mcp", got)
 	}
 	if got := DefaultComponentSelection(TargetClaudeCode); !equalComponentIDs(got, []ComponentID{ComponentCorePack}) {
 		t.Fatalf("DefaultComponentSelection(claude-code) = %v, want core-pack only", got)
@@ -299,7 +299,7 @@ func TestDefaultPiAdapterCanonicalAssetsStayByteCompatibleWithProjectedDefinitio
 }
 
 func TestLegacyDelegationAssetIsQuarantinedAndNotPartOfCurrentInstall(t *testing.T) {
-	asset, err := piAssets.ReadFile("assets/pi/lore-delegation.ts")
+	asset, err := installAssets.ReadFile("assets/pi/lore-delegation.ts")
 	if err != nil {
 		t.Fatalf("ReadFile lore-delegation.ts error = %v, want nil", err)
 	}

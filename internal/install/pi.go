@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -16,7 +17,7 @@ import (
 )
 
 //go:embed assets/pi/*
-var piAssets embed.FS
+var installAssets embed.FS
 
 type PiLayout struct {
 	HomeDir          string
@@ -49,6 +50,7 @@ func (r PiInstallRequest) InstallRequest() InstallRequest {
 	return InstallRequest{
 		HomeDir:         r.HomeDir,
 		ServerURL:       r.ServerURL,
+		SavedToken:      r.SavedToken,
 		LoreBinaryPath:  r.LoreBinaryPath,
 		LoreConfigDir:   r.LoreConfigDir,
 		LoreCLIVersion:  r.LoreCLIVersion,
@@ -504,7 +506,7 @@ func bootstrapPiTheme(layout PiLayout) error {
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("inspect Pi theme bootstrap path: %w", err)
 	}
-	content, err := piAssets.ReadFile("assets/pi/alferio.json")
+	content, err := installAssets.ReadFile("assets/pi/alferio.json")
 	if err != nil {
 		return fmt.Errorf("read Pi theme asset: %w", err)
 	}
@@ -707,8 +709,6 @@ func validateManagedContents(contents map[string][]byte, req PiInstallRequest) [
 	requiredSnippets := map[string][]string{
 		managedPiExtensionRelativePaths[0]: {
 			"\"api\", \"request\"",
-			"\"api\", \"mcp-call\"",
-			"lore_project_context",
 			"export default function",
 			"Text",
 			"renderCall(",
@@ -799,9 +799,11 @@ func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
 			_ = os.Remove(tmpPath)
 		}
 	}()
-	if err := tmp.Chmod(mode); err != nil {
+	if err := chmodWithBestEffort(runtime.GOOS, "chmod temp file", func() error {
+		return tmp.Chmod(mode)
+	}); err != nil {
 		_ = tmp.Close()
-		return fmt.Errorf("chmod temp file: %w", err)
+		return err
 	}
 	if _, err := tmp.Write(data); err != nil {
 		_ = tmp.Close()
@@ -813,9 +815,21 @@ func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
 	if err := os.Rename(tmpPath, path); err != nil {
 		return fmt.Errorf("replace file: %w", err)
 	}
-	if err := os.Chmod(path, mode); err != nil {
-		return fmt.Errorf("chmod file: %w", err)
+	if err := chmodWithBestEffort(runtime.GOOS, "chmod file", func() error {
+		return os.Chmod(path, mode)
+	}); err != nil {
+		return err
 	}
 	cleanup = false
+	return nil
+}
+
+func chmodWithBestEffort(goos, context string, apply func() error) error {
+	if err := apply(); err != nil {
+		if goos == "windows" {
+			return nil
+		}
+		return fmt.Errorf("%s: %w", context, err)
+	}
 	return nil
 }

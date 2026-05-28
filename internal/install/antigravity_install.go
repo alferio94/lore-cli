@@ -124,6 +124,7 @@ func renderAntigravityFiles(req InstallRequest) ([]RenderedFile, error) {
 		Definition:     req.Definition,
 		Components:     req.Components,
 		ServerURL:      req.ServerURL,
+		SavedToken:     req.SavedToken,
 		LoreBinaryPath: req.LoreBinaryPath,
 		LoreConfigDir:  req.LoreConfigDir,
 		LoreCLIVersion: req.LoreCLIVersion,
@@ -278,6 +279,8 @@ func antigravityBackupRelativePath(relativePath string) string {
 		return filepath.ToSlash(filepath.Join("shared", "GEMINI.md"))
 	case filepath.ToSlash(filepath.Join("..", "config", "mcp_config.json")):
 		return filepath.ToSlash(filepath.Join("shared", "config", "mcp_config.json"))
+	case filepath.ToSlash(filepath.Join("..", "config", "agents", "lore.json")):
+		return filepath.ToSlash(filepath.Join("shared", "config", "agents", "lore.json"))
 	default:
 		return filepath.ToSlash(strings.TrimPrefix(filepath.ToSlash(relativePath), "./"))
 	}

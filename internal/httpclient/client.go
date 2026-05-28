@@ -163,156 +163,6 @@ func (c *HTTPClient) RequestJSON(ctx context.Context, method, path, token string
 	return RequestJSONResult{StatusCode: res.StatusCode, RequestID: strings.TrimSpace(res.Header.Get("X-Request-Id")), Data: data}, nil
 }
 
-// MCPJSONRPC performs an authenticated JSON-RPC request against /v1/mcp.
-func (c *HTTPClient) MCPJSONRPC(ctx context.Context, token, method string, params json.RawMessage) (RequestJSONResult, error) {
-	return c.mcpRequest(ctx, token, "lore-cli-mcp", method, params)
-}
-
-// MCPForward performs a token-safe authenticated JSON-RPC request for the local MCP stdio bridge.
-func (c *HTTPClient) MCPForward(ctx context.Context, token, method string, params json.RawMessage) (json.RawMessage, error) {
-	result, err := c.mcpRequest(ctx, token, "lore-cli-mcp", method, params)
-	if err != nil {
-		return nil, newMCPForwardError(method, err)
-	}
-	return result.Data, nil
-}
-
-// MCPCall performs an allowlisted JSON-RPC tools/call request against /v1/mcp.
-func (c *HTTPClient) MCPCall(ctx context.Context, token, toolName string, arguments json.RawMessage) (RequestJSONResult, error) {
-	toolName, args, err := ValidateBrokerMCPCall(toolName, arguments)
-	if err != nil {
-		return RequestJSONResult{}, err
-	}
-	params, err := json.Marshal(map[string]any{
-		"name":      toolName,
-		"arguments": json.RawMessage(args),
-	})
-	if err != nil {
-		return RequestJSONResult{}, fmt.Errorf("encode MCP request params: %w", err)
-	}
-	return c.mcpRequest(ctx, token, "lore-cli-mcp-call", "tools/call", params)
-}
-
-// ValidateBrokerMCPCall normalizes and validates hidden MCP broker inputs.
-func ValidateBrokerMCPCall(toolName string, arguments json.RawMessage) (string, json.RawMessage, error) {
-	trimmedTool := strings.TrimSpace(toolName)
-	if trimmedTool == "" {
-		return "", nil, errors.New("tool is required")
-	}
-	if !isBrokerMCPToolAllowed(trimmedTool) {
-		return "", nil, errors.New("tool is not allowlisted for lore api mcp-call")
-	}
-	trimmedArgs := bytes.TrimSpace(arguments)
-	if len(trimmedArgs) == 0 {
-		trimmedArgs = json.RawMessage(`{}`)
-	}
-	var decoded any
-	if err := json.Unmarshal(trimmedArgs, &decoded); err != nil {
-		return "", nil, fmt.Errorf("args-json must be valid JSON: %w", err)
-	}
-	if _, ok := decoded.(map[string]any); !ok {
-		return "", nil, errors.New("args-json must decode to a JSON object")
-	}
-	return trimmedTool, trimmedArgs, nil
-}
-
-func newMCPForwardError(method string, err error) error {
-	op := strings.TrimSpace(method)
-	if op == "" {
-		op = "mcp request"
-	}
-	var networkErr *NetworkError
-	if errors.As(err, &networkErr) {
-		return &MCPForwardError{Message: fmt.Sprintf("upstream %s failed: network request failed", op)}
-	}
-	var unauthorized *UnauthorizedError
-	if errors.As(err, &unauthorized) {
-		return &MCPForwardError{Message: fmt.Sprintf("upstream %s failed: %s", op, unauthorized.Error())}
-	}
-	var apiErr *APIError
-	if errors.As(err, &apiErr) {
-		message := apiErr.Message
-		if strings.TrimSpace(apiErr.RequestID) != "" {
-			message = fmt.Sprintf("%s (request_id=%s)", message, apiErr.RequestID)
-		}
-		return &MCPForwardError{Message: fmt.Sprintf("upstream %s failed: %s", op, message)}
-	}
-	return &MCPForwardError{Message: fmt.Sprintf("upstream %s failed: %s", op, err.Error())}
-}
-
-func (c *HTTPClient) mcpRequest(ctx context.Context, token, requestID, method string, params json.RawMessage) (RequestJSONResult, error) {
-	trimmedMethod := strings.TrimSpace(method)
-	if trimmedMethod == "" {
-		return RequestJSONResult{}, errors.New("mcp method is required")
-	}
-	trimmedParams := bytes.TrimSpace(params)
-	if len(trimmedParams) == 0 {
-		trimmedParams = json.RawMessage(`{}`)
-	}
-	var decoded any
-	if err := json.Unmarshal(trimmedParams, &decoded); err != nil {
-		return RequestJSONResult{}, fmt.Errorf("mcp params must be valid JSON: %w", err)
-	}
-	if _, ok := decoded.(map[string]any); !ok {
-		return RequestJSONResult{}, errors.New("mcp params must decode to a JSON object")
-	}
-	payload, err := json.Marshal(map[string]any{
-		"jsonrpc": "2.0",
-		"id":      requestID,
-		"method":  trimmedMethod,
-		"params":  json.RawMessage(trimmedParams),
-	})
-	if err != nil {
-		return RequestJSONResult{}, fmt.Errorf("encode MCP request: %w", err)
-	}
-
-	res, err := c.do(ctx, http.MethodPost, "/v1/mcp", token, payload)
-	if err != nil {
-		return RequestJSONResult{}, err
-	}
-	defer res.Body.Close()
-
-	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return RequestJSONResult{}, decodeAPIError(res, "/v1/mcp")
-	}
-	responsePayload, err := io.ReadAll(res.Body)
-	if err != nil {
-		return RequestJSONResult{}, fmt.Errorf("read MCP response: %w", err)
-	}
-	var envelope struct {
-		Result json.RawMessage `json:"result"`
-		Error  *struct {
-			Code    any    `json:"code"`
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-	if err := json.Unmarshal(responsePayload, &envelope); err != nil {
-		return RequestJSONResult{}, fmt.Errorf("decode MCP response: %w", err)
-	}
-	requestIDHeader := strings.TrimSpace(res.Header.Get("X-Request-Id"))
-	if envelope.Error != nil {
-		code := fmt.Sprint(envelope.Error.Code)
-		if code == "<nil>" || strings.TrimSpace(code) == "" {
-			code = "mcp_error"
-		}
-		return RequestJSONResult{}, &APIError{StatusCode: res.StatusCode, Code: code, Message: envelope.Error.Message, RequestID: requestIDHeader}
-	}
-	result := envelope.Result
-	if len(bytes.TrimSpace(result)) == 0 {
-		result = json.RawMessage("null")
-	}
-	return RequestJSONResult{StatusCode: res.StatusCode, RequestID: requestIDHeader, Data: result}, nil
-}
-
-func isBrokerMCPToolAllowed(toolName string) bool {
-	switch toolName {
-	case "lore_project_context", "lore_me", "lore_memory_search", "lore_memory_get", "lore_skill_list", "lore_skill_get":
-		return true
-	default:
-		return false
-	}
-}
-
 // ValidateBrokerRequest normalizes and validates hidden broker request inputs.
 func ValidateBrokerRequest(method, rawPath string, body json.RawMessage) (string, error) {
 	normalizedMethod := strings.ToUpper(strings.TrimSpace(method))
@@ -367,7 +217,7 @@ func isBrokerPathAllowed(method, path string) bool {
 		if path == "/v1/memories" || path == "/v1/skills" || path == "/v1/projects" {
 			return true
 		}
-		return hasSinglePathSegment(path, "/v1/memories") || hasSinglePathSegment(path, "/v1/skills") || hasSinglePathSegment(path, "/v1/projects")
+		return hasSinglePathSegment(path, "/v1/memories") || hasSinglePathSegment(path, "/v1/skills") || hasSinglePathSegment(path, "/v1/projects") || hasProjectContextPath(path)
 	case http.MethodPost:
 		return path == "/v1/memories" || path == "/v1/skills" || path == "/v1/projects"
 	default:
@@ -380,6 +230,14 @@ func hasSinglePathSegment(path, prefix string) bool {
 		return false
 	}
 	segment := strings.TrimPrefix(path, prefix+"/")
+	return segment != "" && !strings.Contains(segment, "/")
+}
+
+func hasProjectContextPath(path string) bool {
+	if !strings.HasPrefix(path, "/v1/projects/") || !strings.HasSuffix(path, "/context") {
+		return false
+	}
+	segment := strings.TrimSuffix(strings.TrimPrefix(path, "/v1/projects/"), "/context")
 	return segment != "" && !strings.Contains(segment, "/")
 }
 

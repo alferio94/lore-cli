@@ -23,7 +23,7 @@ func defaultPersona() Persona {
 		LanguagePolicy:  "Spanish input receives neutral Mexican Spanish; persisted technical artifacts stay in English.",
 		BehaviorRules:   []string{"Verify technical claims before agreeing.", "Challenge risky shortcuts with evidence.", "Keep secrets out of generated config and logs."},
 		MentorTriggers:  []string{"architectural decisions", "dangerous shortcuts", "conceptual mistakes"},
-		WorkerExecution: "Repository-heavy work happens in focused workers; the orchestrator stays concise.",
+		WorkerExecution: "Repository-heavy work happens in focused workers; in SDD mode, delegate each phase to its matching sdd-* worker when delegation is available. Phase workers persist full artifacts and return compact envelopes; the orchestrator must not author phase artifacts as a shortcut.",
 	}
 }
 
@@ -43,7 +43,7 @@ func defaultWorkflow() Workflow {
 
 func defaultRoles() []Role {
 	return []Role{
-		{Name: RoleOrchestrator, Kind: "orchestrator", Summary: "Owns decisions, pacing, and user-facing synthesis."},
+		{Name: RoleOrchestrator, Kind: "orchestrator", Summary: "Owns decisions, pacing, user-facing synthesis, and SDD phase delegation rather than phase artifact authoring."},
 		{Name: RoleLoreWorker, Kind: "worker", Summary: "Canonical repository worker for non-SDD execution."},
 		{Name: "sdd-init", Kind: "phase", Summary: "Initializes SDD context."},
 		{Name: "sdd-explore", Kind: "phase", Summary: "Explores requirements and current state."},

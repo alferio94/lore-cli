@@ -85,7 +85,7 @@ func supportedTarget(adapter HarnessAdapter) Target {
 	case TargetPi:
 		target.Description = "Recommended today; keeps the Pi-native Lore extensions path as the default backend and leaves Pi MCP disabled by default."
 	case TargetAntigravity:
-		target.Description = "prompt + skills MVP target with optional MCP capability; Pi remains the default recommended path while Antigravity keeps harness-owned prompt, skills, and manifest semantics."
+		target.Description = "prompt + skills MVP target with managed Gemini lore agent profile and optional direct MCP config; Pi remains the default recommended path while Antigravity keeps harness-owned prompt, skills, and manifest semantics."
 		if capabilities[CapabilityPrompt].Description == "" || capabilities[CapabilitySkills].Description == "" {
 			target.Description = "prompt + skills MVP target."
 		}
@@ -145,7 +145,7 @@ func FormatTargetSelection(targets []Target) string {
 		}
 		fmt.Fprintf(&b, "- %s: %s (%s)\n", label, target.Description, target.Availability)
 	}
-	b.WriteString("\nPi remains the default recommended path. Pi MCP stays disabled by default while Antigravity MCP is optional.")
+	b.WriteString("\nPi remains the default recommended path. Pi MCP stays disabled by default while Antigravity can write ~/.gemini/config/agents/lore.json and optionally write direct MCP config.")
 	return b.String()
 }
 

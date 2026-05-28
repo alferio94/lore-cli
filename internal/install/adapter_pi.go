@@ -90,7 +90,7 @@ func (a piAdapter) Render(_ context.Context, req RenderRequest) ([]RenderedFile,
 		if !containsComponent(components, asset.component) {
 			continue
 		}
-		content, err := piAssets.ReadFile(asset.assetPath)
+		content, err := installAssets.ReadFile(asset.assetPath)
 		if err != nil {
 			return nil, fmt.Errorf("read asset %s: %w", asset.assetPath, err)
 		}

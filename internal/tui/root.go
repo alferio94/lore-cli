@@ -610,7 +610,7 @@ func (m model) renderInstallTargetSelection() string {
 		}
 		fmt.Fprintf(&b, "%s%s: %s (%s)\n", prefix, label, target.Description, target.Availability)
 	}
-	fmt.Fprintf(&b, "\nSelected target: %s. Use ↑/↓ to switch between supported targets and Enter to continue. Pi remains the default recommended path. Pi MCP stays disabled by default while Antigravity MCP is optional.", selected.Title)
+	fmt.Fprintf(&b, "\nSelected target: %s. Use ↑/↓ to switch between supported targets and Enter to continue. Pi remains the default recommended path. Pi MCP stays disabled by default while Antigravity can write ~/.gemini/config/agents/lore.json and optionally write direct MCP config.", selected.Title)
 	return b.String()
 }
 

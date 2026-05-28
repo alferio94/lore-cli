@@ -14,7 +14,6 @@ import (
 	"github.com/alferio94/lore-cli/internal/config"
 	"github.com/alferio94/lore-cli/internal/httpclient"
 	"github.com/alferio94/lore-cli/internal/install"
-	"github.com/alferio94/lore-cli/internal/mcp"
 	"github.com/alferio94/lore-cli/internal/output"
 	cliupdate "github.com/alferio94/lore-cli/internal/update"
 	"github.com/alferio94/lore-cli/internal/version"
@@ -157,8 +156,6 @@ func (a *App) Run(args []string) int {
 		return a.runUpdate(args[1:])
 	case "api":
 		return a.runAPI(actions, args[1:])
-	case "mcp":
-		return a.runMCP(args[1:])
 	case "remember":
 		return a.parseRemember(args[1:])
 	case "recall":
@@ -308,9 +305,10 @@ func (a *App) runInstall(_ InteractiveActions, args []string) int {
 	fs.Usage = func() {
 		fmt.Fprintln(a.Stderr, "Usage: lore install [--dry-run] [--yes] [--target pi|antigravity] [--component <id>]")
 		fmt.Fprintln(a.Stderr, "Install the Pi-first managed runtime using saved Lore login state.")
-		fmt.Fprintln(a.Stderr, "Pi remains the default recommended path with the portable Lore agent pack plus pi-extensions; Antigravity is the supported prompt + skills MVP target with harness-owned prompt, skills, and optional MCP config semantics.")
+		fmt.Fprintln(a.Stderr, "Pi remains the default recommended path with the portable Lore agent pack plus pi-extensions; Antigravity is the supported prompt + skills MVP target with harness-owned prompt, skills, managed Gemini lore agent profile, and optional direct MCP config semantics.")
 		fmt.Fprintln(a.Stderr, "Healthy saved OS keychain-backed login metadata is reused automatically after password-first login or a compatibility token via --token; Claude Code, OpenCode, and Codex remain Coming soon.")
 		fmt.Fprintln(a.Stderr, "Pi keeps the native Lore extensions path by default; Antigravity keeps prompt + skills first, does not emulate Pi overlays, makes no auto-install guarantee, and keeps MCP optional.")
+		fmt.Fprintln(a.Stderr, "Antigravity install writes ~/.gemini/config/agents/lore.json for the managed Lore Gemini agent profile and, when optional Antigravity MCP is installed, writes ~/.gemini/config/mcp_config.json with the Lore /v1/mcp server URL plus a plaintext Authorization bearer token for Antigravity compatibility.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -349,62 +347,9 @@ func (a *App) runUpdate(args []string) int {
 	return report.ExitCode
 }
 
-func (a *App) runMCP(args []string) int {
-	if len(args) == 0 {
-		fmt.Fprintln(a.Stderr, "Usage: lore mcp <serve|proxy>")
-		fmt.Fprintln(a.Stderr, "Use the canonical local Lore Server MCP stdio bridge; it remains separate from the default Pi install path.")
-		return 1
-	}
-
-	runServe := func(commandName string, alias bool, subargs []string) int {
-		fs := newFlagSet("mcp "+commandName, a.Stderr)
-		fs.Usage = func() {
-			fmt.Fprintf(a.Stderr, "Usage: lore mcp %s\n", commandName)
-			fmt.Fprintln(a.Stderr, "Start the local auth-safe Lore Server MCP stdio bridge using saved Lore login state.")
-			fmt.Fprintln(a.Stderr, "The bridge accepts Content-Length framed JSON-RPC or newline-delimited JSON-RPC and mirrors the same framing in responses for that session.")
-			if alias {
-				fmt.Fprintln(a.Stderr, "This deprecated compatibility alias forwards to the canonical lore mcp serve command.")
-			} else {
-				fmt.Fprintln(a.Stderr, "Use this canonical bridge instead of wiring raw tokens into a harness.")
-			}
-			fmt.Fprintln(a.Stderr, "This bridge is intentionally separate from the default Pi install path.")
-		}
-		if err := fs.Parse(subargs); err != nil {
-			return 1
-		}
-		if fs.NArg() != 0 {
-			fs.Usage()
-			return 1
-		}
-		client, session, err := a.loadAuthenticatedClient()
-		if err != nil {
-			fmt.Fprintf(a.Stderr, "mcp %s failed: %s\n", commandName, err)
-			return 1
-		}
-		if err := mcp.Serve(context.Background(), a.Stdin, a.Stdout, mcp.UpstreamFunc(func(ctx context.Context, method string, params json.RawMessage) (json.RawMessage, error) {
-			return client.MCPForward(ctx, session.Token, method, params)
-		})); err != nil {
-			fmt.Fprintf(a.Stderr, "mcp %s failed: %v\n", commandName, err)
-			return 1
-		}
-		return 0
-	}
-
-	switch args[0] {
-	case "serve":
-		return runServe("serve", false, args[1:])
-	case "proxy":
-		return runServe("proxy", true, args[1:])
-	default:
-		fmt.Fprintln(a.Stderr, "Usage: lore mcp <serve|proxy>")
-		fmt.Fprintln(a.Stderr, "Use the canonical local Lore Server MCP stdio bridge; it remains separate from the default Pi install path.")
-		return 1
-	}
-}
-
 func (a *App) runAPI(_ InteractiveActions, args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(a.Stderr, "Usage: lore api <request|mcp-call>")
+		fmt.Fprintln(a.Stderr, "Usage: lore api <request>")
 		return 1
 	}
 
@@ -423,21 +368,8 @@ func (a *App) runAPI(_ InteractiveActions, args []string) int {
 			return a.writeBrokerError(2, 400, "invalid_request", "unexpected positional arguments", "")
 		}
 		return a.runAPIRequest(apiRequestOptions{JSONOutput: *jsonOutput, Method: *method, Path: *path, BodyJSON: *bodyJSON})
-	case "mcp-call":
-		fs := flag.NewFlagSet("api mcp-call", flag.ContinueOnError)
-		fs.SetOutput(io.Discard)
-		jsonOutput := fs.Bool("json", false, "Print machine-readable JSON output")
-		tool := fs.String("tool", "", "Allowlisted MCP tool name")
-		argsJSON := fs.String("args-json", "{}", "JSON object MCP tool arguments")
-		if err := fs.Parse(args[1:]); err != nil {
-			return a.writeBrokerError(2, 400, "invalid_request", "invalid lore api mcp-call arguments", "")
-		}
-		if fs.NArg() != 0 {
-			return a.writeBrokerError(2, 400, "invalid_request", "unexpected positional arguments", "")
-		}
-		return a.runAPIMCPCall(apiMCPCallOptions{JSONOutput: *jsonOutput, Tool: *tool, ArgsJSON: *argsJSON})
 	default:
-		fmt.Fprintln(a.Stderr, "Usage: lore api <request|mcp-call>")
+		fmt.Fprintln(a.Stderr, "Usage: lore api <request>")
 		return 1
 	}
 }
@@ -590,7 +522,6 @@ func (a *App) printRootHelpTo(w io.Writer) {
 	fmt.Fprintln(w, "  update    Check or apply a binary-only Lore CLI update without touching ~/.pi")
 	fmt.Fprintln(w, "  remember  Create one memory via authenticated REST")
 	fmt.Fprintln(w, "  api request  Hidden machine broker for allowlisted authenticated API calls")
-	fmt.Fprintln(w, "  api mcp-call Hidden machine broker for allowlisted authenticated MCP tool calls")
 	fmt.Fprintln(w, "  recall    List memories by explicit authenticated filters")
 	fmt.Fprintln(w, "  version   Print build metadata for humans or scripts")
 	fmt.Fprintln(w, "")

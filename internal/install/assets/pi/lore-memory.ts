@@ -131,10 +131,6 @@ export default function (pi: ExtensionAPI) {
     return runLoreBroker(args, "Lore broker", signal);
   }
 
-  async function runMCPBroker(tool: string, argumentsObject: Record<string, unknown>, signal?: AbortSignal) {
-    const args = ["api", "mcp-call", "--json", "--tool", tool, "--args-json", JSON.stringify(argumentsObject)];
-    return runLoreBroker(args, "Lore MCP broker", signal);
-  }
 
   async function runLoreBroker(args: string[], label: string, signal?: AbortSignal): Promise<ToolResult> {
     const result = await pi.exec(loreBinaryPath, args, {
@@ -313,7 +309,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "lore_context",
     label: "Lore Context",
-    description: "Get project Lore context via MCP lore_project_context",
+    description: "Get project Lore context",
     parameters: Type.Object({
       project: Type.String({ description: "Lore project_id (UUID), not project key" }),
       project_id: Type.Optional(Type.String({ description: "Lore project_id (UUID); overrides project when provided" })),
@@ -321,14 +317,11 @@ export default function (pi: ExtensionAPI) {
     }),
     async execute(_toolCallId, params, signal) {
       const { project, project_id, memory_limit } = params as { project: string; project_id?: string; memory_limit?: number };
-      return runMCPBroker(
-        "lore_project_context",
-        {
-          project_id: project_id ?? project,
-          memory_limit,
-        },
-        signal,
-      );
+      const id = encodeURIComponent(project_id ?? project);
+      const path = withQuery(`/v1/projects/${id}/context`, {
+        memory_limit,
+      });
+      return runBroker("GET", path, undefined, signal);
     },
     renderCall(args, theme, context) {
       const params = (args ?? {}) as { project?: string; project_id?: string; memory_limit?: number };

@@ -26,6 +26,7 @@ type PlanFileAction struct {
 type InstallRequest struct {
 	HomeDir         string
 	ServerURL       string
+	SavedToken      string
 	LoreBinaryPath  string
 	LoreConfigDir   string
 	LoreCLIVersion  string
@@ -64,8 +65,17 @@ func (r InstallRequest) Validate() error {
 	if err := definition.Validate(); err != nil {
 		return fmt.Errorf("definition: %w", err)
 	}
-	if _, err := NormalizeComponentSelection(r.Target, r.Components); err != nil {
+	components, err := NormalizeComponentSelection(r.Target, r.Components)
+	if err != nil {
 		return err
+	}
+	if r.Target == TargetAntigravity && containsComponent(components, ComponentLoreServerMCP) {
+		if stringsTrimSpace(r.ServerURL) == "" {
+			return fmt.Errorf("server url is required for target %q component %q", r.Target, ComponentLoreServerMCP)
+		}
+		if stringsTrimSpace(r.SavedToken) == "" {
+			return fmt.Errorf("saved login token is required for target %q component %q", r.Target, ComponentLoreServerMCP)
+		}
 	}
 	return nil
 }

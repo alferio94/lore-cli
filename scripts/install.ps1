@@ -1,3 +1,5 @@
+#Requires -Version 5.1
+
 param(
     [string]$Version = '__DEFAULT_VERSION__',
     [string]$InstallDir = $(Join-Path $env:LOCALAPPDATA 'Programs\Lore'),
@@ -14,6 +16,72 @@ Set-StrictMode -Version Latest
 $RepoSlug = 'alferio94/lore-cli'
 $BinaryName = 'lore.exe'
 $DefaultVersion = '__DEFAULT_VERSION__'
+$GitHubLatestReleaseApiUrl = "https://api.github.com/repos/$RepoSlug/releases/latest"
+$GitHubApiHeaders = @{
+    'Accept' = 'application/vnd.github+json'
+    'User-Agent' = "lore-cli-installer/$DefaultVersion"
+}
+
+function Test-IsWindowsPowerShellDesktop {
+    return $PSVersionTable.PSEdition -eq 'Desktop'
+}
+
+function Enable-Tls12ForLegacyPowerShell {
+    if (-not (Test-IsWindowsPowerShellDesktop)) {
+        return
+    }
+
+    $currentProtocols = [System.Net.ServicePointManager]::SecurityProtocol
+    if (($currentProtocols -band [System.Net.SecurityProtocolType]::Tls12) -ne [System.Net.SecurityProtocolType]::Tls12) {
+        [System.Net.ServicePointManager]::SecurityProtocol = $currentProtocols -bor [System.Net.SecurityProtocolType]::Tls12
+    }
+}
+
+function Invoke-WebRequestCompat {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Uri,
+        [string]$OutFile = '',
+        [hashtable]$Headers,
+        [int]$MaximumRedirection = 0
+    )
+
+    $invokeParams = @{
+        Uri = $Uri
+        ErrorAction = 'Stop'
+    }
+    if ($OutFile) {
+        $invokeParams['OutFile'] = $OutFile
+    }
+    if ($Headers) {
+        $invokeParams['Headers'] = $Headers
+    }
+    if ($MaximumRedirection -gt 0) {
+        $invokeParams['MaximumRedirection'] = $MaximumRedirection
+    }
+
+    $invokeWebRequestCommand = Get-Command -Name Invoke-WebRequest -CommandType Cmdlet
+    if ((Test-IsWindowsPowerShellDesktop) -and $invokeWebRequestCommand.Parameters.ContainsKey('UseBasicParsing')) {
+        $invokeParams['UseBasicParsing'] = $true
+    }
+
+    return Invoke-WebRequest @invokeParams
+}
+
+function Get-AbsoluteUriOrNull([string]$UriValue) {
+    if ([string]::IsNullOrWhiteSpace($UriValue)) {
+        return $null
+    }
+
+    $parsedUri = $null
+    if ([System.Uri]::TryCreate($UriValue, [System.UriKind]::Absolute, [ref]$parsedUri)) {
+        return $parsedUri
+    }
+
+    return $null
+}
+
+Enable-Tls12ForLegacyPowerShell
 
 function Show-Usage {
     @"
@@ -41,16 +109,25 @@ function Resolve-Version([string]$RequestedVersion) {
         $RequestedVersion = $DefaultVersion
     }
     if ($RequestedVersion -eq 'latest') {
+        $parsedBaseUrl = Get-AbsoluteUriOrNull -UriValue $BaseUrl
+        if (($null -ne $parsedBaseUrl) -and $parsedBaseUrl.Scheme -eq 'file') {
+            if ($DefaultVersion.StartsWith('v')) {
+                return $DefaultVersion
+            }
+            Fail 'latest release lookup is unavailable for file:// fixtures without an embedded release tag; rerun with -Version <tag>.'
+        }
+
         try {
-            $response = Invoke-WebRequest -Uri "https://github.com/$RepoSlug/releases/latest" -MaximumRedirection 5
+            $response = Invoke-WebRequestCompat -Uri $GitHubLatestReleaseApiUrl -Headers $GitHubApiHeaders
+            $release = $response.Content | ConvertFrom-Json
         }
         catch {
-            Fail "failed to resolve latest release; rerun with -Version <tag>. $_"
+            Fail "failed to resolve latest release from GitHub API; rerun with -Version <tag>. $_"
         }
-        $resolvedUri = $response.BaseResponse.ResponseUri.AbsoluteUri
-        $tag = Split-Path -Path $resolvedUri -Leaf
-        if (-not $tag.StartsWith('v')) {
-            Fail "latest release resolved ambiguously ($resolvedUri); rerun with -Version <tag>."
+
+        $tag = $release.tag_name
+        if ([string]::IsNullOrWhiteSpace($tag) -or (-not $tag.StartsWith('v'))) {
+            Fail 'latest release response did not include a valid tag_name; rerun with -Version <tag>.'
         }
         return $tag
     }
@@ -112,7 +189,7 @@ function Download-File([string]$Uri, [string]$Destination) {
         Copy-Item -Path $parsedUri.LocalPath -Destination $Destination -Force
         return
     }
-    Invoke-WebRequest -Uri $Uri -OutFile $Destination
+    Invoke-WebRequestCompat -Uri $Uri -OutFile $Destination
 }
 
 function Verify-Checksum([string]$SumsFile, [string]$ArchiveFile) {

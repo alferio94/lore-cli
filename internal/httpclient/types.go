@@ -63,9 +63,6 @@ type Client interface {
 	CreateMemory(ctx context.Context, token string, req CreateMemoryRequest) (Memory, error)
 	ListMemories(ctx context.Context, token string, filter ListMemoriesFilter) ([]Memory, error)
 	RequestJSON(ctx context.Context, method, path, token string, body json.RawMessage) (RequestJSONResult, error)
-	MCPJSONRPC(ctx context.Context, token, method string, params json.RawMessage) (RequestJSONResult, error)
-	MCPForward(ctx context.Context, token, method string, params json.RawMessage) (json.RawMessage, error)
-	MCPCall(ctx context.Context, token, toolName string, arguments json.RawMessage) (RequestJSONResult, error)
 }
 
 // PasswordLoginRequest is the POST /v1/auth/login payload.
@@ -200,16 +197,4 @@ func (e *NetworkError) Unwrap() error {
 		return nil
 	}
 	return e.Err
-}
-
-// MCPForwardError is a token-safe error surfaced to the local MCP stdio bridge.
-type MCPForwardError struct {
-	Message string
-}
-
-func (e *MCPForwardError) Error() string {
-	if e == nil || e.Message == "" {
-		return "upstream MCP request failed"
-	}
-	return e.Message
 }

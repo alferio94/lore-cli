@@ -2,8 +2,11 @@ package install
 
 import (
 	"context"
+	"encoding/json"
+	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -60,6 +63,34 @@ func TestAntigravityAdapterRenderProducesPromptSkillsAndOptionalMCPWithoutPiArti
 	if _, ok := byPath[filepath.ToSlash(filepath.Join("skills", "lore-worker", "SKILL.md"))]; !ok {
 		t.Fatalf("Render(core-pack) paths = %v, want skills/lore-worker/SKILL.md", sortedRenderedPaths(files))
 	}
+	agentProfileRelativePath := filepath.ToSlash(filepath.Join("..", "config", "agents", "lore.json"))
+	agentProfile, ok := byPath[agentProfileRelativePath]
+	if !ok {
+		t.Fatalf("Render(core-pack) paths = %v, want %s", sortedRenderedPaths(files), agentProfileRelativePath)
+	}
+	if agentProfile.MergeMode != MergeModeReplace {
+		t.Fatalf("agent profile merge mode = %q, want replace", agentProfile.MergeMode)
+	}
+	var payload antigravityAgentProfile
+	if err := json.Unmarshal(agentProfile.Content, &payload); err != nil {
+		t.Fatalf("json.Unmarshal(agent profile) error = %v, want nil", err)
+	}
+	instruction := renderAntigravityAgentSystemInstruction(assets.Definition())
+	if payload.ID != "lore" || payload.Name != "Lore" || !payload.Default {
+		t.Fatalf("agent profile payload = %+v, want lore/Lore/default", payload)
+	}
+	if payload.Description != "Global Lore orchestrator specialized in SDD workflows and persistent context through Lore MCP" {
+		t.Fatalf("agent profile description = %q, want updated English description", payload.Description)
+	}
+	if payload.SystemInstruction != instruction {
+		t.Fatalf("agent profile systemInstruction = %q, want composed agentpack instruction %q", payload.SystemInstruction, instruction)
+	}
+	if !containsAll(payload.SystemInstruction, "# Lore Runtime", "~/.gemini/antigravity-cli/skills", "`tools` is intentionally omitted") {
+		t.Fatalf("agent profile systemInstruction = %q, want agentpack base content plus Antigravity runtime suffix", payload.SystemInstruction)
+	}
+	if strings.Contains(string(agentProfile.Content), `"tools"`) {
+		t.Fatalf("agent profile = %q, want no tools field", string(agentProfile.Content))
+	}
 	mcpRelativePath := filepath.ToSlash(filepath.Join("..", "config", "mcp_config.json"))
 	if _, ok := byPath[mcpRelativePath]; ok {
 		t.Fatal("Render(core-pack) unexpectedly produced optional mcp_config.json")
@@ -69,6 +100,8 @@ func TestAntigravityAdapterRenderProducesPromptSkillsAndOptionalMCPWithoutPiArti
 		Target:     TargetAntigravity,
 		Assets:     assets,
 		Components: []ComponentID{ComponentCorePack, ComponentLoreServerMCP},
+		ServerURL:  "https://example.test",
+		SavedToken: "secret-token",
 	})
 	if err != nil {
 		t.Fatalf("Render(core-pack+mcp) error = %v, want nil", err)
@@ -85,10 +118,10 @@ func TestAntigravityAdapterRenderProducesPromptSkillsAndOptionalMCPWithoutPiArti
 		t.Fatalf("mcp merge mode = %q, want additive-json", mcpFile.MergeMode)
 	}
 	got := string(mcpFile.Content)
-	if !containsAll(got, `"mcpServers"`, `"lore"`, `"command"`, `"lore"`, `"args"`, `"mcp"`, `"serve"`) {
-		t.Fatalf("mcp_config.json = %q, want Lore MCP stdio command config", got)
+	if !containsAll(got, `"mcpServers"`, `"lore"`, `"serverUrl": "https://example.test/v1/mcp"`, `"headers"`, `"Authorization": "Bearer secret-token"`) {
+		t.Fatalf("mcp_config.json = %q, want direct Lore MCP server config", got)
 	}
-	for _, forbidden := range []string{"https://", "http://", "Authorization", "token"} {
+	for _, forbidden := range []string{"\"command\"", "--auth-file", "lore_mcp_auth.json"} {
 		if strings.Contains(got, forbidden) {
 			t.Fatalf("mcp_config.json = %q, want %q omitted from optional MCP config", got, forbidden)
 		}
@@ -133,7 +166,7 @@ func TestAntigravityPromptMergeRefreshesManagedBlockWithoutDuplicates(t *testing
 }
 
 func TestAntigravityMCPConfigMergePreservesExistingServersAndTreatsEmptyAsObject(t *testing.T) {
-	managed, err := renderAntigravityMCPConfig("/usr/local/bin/lore")
+	managed, err := renderAntigravityMCPConfig("https://example.test", "secret-token")
 	if err != nil {
 		t.Fatalf("renderAntigravityMCPConfig() error = %v, want nil", err)
 	}
@@ -142,7 +175,7 @@ func TestAntigravityMCPConfigMergePreservesExistingServersAndTreatsEmptyAsObject
 	if err != nil {
 		t.Fatalf("mergeAntigravityMCPConfig(empty) error = %v, want nil", err)
 	}
-	if !containsAll(string(emptyMerged), `"mcpServers"`, `"lore"`, `"/usr/local/bin/lore"`) {
+	if !containsAll(string(emptyMerged), `"mcpServers"`, `"lore"`, `"serverUrl": "https://example.test/v1/mcp"`, `"Authorization": "Bearer secret-token"`) {
 		t.Fatalf("empty merge = %q, want Lore MCP config written over empty file", string(emptyMerged))
 	}
 
@@ -151,12 +184,12 @@ func TestAntigravityMCPConfigMergePreservesExistingServersAndTreatsEmptyAsObject
 	if err != nil {
 		t.Fatalf("mergeAntigravityMCPConfig(existing) error = %v, want nil", err)
 	}
-	if !containsAll(string(merged), `"existing"`, `"keep-me"`, `"lore"`, `"/usr/local/bin/lore"`, `"topLevel": true`) {
+	if !containsAll(string(merged), `"existing"`, `"keep-me"`, `"lore"`, `"serverUrl": "https://example.test/v1/mcp"`, `"Authorization": "Bearer secret-token"`, `"topLevel": true`) {
 		t.Fatalf("merged config = %q, want existing servers preserved plus Lore MCP entry", string(merged))
 	}
 }
 
-func TestAntigravityManifestTracksPromptAndSkillsWithoutPiOverlays(t *testing.T) {
+func TestAntigravityManifestTracksPromptSkillsAndManagedMCPFilesWithoutPiOverlays(t *testing.T) {
 	homeDir := t.TempDir()
 	layout := ResolveAntigravityLayout(homeDir)
 	adapter := defaultAntigravityAdapter()
@@ -165,19 +198,22 @@ func TestAntigravityManifestTracksPromptAndSkillsWithoutPiOverlays(t *testing.T)
 	files, err := adapter.Render(context.Background(), RenderRequest{
 		Target:     TargetAntigravity,
 		Assets:     assets,
-		Components: []ComponentID{ComponentCorePack},
+		Components: []ComponentID{ComponentCorePack, ComponentLoreServerMCP},
+		ServerURL:  "https://example.test",
+		SavedToken: "secret-token",
 	})
 	if err != nil {
-		t.Fatalf("Render(core-pack) error = %v, want nil", err)
+		t.Fatalf("Render(core-pack+mcp) error = %v, want nil", err)
 	}
 	req := InstallRequest{
 		HomeDir:        homeDir,
 		ServerURL:      "https://example.test",
+		SavedToken:     "secret-token",
 		LoreBinaryPath: "/usr/local/bin/lore",
 		LoreConfigDir:  filepath.Join(homeDir, ".lore"),
 		LoreCLIVersion: "v0.1.0",
 		Target:         TargetAntigravity,
-		Components:     []ComponentID{ComponentCorePack},
+		Components:     []ComponentID{ComponentCorePack, ComponentLoreServerMCP},
 		Now:            time.Date(2026, 5, 25, 12, 0, 0, 0, time.UTC),
 	}
 	manifest, managedPaths, err := buildAntigravityManifest(layout, req, files)
@@ -191,12 +227,18 @@ func TestAntigravityManifestTracksPromptAndSkillsWithoutPiOverlays(t *testing.T)
 		t.Fatalf("ValidateForLayout() error = %v, want nil", err)
 	}
 	for _, path := range managedPaths {
-		if strings.Contains(path, string(filepath.Separator)+"agents"+string(filepath.Separator)) || strings.Contains(path, string(filepath.Separator)+"extensions"+string(filepath.Separator)) {
+		if strings.Contains(path, string(filepath.Separator)+"extensions"+string(filepath.Separator)) {
 			t.Fatalf("managed path %q leaked Pi overlay semantics", path)
 		}
-		if strings.HasSuffix(path, string(filepath.Separator)+"mcp_config.json") {
-			t.Fatalf("managed path %q unexpectedly included optional MCP file", path)
+		if strings.Contains(path, string(filepath.Separator)+"agents"+string(filepath.Separator)) && !strings.Contains(path, string(filepath.Separator)+"config"+string(filepath.Separator)+"agents"+string(filepath.Separator)) {
+			t.Fatalf("managed path %q leaked Pi overlay semantics", path)
 		}
+	}
+	if !containsSummaryEntry(managedPaths, filepath.ToSlash(filepath.Join(".gemini", "config", "mcp_config.json")), "") {
+		t.Fatalf("managed paths = %v, want managed MCP config path", managedPaths)
+	}
+	if !containsSummaryEntry(managedPaths, filepath.ToSlash(filepath.Join(".gemini", "config", "agents", "lore.json")), "") {
+		t.Fatalf("managed paths = %v, want managed Gemini agent profile path", managedPaths)
 	}
 
 	repeatManifest, repeatManagedPaths, err := buildAntigravityManifest(layout, req, files)
@@ -205,6 +247,40 @@ func TestAntigravityManifestTracksPromptAndSkillsWithoutPiOverlays(t *testing.T)
 	}
 	if !reflect.DeepEqual(manifest, repeatManifest) || !reflect.DeepEqual(managedPaths, repeatManagedPaths) {
 		t.Fatalf("repeat manifest build drifted\nfirst=%+v\nsecond=%+v\nfirstPaths=%v\nsecondPaths=%v", manifest, repeatManifest, managedPaths, repeatManagedPaths)
+	}
+}
+
+func TestExecuteAntigravityMCPConfigUsesRestrictivePermissionsWhereSupported(t *testing.T) {
+	homeDir := t.TempDir()
+	service := Service{}
+	plan, err := service.PlanAntigravityInstall(InstallRequest{
+		HomeDir:        homeDir,
+		ServerURL:      "https://example.test",
+		SavedToken:     "secret-token",
+		LoreBinaryPath: "/usr/local/bin/lore",
+		LoreConfigDir:  filepath.Join(homeDir, ".lore"),
+		LoreCLIVersion: "v0.1.0",
+		Target:         TargetAntigravity,
+		Now:            time.Date(2026, 5, 25, 12, 30, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("PlanAntigravityInstall() error = %v, want nil", err)
+	}
+	result, err := service.ExecuteAntigravityInstall(plan, InstallCommandOptions{})
+	if err != nil {
+		t.Fatalf("ExecuteAntigravityInstall() error = %v, want nil", err)
+	}
+	for key, label := range map[string]string{"mcp_config": "mcp config", "agent_profile": "agent profile"} {
+		info, err := os.Stat(result.Layout.Paths[key])
+		if err != nil {
+			t.Fatalf("Stat(%s) error = %v, want nil", label, err)
+		}
+		if runtime.GOOS == "windows" {
+			continue
+		}
+		if got := info.Mode().Perm(); got != 0o600 {
+			t.Fatalf("%s mode = %#o, want 0o600", label, got)
+		}
 	}
 }
 

@@ -42,8 +42,11 @@ func ComponentCatalog() map[ComponentID]Component {
 		ComponentLoreServerMCP: {
 			ID:          ComponentLoreServerMCP,
 			Title:       "Lore Server MCP",
-			Description: "Optional auth-safe MCP bridge configuration.",
+			Description: "Optional direct Lore Server MCP configuration.",
 			Optional:    true,
+			DefaultForTarget: map[TargetID]bool{
+				TargetAntigravity: true,
+			},
 		},
 		ComponentPiExtensions: {
 			ID:          ComponentPiExtensions,

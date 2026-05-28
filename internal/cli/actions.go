@@ -60,12 +60,6 @@ type apiRequestOptions struct {
 	BodyJSON   string
 }
 
-type apiMCPCallOptions struct {
-	JSONOutput bool
-	Tool       string
-	ArgsJSON   string
-}
-
 type installCommandOptions struct {
 	DryRun     bool
 	Yes        bool
@@ -355,35 +349,6 @@ func (a *App) runAPIRequest(args apiRequestOptions) int {
 	return 0
 }
 
-func (a *App) runAPIMCPCall(args apiMCPCallOptions) int {
-	arguments := json.RawMessage(strings.TrimSpace(args.ArgsJSON))
-	if _, _, err := httpclient.ValidateBrokerMCPCall(strings.TrimSpace(args.Tool), arguments); err != nil {
-		return a.writeBrokerError(2, 400, "invalid_request", err.Error(), "")
-	}
-
-	client, session, err := a.loadAuthenticatedClient()
-	if err != nil {
-		var configErr *authConfigError
-		if errors.As(err, &configErr) {
-			return a.writeBrokerError(3, 0, configErr.Code, configErr.Message, "")
-		}
-		return a.writeBrokerError(6, 0, "internal_error", "failed to initialize authenticated client", "")
-	}
-
-	result, err := client.MCPCall(context.Background(), session.Token, strings.TrimSpace(args.Tool), arguments)
-	if err != nil {
-		return a.writeBrokerRequestError(err)
-	}
-	if args.JSONOutput {
-		if err := writeJSON(a.Stdout, map[string]any{"ok": true, "status": result.StatusCode, "request_id": result.RequestID, "data": json.RawMessage(result.Data)}); err != nil {
-			return a.writeBrokerError(6, 0, "internal_error", "failed to encode broker response", "")
-		}
-		return 0
-	}
-	fmt.Fprintln(a.Stdout, string(result.Data))
-	return 0
-}
-
 func (a *App) writeBrokerRequestError(err error) int {
 	var unauthorized *httpclient.UnauthorizedError
 	if errors.As(err, &unauthorized) {
@@ -643,6 +608,7 @@ func (a *App) installAntigravityActionWithOptions(ctx context.Context, opts inst
 	plan, err := service.PlanAntigravityInstall(install.InstallRequest{
 		HomeDir:        homeDir,
 		ServerURL:      preflight.ServerURL,
+		SavedToken:     preflight.Token,
 		LoreBinaryPath: binaryPath,
 		LoreConfigDir:  filepath.Dir(configPath),
 		LoreCLIVersion: a.BuildInfo.Normalized().Version,
@@ -671,6 +637,12 @@ func (a *App) installAntigravityActionWithOptions(ctx context.Context, opts inst
 	}
 	report.Checks = append(report.Checks,
 		output.Check{Name: "install", Status: status, Detail: formatSharedInstallSummary(result)},
+	)
+	if antigravityMCPInstalled(result.Manifest.Components) {
+		detail := fmt.Sprintf("managed MCP config path=%s server_url=%s auth_header=plaintext-bearer-token", result.Layout.Paths["mcp_config"], preflight.ServerURL)
+		report.Checks = append(report.Checks, output.Check{Name: "mcp-config", Status: output.StatusWarn, Detail: detail, Action: "Rerun lore install after lore login if the saved session changes or if the Lore server URL changes."})
+	}
+	report.Checks = append(report.Checks,
 		output.Check{Name: "manifest", Status: output.StatusOK, Detail: fmt.Sprintf("verified %s auth_mode=%s managed_files=%d managed_overlays=%d", result.Layout.ManifestPath, result.Manifest.AuthMode, len(result.Manifest.ManagedFiles), len(result.Manifest.ManagedAgentOverlays))},
 	)
 	return report
@@ -935,6 +907,15 @@ func formatSharedInstallPlanSummary(plan install.InstallPlan, dryRun bool) strin
 		parts = append(parts, fmt.Sprintf("managed_action=%s:%s", action.Action, action.RelativePath))
 	}
 	return strings.Join(parts, " ")
+}
+
+func antigravityMCPInstalled(components []install.ComponentID) bool {
+	for _, component := range components {
+		if component == install.ComponentLoreServerMCP {
+			return true
+		}
+	}
+	return false
 }
 
 func formatManagedFileSummaryParts(paths []string, action string) []string {

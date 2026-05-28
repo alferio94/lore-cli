@@ -64,6 +64,53 @@ try {
         throw 'installer output did not include direct-run guidance'
     }
 
+    Remove-Item -Path $installedBinary -Force
+
+    $script:LatestReleaseApiUri = $null
+    $script:LatestReleaseHeaders = $null
+    $script:LatestReleaseUseBasicParsing = $false
+    function Invoke-WebRequest {
+        param(
+            [Parameter(Mandatory = $true)]
+            [string]$Uri,
+            [string]$OutFile,
+            [hashtable]$Headers,
+            [int]$MaximumRedirection,
+            [switch]$UseBasicParsing
+        )
+
+        if ($Uri -eq 'https://api.github.com/repos/alferio94/lore-cli/releases/latest') {
+            $script:LatestReleaseApiUri = $Uri
+            $script:LatestReleaseHeaders = $Headers
+            $script:LatestReleaseUseBasicParsing = $UseBasicParsing.IsPresent
+            return [pscustomobject]@{
+                Content = "{`"tag_name`":`"$FixtureVersion`"}"
+            }
+        }
+
+        Microsoft.PowerShell.Utility\Invoke-WebRequest @PSBoundParameters
+    }
+
+    $latestInstallDir = Join-Path $env:LOCALAPPDATA 'Programs\LoreLatest'
+    $latestOutput = (& $renderedInstaller -Version latest -InstallDir $latestInstallDir 2>&1 | Out-String)
+
+    $latestInstalledBinary = Join-Path $latestInstallDir 'lore.exe'
+    if (-not (Test-Path -Path $latestInstalledBinary)) {
+        throw "latest installer did not produce $latestInstalledBinary"
+    }
+    if ($script:LatestReleaseApiUri -ne 'https://api.github.com/repos/alferio94/lore-cli/releases/latest') {
+        throw 'latest install did not resolve through the GitHub releases API endpoint'
+    }
+    if (($null -eq $script:LatestReleaseHeaders) -or [string]::IsNullOrWhiteSpace($script:LatestReleaseHeaders['User-Agent'])) {
+        throw 'latest install did not send a GitHub User-Agent header'
+    }
+    if (($PSVersionTable.PSEdition -eq 'Desktop') -and (-not $script:LatestReleaseUseBasicParsing)) {
+        throw 'latest install did not enable UseBasicParsing on Windows PowerShell'
+    }
+    if ($latestOutput -notmatch [regex]::Escape("Installing lore $FixtureVersion for windows/$hostArch")) {
+        throw 'latest installer output did not include resolved release version'
+    }
+
     Write-Host 'windows installer smoke tests passed'
 }
 finally {
