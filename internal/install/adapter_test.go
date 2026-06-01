@@ -9,35 +9,47 @@ import (
 	"github.com/alferio94/lore-cli/internal/agentpack"
 )
 
-func TestDefaultComponentSelectionKeepsPiSafeAndMCPOptional(t *testing.T) {
-	if got := DefaultComponentSelection(TargetPi); !equalComponentIDs(got, []ComponentID{ComponentCorePack, ComponentPiExtensions, ComponentExtendedSkills}) {
-		t.Fatalf("DefaultComponentSelection(pi) = %v, want core-pack + pi-extensions + extended-skills", got)
+func TestDefaultComponentSelectionUsesHostedMCPForPiAndMCPForAntigravity(t *testing.T) {
+	// Pi default: hosted Lore MCP via pi-mcp-adapter (lore-server-mcp), not lore-memory extensions.
+	if got := DefaultComponentSelection(TargetPi); !equalComponentIDs(got, []ComponentID{ComponentCorePack, ComponentLoreServerMCP, ComponentExtendedSkills}) {
+		t.Fatalf("DefaultComponentSelection(pi) = %v, want core-pack + lore-server-mcp + extended-skills (hosted MCP default)", got)
 	}
+	// Antigravity: lore-server-mcp + core-pack + extended-skills.
 	if got := DefaultComponentSelection(TargetAntigravity); !equalComponentIDs(got, []ComponentID{ComponentCorePack, ComponentLoreServerMCP, ComponentExtendedSkills}) {
 		t.Fatalf("DefaultComponentSelection(antigravity) = %v, want core-pack + lore-server-mcp + extended-skills", got)
 	}
+	// Other targets: core-pack only.
 	if got := DefaultComponentSelection(TargetClaudeCode); !equalComponentIDs(got, []ComponentID{ComponentCorePack}) {
 		t.Fatalf("DefaultComponentSelection(claude-code) = %v, want core-pack only", got)
 	}
 
+	// NormalizeComponentSelection with lore-server-mcp for Pi should now succeed (was previously rejected).
 	resolved, err := NormalizeComponentSelection(TargetPi, []ComponentID{ComponentLoreServerMCP, ComponentCorePack, ComponentCorePack})
 	if err != nil {
-		t.Fatalf("NormalizeComponentSelection(pi) error = %v, want nil", err)
+		t.Fatalf("NormalizeComponentSelection(pi, lore-server-mcp) error = %v, want nil (hosted MCP now supported for Pi)", err)
 	}
 	if !equalComponentIDs(resolved, []ComponentID{ComponentCorePack, ComponentLoreServerMCP}) {
 		t.Fatalf("NormalizeComponentSelection(pi) = %v, want deduped ordered components", resolved)
 	}
 
-	resolved, err = NormalizeComponentSelection(TargetAntigravity, []ComponentID{ComponentLoreServerMCP, ComponentCorePack, ComponentCorePack})
+	// pi-extensions is now optional for Pi; explicitly selecting it is valid.
+	resolved, err = NormalizeComponentSelection(TargetPi, []ComponentID{ComponentPiExtensions, ComponentCorePack})
 	if err != nil {
-		t.Fatalf("NormalizeComponentSelection(antigravity) error = %v, want nil", err)
+		t.Fatalf("NormalizeComponentSelection(pi, pi-extensions) error = %v, want nil (pi-extensions now optional)", err)
 	}
-	if !equalComponentIDs(resolved, []ComponentID{ComponentCorePack, ComponentLoreServerMCP}) {
-		t.Fatalf("NormalizeComponentSelection(antigravity) = %v, want core-pack + optional MCP", resolved)
+	if !equalComponentIDs(resolved, []ComponentID{ComponentCorePack, ComponentPiExtensions}) {
+		t.Fatalf("NormalizeComponentSelection(pi) = %v, want core-pack + optional pi-extensions", resolved)
 	}
 
-	if _, err := NormalizeComponentSelection(TargetAntigravity, []ComponentID{ComponentPiExtensions}); err == nil || !containsAll(err.Error(), string(TargetAntigravity), string(ComponentPiExtensions), "supported") {
-		t.Fatalf("NormalizeComponentSelection(antigravity, pi-extensions) error = %v, want unsupported-component guardrail", err)
+	// Antigravity supports pi-extensions as optional via the Optional catalog flag,
+	// so NormalizeComponentSelection succeeds. The adapter may render or ignore it,
+	// but the component is accepted as valid input for Antigravity.
+	resolved, err = NormalizeComponentSelection(TargetAntigravity, []ComponentID{ComponentPiExtensions})
+	if err != nil {
+		t.Fatalf("NormalizeComponentSelection(antigravity, pi-extensions) error = %v, want nil (pi-extensions is optional for Antigravity)", err)
+	}
+	if !equalComponentIDs(resolved, []ComponentID{ComponentCorePack, ComponentPiExtensions}) {
+		t.Fatalf("NormalizeComponentSelection(antigravity) = %v, want core-pack + optional pi-extensions", resolved)
 	}
 }
 
@@ -93,8 +105,9 @@ func TestRegistryResolveReturnsTargetAdapterAndCapabilities(t *testing.T) {
 	if !adapter.Supports(ComponentPiExtensions) {
 		t.Fatal("Supports(pi-extensions) = false, want true")
 	}
-	if adapter.Supports(ComponentLoreServerMCP) {
-		t.Fatal("Supports(lore-server-mcp) = true, want false for Pi scaffold")
+	// lore-server-mcp is the default Pi backend (hosted MCP via pi-mcp-adapter).
+	if !adapter.Supports(ComponentLoreServerMCP) {
+		t.Fatal("Supports(lore-server-mcp) = false, want true for hosted MCP default")
 	}
 
 	adapter, err = registry.Resolve(TargetAntigravity)
@@ -136,13 +149,13 @@ func TestDefaultPiAdapterRenderUsesDefinitionAndPiAssets(t *testing.T) {
 	rendered, err := adapter.Render(context.Background(), RenderRequest{
 		Target:     TargetPi,
 		Definition: definition,
-		Components: []ComponentID{ComponentCorePack, ComponentPiExtensions},
+		Components: []ComponentID{ComponentCorePack, ComponentLoreServerMCP},
 	})
 	if err != nil {
 		t.Fatalf("Render error = %v, want nil", err)
 	}
-	if len(rendered) != 3 {
-		t.Fatalf("len(rendered) = %d, want 3 managed files", len(rendered))
+	if len(rendered) != 2 {
+		t.Fatalf("len(rendered) = %d, want 2 managed files (settings.json + mcp.json for hosted MCP default)", len(rendered))
 	}
 
 	files := map[string]RenderedFile{}
@@ -150,9 +163,10 @@ func TestDefaultPiAdapterRenderUsesDefinitionAndPiAssets(t *testing.T) {
 		files[file.RelativePath] = file
 	}
 	settings := string(files["settings.json"].Content)
+	hostedPackageSource := PiHostedMCPPackageSource()
 	if !containsAll(settings,
 		`"packages": [`,
-		piRemoteSubagentsPackage,
+		hostedPackageSource,
 		`"theme": "alferio"`,
 		`"pack_id": "portable-agent-pack"`,
 		`"persona_name": "Lore Custom"`,
@@ -162,7 +176,7 @@ func TestDefaultPiAdapterRenderUsesDefinitionAndPiAssets(t *testing.T) {
 		`"sdd-propose"`,
 		`"sdd_phases": [`,
 		`"sdd-propose"`) {
-		t.Fatalf("settings.json = %q, want rendered agent-pack metadata and remote package", settings)
+		t.Fatalf("settings.json = %q, want rendered agent-pack metadata and hosted MCP package", settings)
 	}
 	if strings.Contains(settings, `"sdd-proposal"`) {
 		t.Fatalf("settings.json = %q, want canonical sdd-propose role/phase names only", settings)
@@ -170,11 +184,19 @@ func TestDefaultPiAdapterRenderUsesDefinitionAndPiAssets(t *testing.T) {
 	if files["settings.json"].MergeMode != MergeModeAdditiveJSON {
 		t.Fatalf("settings merge mode = %q, want additive-json", files["settings.json"].MergeMode)
 	}
-	if _, ok := files["extensions/lore-delegation.ts"]; ok {
-		t.Fatal("rendered files unexpectedly include extensions/lore-delegation.ts")
+	// With the hosted MCP default, pi-extensions (lore-memory) is NOT rendered by default.
+	// Only settings.json and mcp.json are included for the default component set.
+	if _, ok := files["extensions/lore-memory.ts"]; ok {
+		t.Fatal("rendered files unexpectedly include extensions/lore-memory.ts for default hosted MCP install")
 	}
-	if got := files["extensions/lore-footer.ts"].MergeMode; got != MergeModeReplace {
-		t.Fatalf("lore-footer merge mode = %q, want replace", got)
+	if _, ok := files["extensions/lore-footer.ts"]; ok {
+		t.Fatal("rendered files unexpectedly include extensions/lore-footer.ts for default hosted MCP install")
+	}
+	// mcp.json should be rendered for lore-server-mcp component.
+	if mcpFile, ok := files["mcp.json"]; !ok {
+		t.Fatal("rendered files missing mcp.json for hosted MCP default")
+	} else if mcpFile.MergeMode != MergeModeAdditiveJSON {
+		t.Fatalf("mcp.json merge mode = %q, want additive-json", mcpFile.MergeMode)
 	}
 }
 

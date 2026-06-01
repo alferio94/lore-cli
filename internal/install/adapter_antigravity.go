@@ -224,16 +224,7 @@ func renderAntigravityExtendedSkills(req RenderRequest) []RenderedFile {
 	}
 	rendered := make([]RenderedFile, 0, len(extendedSkills))
 	for _, skill := range extendedSkills {
-		content := strings.Join([]string{
-			"---",
-			fmt.Sprintf("name: %s", skill.Name),
-			fmt.Sprintf("description: %s", skill.Description),
-			"---",
-			skill.Body,
-		}, "\n")
-		if !strings.HasSuffix(content, "\n") {
-			content += "\n"
-		}
+		content := renderManagedSkillMarkdown(skill)
 		rendered = append(rendered, RenderedFile{
 			Component:    ComponentExtendedSkills,
 			RelativePath: filepath.ToSlash(filepath.Join("skills", skill.Name, "SKILL.md")),

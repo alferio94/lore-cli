@@ -29,7 +29,7 @@ func TestInstallCommandDryRunAcceptsExplicitPiTargetAndComponents(t *testing.T) 
 		t.Fatalf("manifest stat err = %v, want not exist after dry-run", err)
 	}
 	out := stdout.String()
-	for _, want := range []string{"install_target=pi", "runtime=pi-remote-package", "remote_package=git:github.com/alferio94/lore-pi-subagents", "components=core-pack,pi-extensions", "mode=dry-run", "managed_action="} {
+	for _, want := range []string{"install_target=pi", "runtime=pi-remote-package", "remote_package=git:github.com/nicobailon/pi-mcp-adapter@1091b34da83d58bd2d9fcaff2dc31f449a94bf1f", "components=core-pack,pi-extensions", "mode=dry-run", "managed_action="} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("stdout = %q, want substring %q", out, want)
 		}
@@ -51,7 +51,7 @@ func TestInstallCommandRejectsUnsupportedInstallTarget(t *testing.T) {
 		t.Fatalf("install --target claude-code exitCode = %d, want 1, stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
 	}
 	out := stdout.String()
-	for _, want := range []string{"target \"claude-code\" is Coming soon", "Pi-native Lore extensions path", "Choose an install target:"} {
+	for _, want := range []string{"target \"claude-code\" is Coming soon", "uses hosted Lore MCP", "Choose an install target:"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("stdout = %q, want substring %q", out, want)
 		}
@@ -174,7 +174,7 @@ func TestInstallCommandSupportsAntigravityDryRunAndApply(t *testing.T) {
 	})
 }
 
-func TestInstallCommandRejectsUnsupportedPiMCPComponent(t *testing.T) {
+func TestInstallCommandAcceptsLoreServerMCPWithPiTarget(t *testing.T) {
 	_, piAgentDir := setIsolatedPiHome(t)
 	configDir := t.TempDir()
 	store := &fakeStore{path: filepath.Join(configDir, "config.json"), loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token=pi-mcp"}}
@@ -183,17 +183,18 @@ func TestInstallCommandRejectsUnsupportedPiMCPComponent(t *testing.T) {
 	app.ExecutablePath = func() (string, error) { return "/usr/local/bin/lore", nil }
 	app.BuildInfo = version.Info{Version: "v1.2.3"}
 
-	if exitCode := app.Run([]string{"install", "--dry-run", "--target", "pi", "--component", "lore-server-mcp"}); exitCode != 1 {
-		t.Fatalf("install --dry-run --target pi --component lore-server-mcp exitCode = %d, want 1, stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	// lore-server-mcp is now the default Pi backend and is accepted.
+	if exitCode := app.Run([]string{"install", "--dry-run", "--target", "pi", "--component", "lore-server-mcp"}); exitCode != 0 {
+		t.Fatalf("install --dry-run --target pi --component lore-server-mcp exitCode = %d, want 0, stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
 	}
 	out := stdout.String()
-	for _, want := range []string{"lore-server-mcp", "target \"pi\"", "Pi-native Lore extensions path"} {
+	for _, want := range []string{"install_target=pi", "remote_package=git:github.com/nicobailon/pi-mcp-adapter@1091b34da83d58bd2d9fcaff2dc31f449a94bf1f", "components=core-pack,lore-server-mcp"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("stdout = %q, want substring %q", out, want)
 		}
 	}
 	if _, err := os.Stat(filepath.Join(piAgentDir, "lore-install.json")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("manifest stat err = %v, want no install writes on unsupported component", err)
+		t.Fatalf("manifest stat err = %v, want no manifest after dry-run", err)
 	}
 	assertNoTokenLeak(t, out, stderr.String(), "secret-token=pi-mcp")
 }
@@ -205,7 +206,7 @@ func TestInstallUsageIncludesTargetAndComponentFlags(t *testing.T) {
 	if exitCode := app.Run([]string{"install", "--help"}); exitCode != 1 {
 		t.Fatalf("install --help exitCode = %d, want 1 with usage output", exitCode)
 	}
-	for _, want := range []string{"--target", "--component", "Pi-first managed runtime", "portable Lore agent pack", "core-pack", "pi-extensions", "Antigravity", "prompt + skills MVP", "plaintext Authorization bearer token", "~/.gemini/config/mcp_config.json", "~/.gemini/config/agents/lore.json"} {
+	for _, want := range []string{"--target", "--component", "Pi-first managed runtime", "portable Lore agent pack", "core-pack", "pi-extensions", "Antigravity", "prompt + skills MVP", "plaintext Authorization bearer token", "~/.gemini/config/mcp_config.json", "~/.gemini/config/agents/lore.json", "codex", "config-only"} {
 		if !strings.Contains(stderr.String(), want) {
 			t.Fatalf("stderr = %q, want substring %q", stderr.String(), want)
 		}

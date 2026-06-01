@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/alferio94/lore-cli/internal/agentconfig"
 	"github.com/alferio94/lore-cli/internal/agentpack"
 )
 
@@ -33,6 +34,7 @@ type InstallRequest struct {
 	Target          TargetID
 	Components      []ComponentID
 	Definition      agentpack.Definition
+	AgentConfig     agentconfig.Config
 	RuntimeContract RuntimeContract
 	Now             time.Time
 }

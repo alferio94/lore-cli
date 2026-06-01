@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "lore": {
+      "url": "{{LORE_SERVER_URL}}/v1/mcp",
+      "headers": {
+        "Authorization": "Bearer {{LORE_API_TOKEN}}"
+      }
+    }
+  }
+}

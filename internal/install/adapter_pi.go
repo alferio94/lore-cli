@@ -11,6 +11,12 @@ import (
 	"github.com/alferio94/lore-cli/internal/agentpack"
 )
 
+// piHostedMCPPackageSource returns the canonical git-based pinned package source for the hosted MCP adapter.
+// Uses the repo and immutable commit SHA to ensure deterministic reruns.
+func piHostedMCPPackageSource() string {
+	return "git:" + PiHostedMCPPackageRepo + "@" + PiHostedMCPPackageRef
+}
+
 type piAdapter struct {
 	target       TargetID
 	title        string
@@ -28,11 +34,17 @@ func defaultPiAdapter() HarnessAdapter {
 				Description:      "Render the canonical Lore agent pack definition.",
 				EnabledByDefault: true,
 			},
-			CapabilityPiExtensions: {
-				ID:               CapabilityPiExtensions,
-				Component:        ComponentPiExtensions,
-				Description:      "Keep Pi-native Lore extensions as the default backend.",
+			CapabilityLoreServerMCP: {
+				ID:               CapabilityLoreServerMCP,
+				Component:        ComponentLoreServerMCP,
+				Description:      "Hosted Lore MCP via pi-mcp-adapter — the default Pi backend.",
 				EnabledByDefault: true,
+			},
+			CapabilityPiExtensions: {
+				ID:          CapabilityPiExtensions,
+				Component:   ComponentPiExtensions,
+				Description: "Dormant Pi-native Lore extensions path (lore-memory). Available for rollback/testing only.",
+				Optional:    true,
 			},
 			CapabilityExtendedSkills: {
 				ID:               CapabilityExtendedSkills,
@@ -62,6 +74,16 @@ func (a piAdapter) Supports(component ComponentID) bool {
 	return false
 }
 
+var legacyPiDelegationRelativePath = filepath.Join("extensions", "lore-delegation.ts")
+
+var managedPiExtensionRelativePaths = []string{
+	filepath.Join("extensions", "lore-memory.ts"),
+	filepath.Join("extensions", "lore-footer.ts"),
+}
+
+// managedMCPConfigRelativePath is the relative path for the hosted MCP config under the agent dir.
+const managedMCPConfigRelativePath = "mcp.json"
+
 func (a piAdapter) Render(_ context.Context, req RenderRequest) ([]RenderedFile, error) {
 	if err := req.Validate(); err != nil {
 		return nil, err
@@ -80,22 +102,46 @@ func (a piAdapter) Render(_ context.Context, req RenderRequest) ([]RenderedFile,
 	if err != nil {
 		return nil, err
 	}
+
+	// Default assets: core-pack (settings.json with hosted MCP package) + lore-server-mcp (mcp.json)
+	// Pi-extensions (lore-memory) is optional and only rendered when explicitly selected.
 	assets := []struct {
 		assetPath    string
 		component    ComponentID
 		relativePath string
 		mergeMode    MergeMode
 	}{
-		{assetPath: "assets/pi/lore-memory.ts", component: ComponentPiExtensions, relativePath: managedPiExtensionRelativePaths[0], mergeMode: MergeModeReplace},
-		{assetPath: "assets/pi/lore-footer.ts", component: ComponentPiExtensions, relativePath: managedPiExtensionRelativePaths[1], mergeMode: MergeModeReplace},
 		{assetPath: "assets/pi/settings.json", component: ComponentCorePack, relativePath: "settings.json", mergeMode: MergeModeAdditiveJSON},
+		{assetPath: "assets/pi/mcp.json", component: ComponentLoreServerMCP, relativePath: managedMCPConfigRelativePath, mergeMode: MergeModeAdditiveJSON},
+	}
+
+	// Add optional lore-memory assets only when pi-extensions is explicitly selected.
+	if containsComponent(components, ComponentPiExtensions) {
+		assets = append(assets, struct {
+			assetPath    string
+			component    ComponentID
+			relativePath string
+			mergeMode    MergeMode
+		}{
+			assetPath:    "assets/pi/lore-memory.ts",
+			component:    ComponentPiExtensions,
+			relativePath: managedPiExtensionRelativePaths[0],
+			mergeMode:    MergeModeReplace,
+		}, struct {
+			assetPath    string
+			component    ComponentID
+			relativePath string
+			mergeMode    MergeMode
+		}{
+			assetPath:    "assets/pi/lore-footer.ts",
+			component:    ComponentPiExtensions,
+			relativePath: managedPiExtensionRelativePaths[1],
+			mergeMode:    MergeModeReplace,
+		})
 	}
 
 	rendered := make([]RenderedFile, 0, len(assets))
 	for _, asset := range assets {
-		if !containsComponent(components, asset.component) {
-			continue
-		}
 		content, err := installAssets.ReadFile(asset.assetPath)
 		if err != nil {
 			return nil, fmt.Errorf("read asset %s: %w", asset.assetPath, err)
@@ -153,16 +199,7 @@ func (a piAdapter) RenderExtendedSkills(_ context.Context, req RenderRequest, la
 			// Skill path escapes agent dir — skip (user-owned or Pi-native).
 			continue
 		}
-		content := strings.Join([]string{
-			"---",
-			fmt.Sprintf("name: %s", skill.Name),
-			fmt.Sprintf("description: %s", skill.Description),
-			"---",
-			skill.Body,
-		}, "\n")
-		if !strings.HasSuffix(content, "\n") {
-			content += "\n"
-		}
+		content := renderManagedSkillMarkdown(skill)
 		rendered = append(rendered, RenderedFile{
 			Component:    ComponentExtendedSkills,
 			RelativePath: relativePath,
@@ -271,14 +308,17 @@ func piTemplateReplacements(definition agentpack.Definition, components []Compon
 }
 
 func renderRequestReplacements(req RenderRequest, components []ComponentID) (map[string]string, error) {
-	replacements, err := piTemplateReplacements(req.effectiveDefinition(), components)
+	base, err := piTemplateReplacements(req.effectiveDefinition(), components)
 	if err != nil {
 		return nil, err
 	}
-	replacements["{{LORE_SERVER_URL}}"] = strings.TrimSpace(req.ServerURL)
-	replacements["{{LORE_BINARY_PATH}}"] = strings.TrimSpace(req.LoreBinaryPath)
-	replacements["{{LORE_CONFIG_DIR}}"] = strings.TrimSpace(req.LoreConfigDir)
-	replacements["{{LORE_CLI_VERSION}}"] = strings.TrimSpace(req.LoreCLIVersion)
-	replacements["{{LORE_SETTINGS_PATH}}"] = filepath.ToSlash(strings.ReplaceAll(strings.TrimSpace(req.SettingsPath), "\\", "/"))
-	return replacements, nil
+	base["{{LORE_SERVER_URL}}"] = strings.TrimSpace(req.ServerURL)
+	base["{{LORE_BINARY_PATH}}"] = strings.TrimSpace(req.LoreBinaryPath)
+	base["{{LORE_CONFIG_DIR}}"] = strings.TrimSpace(req.LoreConfigDir)
+	base["{{LORE_MCP_CONFIG_DIR}}"] = strings.TrimSpace(req.LoreConfigDir)
+	base["{{LORE_CLI_VERSION}}"] = strings.TrimSpace(req.LoreCLIVersion)
+	base["{{LORE_SETTINGS_PATH}}"] = filepath.ToSlash(strings.ReplaceAll(strings.TrimSpace(req.SettingsPath), "\\", "/"))
+	base["{{LORE_HOSTED_MCP_PACKAGE}}"] = piHostedMCPPackageSource()
+	base["{{LORE_API_TOKEN}}"] = strings.TrimSpace(req.SavedToken)
+	return base, nil
 }

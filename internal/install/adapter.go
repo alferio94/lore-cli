@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/alferio94/lore-cli/internal/agentconfig"
 	"github.com/alferio94/lore-cli/internal/agentpack"
 )
 
@@ -43,6 +44,7 @@ type RenderRequest struct {
 	LoreCLIVersion  string
 	SettingsPath    string
 	RuntimeContract RuntimeContract
+	AgentConfig     agentconfig.Config
 }
 
 type RenderedFile struct {
@@ -148,7 +150,7 @@ func (r RenderRequest) effectiveExtendedSkills(resolver agentpack.SkillPathResol
 }
 
 func defaultInstallRegistry() (*Registry, error) {
-	return NewRegistry(defaultPiAdapter(), defaultAntigravityAdapter())
+	return NewRegistry(defaultPiAdapter(), defaultAntigravityAdapter(), defaultCodexAdapter())
 }
 
 func containsComponent(components []ComponentID, target ComponentID) bool {

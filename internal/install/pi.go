@@ -29,6 +29,7 @@ type PiLayout struct {
 	SettingsPath     string
 	ManifestPath     string
 	AlferioThemePath string
+	MCPConfigPath    string
 	ManagedFiles     []string
 }
 
@@ -103,14 +104,11 @@ type renderedPiFile struct {
 	mergeMode    MergeMode
 }
 
-const piRemoteSubagentsPackage = "git:github.com/alferio94/lore-pi-subagents"
+// piHostedMCPPackageSource is the canonical hosted MCP package source.
+// Defined in adapter_pi.go to avoid import cycles; references the module-level constant.
 
-var legacyPiDelegationRelativePath = filepath.Join("extensions", "lore-delegation.ts")
-
-var managedPiExtensionRelativePaths = []string{
-	filepath.Join("extensions", "lore-memory.ts"),
-	filepath.Join("extensions", "lore-footer.ts"),
-}
+// piHostedMCPPackageSource returns the canonical HTTPS pinned package source for the hosted MCP adapter.
+// Defined in adapter_pi.go; referenced here to avoid import cycles.
 
 func ResolvePiLayout(homeDir string) PiLayout {
 	agentDir := filepath.Join(homeDir, ".pi", "agent")
@@ -127,10 +125,13 @@ func ResolvePiLayout(homeDir string) PiLayout {
 		SettingsPath:     filepath.Join(agentDir, "settings.json"),
 		ManifestPath:     filepath.Join(agentDir, "lore-install.json"),
 		AlferioThemePath: filepath.Join(themesDir, "alferio.json"),
+		MCPConfigPath:    filepath.Join(agentDir, "mcp.json"),
+		// Managed files: settings.json + mcp.json (hosted MCP default) + extended skills
+		// Order matches adapter render order (settings.json first, then mcp.json, then extended skills).
+		// lore-memory assets are optional and only managed when pi-extensions is explicitly selected.
 		ManagedFiles: []string{
-			filepath.Join(extensionsDir, "lore-memory.ts"),
-			filepath.Join(extensionsDir, "lore-footer.ts"),
 			filepath.Join(agentDir, "settings.json"),
+			filepath.Join(agentDir, "mcp.json"),
 			// Extended skills (CLI-managed under agent dir, in relative-path sort order)
 			filepath.Join(agentDir, "skills", "judgment-day", "SKILL.md"),
 			filepath.Join(agentDir, "skills", "skill-creator", "SKILL.md"),
@@ -184,12 +185,8 @@ func (r PiInstallRequest) normalizedComponents() ([]ComponentID, error) {
 	if err != nil {
 		return nil, err
 	}
-	if r.targetOrDefault() == TargetPi && containsComponent(components, ComponentLoreServerMCP) {
-		return nil, fmt.Errorf("component %q is not supported by target %q; keep the Pi-native Lore extensions path and leave Pi MCP disabled by default", ComponentLoreServerMCP, r.targetOrDefault())
-	}
-	if r.targetOrDefault() == TargetPi && !containsComponent(components, ComponentPiExtensions) {
-		return nil, fmt.Errorf("target %q requires component %q to preserve the Pi-native Lore extensions path", r.targetOrDefault(), ComponentPiExtensions)
-	}
+	// lore-server-mcp is the default; pi-extensions is optional (rollback/testing only).
+	// Do not require pi-extensions for a valid default Pi install.
 	return components, nil
 }
 
@@ -203,6 +200,7 @@ func (r PiInstallRequest) renderRequest() (RenderRequest, error) {
 		Definition:      r.definitionOrDefault(),
 		Components:      components,
 		ServerURL:       strings.TrimSpace(r.ServerURL),
+		SavedToken:      strings.TrimSpace(r.SavedToken),
 		LoreBinaryPath:  strings.TrimSpace(r.LoreBinaryPath),
 		LoreConfigDir:   strings.TrimSpace(r.LoreConfigDir),
 		LoreCLIVersion:  strings.TrimSpace(r.LoreCLIVersion),
@@ -396,14 +394,31 @@ func validateRenderedPiFiles(files []renderedPiFile) error {
 	for _, file := range files {
 		byPath[file.relativePath] = file
 	}
+	// lore-memory assets are optional (pi-extensions component). The default hosted MCP
+	// install does not include them. Only validate them if they are present.
 	for _, relativePath := range managedPiExtensionRelativePaths {
 		file, ok := byPath[relativePath]
 		if !ok {
-			return fmt.Errorf("validate rendered Pi assets: %s missing", relativePath)
+			// lore-memory is optional; skip validation when not rendered.
+			continue
 		}
 		if !strings.Contains(string(file.content), "export default function") {
 			return fmt.Errorf("validate rendered Pi assets: %s missing documented export default function factory", relativePath)
 		}
+	}
+	// Always validate that mcp.json is present when lore-server-mcp is in the default set.
+	if _, ok := byPath[managedMCPConfigRelativePath]; !ok {
+		return fmt.Errorf("validate rendered Pi assets: %s missing", managedMCPConfigRelativePath)
+	}
+	// Validate that settings.json includes the hosted MCP package (after placeholder replacement).
+	// The placeholder {{LORE_HOSTED_MCP_PACKAGE}} should be replaced with the actual package source.
+	if settings, ok := byPath["settings.json"]; ok {
+		// Check that the placeholder has been replaced (not present in rendered content).
+		if strings.Contains(string(settings.content), "{{LORE_HOSTED_MCP_PACKAGE}}") {
+			return fmt.Errorf("validate rendered Pi assets: settings.json missing hosted MCP package placeholder replacement")
+		}
+	} else {
+		return fmt.Errorf("validate rendered Pi assets: settings.json missing")
 	}
 	return nil
 }
@@ -717,79 +732,144 @@ func contentHash(content []byte) string {
 
 func validateManagedContents(contents map[string][]byte, req PiInstallRequest) []string {
 	var findings []string
-	requiredSnippets := map[string][]string{
-		managedPiExtensionRelativePaths[0]: {
-			"\"api\", \"request\"",
-			"export default function",
-			"Text",
-			"renderCall(",
-			"renderResult(",
-			"text: formatContent(payload.data)",
-			"pi.registerTool",
-			"name: \"lore_search\"",
-			"name: \"lore_save\"",
-			"name: \"lore_get_observation\"",
-			"name: \"lore_context\"",
-			"name: \"lore_project_list\"",
-			"name: \"lore_project_create\"",
-			"name: \"lore_project_get\"",
-			"name: \"lore_skill_save\"",
-			"name: \"lore_skill_list\"",
-			"name: \"lore_skill_get\"",
-			"/v1/memories",
-			"/v1/projects",
-			"/v1/skills",
-		},
-		managedPiExtensionRelativePaths[1]: {"export default function", "ctx.ui.setFooter", "getContextUsage", "getExtensionStatuses"},
-		"settings.json":                    {piRemoteSubagentsPackage},
-	}
-	forbiddenSnippets := map[string][]string{
-		managedPiExtensionRelativePaths[0]: {
-			"name: \"lore_update\"",
-			"name: \"lore_delete\"",
-			"name: \"lore_timeline\"",
-			"name: \"lore_stats\"",
-			"name: \"lore_session_summary\"",
-			"unsupportedLegacyTool",
-			"/v1/search",
-			"/v1/observations",
-			"/v1/context",
-			"/v1/stats",
-			"/v1/timeline",
-			"/v1/sessions",
-		},
-	}
-	pathsToValidate := append(append([]string(nil), managedPiExtensionRelativePaths...), "settings.json")
-	for _, relativePath := range pathsToValidate {
-		content, ok := contents[relativePath]
-		if !ok {
-			findings = append(findings, fmt.Sprintf("%s missing after install", relativePath))
-			continue
-		}
-		text := string(content)
+	// lore-memory assets are optional; they are only present when pi-extensions is explicitly selected.
+	// The default hosted MCP install does not include them. Only validate lore-memory when present.
+
+	// Validate lore-memory.ts (index 0) only when present.
+	memoryPath := managedPiExtensionRelativePaths[0]
+	memoryContent, memoryPresent := contents[memoryPath]
+	if memoryPresent {
+		text := string(memoryContent)
 		if strings.TrimSpace(req.SavedToken) != "" && strings.Contains(text, req.SavedToken) {
-			findings = append(findings, fmt.Sprintf("%s contains saved auth material", relativePath))
+			findings = append(findings, fmt.Sprintf("%s contains saved auth material", memoryPath))
 		}
-		if strings.Contains(relativePath, ".ts") {
-			if relativePath == managedPiExtensionRelativePaths[0] && strings.TrimSpace(req.ServerURL) != "" && !strings.Contains(text, req.ServerURL) {
-				findings = append(findings, fmt.Sprintf("%s missing server URL %q", relativePath, req.ServerURL))
-			}
-			for _, snippet := range requiredSnippets[relativePath] {
-				if !strings.Contains(text, snippet) {
-					findings = append(findings, fmt.Sprintf("%s missing required contract snippet %q", relativePath, snippet))
-				}
-			}
-			for _, snippet := range forbiddenSnippets[relativePath] {
-				if strings.Contains(text, snippet) {
-					findings = append(findings, fmt.Sprintf("%s contains forbidden legacy memory contract snippet %q", relativePath, snippet))
-				}
-			}
-			continue
+		if !strings.Contains(text, "\"api\", \"request\"") {
+			findings = append(findings, fmt.Sprintf("%s missing required contract snippet %q", memoryPath, "\"api\", \"request\""))
 		}
-		for _, snippet := range requiredSnippets[relativePath] {
-			if !strings.Contains(text, snippet) {
-				findings = append(findings, fmt.Sprintf("%s missing required contract snippet %q", relativePath, snippet))
-			}
+		if !strings.Contains(text, "export default function") {
+			findings = append(findings, fmt.Sprintf("%s missing required contract snippet %q", memoryPath, "export default function"))
+		}
+		if !strings.Contains(text, "Text") {
+			findings = append(findings, fmt.Sprintf("%s missing required contract snippet %q", memoryPath, "Text"))
+		}
+		if !strings.Contains(text, "renderCall(") {
+			findings = append(findings, fmt.Sprintf("%s missing required contract snippet %q", memoryPath, "renderCall("))
+		}
+		if !strings.Contains(text, "renderResult(") {
+			findings = append(findings, fmt.Sprintf("%s missing required contract snippet %q", memoryPath, "renderResult("))
+		}
+		if !strings.Contains(text, "text: formatContent(payload.data)") {
+			findings = append(findings, fmt.Sprintf("%s missing required contract snippet %q", memoryPath, "text: formatContent(payload.data)"))
+		}
+		if !strings.Contains(text, "pi.registerTool") {
+			findings = append(findings, fmt.Sprintf("%s missing required contract snippet %q", memoryPath, "pi.registerTool"))
+		}
+		if !strings.Contains(text, "name: \"lore_search\"") {
+			findings = append(findings, fmt.Sprintf("%s missing required contract snippet %q", memoryPath, "name: \"lore_search\""))
+		}
+		if !strings.Contains(text, "name: \"lore_save\"") {
+			findings = append(findings, fmt.Sprintf("%s missing required contract snippet %q", memoryPath, "name: \"lore_save\""))
+		}
+		if !strings.Contains(text, "name: \"lore_get_observation\"") {
+			findings = append(findings, fmt.Sprintf("%s missing required contract snippet %q", memoryPath, "name: \"lore_get_observation\""))
+		}
+		if !strings.Contains(text, "name: \"lore_context\"") {
+			findings = append(findings, fmt.Sprintf("%s missing required contract snippet %q", memoryPath, "name: \"lore_context\""))
+		}
+		if !strings.Contains(text, "name: \"lore_project_list\"") {
+			findings = append(findings, fmt.Sprintf("%s missing required contract snippet %q", memoryPath, "name: \"lore_project_list\""))
+		}
+		if !strings.Contains(text, "name: \"lore_project_create\"") {
+			findings = append(findings, fmt.Sprintf("%s missing required contract snippet %q", memoryPath, "name: \"lore_project_create\""))
+		}
+		if !strings.Contains(text, "name: \"lore_project_get\"") {
+			findings = append(findings, fmt.Sprintf("%s missing required contract snippet %q", memoryPath, "name: \"lore_project_get\""))
+		}
+		if !strings.Contains(text, "name: \"lore_skill_save\"") {
+			findings = append(findings, fmt.Sprintf("%s missing required contract snippet %q", memoryPath, "name: \"lore_skill_save\""))
+		}
+		if !strings.Contains(text, "name: \"lore_skill_list\"") {
+			findings = append(findings, fmt.Sprintf("%s missing required contract snippet %q", memoryPath, "name: \"lore_skill_list\""))
+		}
+		if !strings.Contains(text, "name: \"lore_skill_get\"") {
+			findings = append(findings, fmt.Sprintf("%s missing required contract snippet %q", memoryPath, "name: \"lore_skill_get\""))
+		}
+		if !strings.Contains(text, "/v1/memories") {
+			findings = append(findings, fmt.Sprintf("%s missing required contract snippet %q", memoryPath, "/v1/memories"))
+		}
+		if !strings.Contains(text, "/v1/projects") {
+			findings = append(findings, fmt.Sprintf("%s missing required contract snippet %q", memoryPath, "/v1/projects"))
+		}
+		if !strings.Contains(text, "/v1/skills") {
+			findings = append(findings, fmt.Sprintf("%s missing required contract snippet %q", memoryPath, "/v1/skills"))
+		}
+		// Check forbidden legacy snippets for lore-memory.ts
+		if strings.Contains(text, "name: \"lore_update\"") {
+			findings = append(findings, fmt.Sprintf("%s contains forbidden legacy memory contract snippet %q", memoryPath, "name: \"lore_update\""))
+		}
+		if strings.Contains(text, "name: \"lore_delete\"") {
+			findings = append(findings, fmt.Sprintf("%s contains forbidden legacy memory contract snippet %q", memoryPath, "name: \"lore_delete\""))
+		}
+		if strings.Contains(text, "name: \"lore_timeline\"") {
+			findings = append(findings, fmt.Sprintf("%s contains forbidden legacy memory contract snippet %q", memoryPath, "name: \"lore_timeline\""))
+		}
+		if strings.Contains(text, "name: \"lore_stats\"") {
+			findings = append(findings, fmt.Sprintf("%s contains forbidden legacy memory contract snippet %q", memoryPath, "name: \"lore_stats\""))
+		}
+		if strings.Contains(text, "name: \"lore_session_summary\"") {
+			findings = append(findings, fmt.Sprintf("%s contains forbidden legacy memory contract snippet %q", memoryPath, "name: \"lore_session_summary\""))
+		}
+		if strings.Contains(text, "unsupportedLegacyTool") {
+			findings = append(findings, fmt.Sprintf("%s contains forbidden legacy memory contract snippet %q", memoryPath, "unsupportedLegacyTool"))
+		}
+		if strings.Contains(text, "/v1/search") {
+			findings = append(findings, fmt.Sprintf("%s contains forbidden legacy memory contract snippet %q", memoryPath, "/v1/search"))
+		}
+		if strings.Contains(text, "/v1/observations") {
+			findings = append(findings, fmt.Sprintf("%s contains forbidden legacy memory contract snippet %q", memoryPath, "/v1/observations"))
+		}
+		if strings.Contains(text, "/v1/context") {
+			findings = append(findings, fmt.Sprintf("%s contains forbidden legacy memory contract snippet %q", memoryPath, "/v1/context"))
+		}
+		if strings.Contains(text, "/v1/stats") {
+			findings = append(findings, fmt.Sprintf("%s contains forbidden legacy memory contract snippet %q", memoryPath, "/v1/stats"))
+		}
+		if strings.Contains(text, "/v1/timeline") {
+			findings = append(findings, fmt.Sprintf("%s contains forbidden legacy memory contract snippet %q", memoryPath, "/v1/timeline"))
+		}
+		if strings.Contains(text, "/v1/sessions") {
+			findings = append(findings, fmt.Sprintf("%s contains forbidden legacy memory contract snippet %q", memoryPath, "/v1/sessions"))
+		}
+	}
+
+	// Validate lore-footer.ts (index 1) only when present.
+	footerPath := managedPiExtensionRelativePaths[1]
+	footerContent, footerPresent := contents[footerPath]
+	if footerPresent {
+		footerText := string(footerContent)
+		if !strings.Contains(footerText, "export default function") {
+			findings = append(findings, fmt.Sprintf("%s missing required contract snippet %q", footerPath, "export default function"))
+		}
+		if !strings.Contains(footerText, "ctx.ui.setFooter") {
+			findings = append(findings, fmt.Sprintf("%s missing required contract snippet %q", footerPath, "ctx.ui.setFooter"))
+		}
+		if !strings.Contains(footerText, "getContextUsage") {
+			findings = append(findings, fmt.Sprintf("%s missing required contract snippet %q", footerPath, "getContextUsage"))
+		}
+		if !strings.Contains(footerText, "getExtensionStatuses") {
+			findings = append(findings, fmt.Sprintf("%s missing required contract snippet %q", footerPath, "getExtensionStatuses"))
+		}
+	}
+	// Validate mcp.json if present (hosted MCP default component).
+	mcpContent, ok := contents[managedMCPConfigRelativePath]
+	if ok {
+		mcpText := string(mcpContent)
+		// Hosted MCP uses HTTP endpoint config (url + Authorization) — not stdio command.
+		hasLoreName := strings.Contains(mcpText, "lore")
+		hasURL := strings.Contains(mcpText, "url")
+		hasAuth := strings.Contains(mcpText, "Authorization") || strings.Contains(mcpText, "headers")
+		if !hasLoreName || !hasURL || !hasAuth {
+			findings = append(findings, fmt.Sprintf("%s missing hosted MCP configuration", managedMCPConfigRelativePath))
 		}
 	}
 	return findings

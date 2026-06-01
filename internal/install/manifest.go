@@ -140,9 +140,39 @@ func (m Manifest) ValidateForLayout(layout HarnessLayout, managedFiles []string,
 	if m.Target != layout.Target {
 		return fmt.Errorf("target = %q, want %q", m.Target, layout.Target)
 	}
-	if m.AuthMode != "cli-request" {
-		return fmt.Errorf("auth_mode = %q, want %q", m.AuthMode, "cli-request")
+	switch m.AuthMode {
+	case "cli-request", "config-only":
+		// valid
+	default:
+		return fmt.Errorf("auth_mode = %q, want %q or %q", m.AuthMode, "cli-request", "config-only")
 	}
+	if m.AuthMode == "config-only" {
+		// config-only targets validate ManagedFiles, BackupRoot, and InstalledAt.
+		// These checks are the fail-closed guard for the Codex/config-only layout.
+		if len(m.ManagedFiles) == 0 {
+			return fmt.Errorf("managed_files are required")
+		}
+		for i, mf := range m.ManagedFiles {
+			if strings.TrimSpace(mf.Path) == "" {
+				return fmt.Errorf("managed_files[%d].path is required", i)
+			}
+			if mf.Component == "" {
+				return fmt.Errorf("managed_files[%d].component is required", i)
+			}
+			if mf.MergeMode == "" {
+				return fmt.Errorf("managed_files[%d].merge_mode is required", i)
+			}
+		}
+		backupPrefix := filepath.Clean(backupRootDir) + string(os.PathSeparator)
+		if !strings.HasPrefix(filepath.Clean(m.BackupRoot), backupPrefix) {
+			return fmt.Errorf("backup_root = %q, want path under %q", m.BackupRoot, backupRootDir)
+		}
+		if _, err := time.Parse(time.RFC3339, m.InstalledAt); err != nil {
+			return fmt.Errorf("installed_at: %w", err)
+		}
+		return nil
+	}
+	// cli-request targets require full auth info
 	if strings.TrimSpace(m.ServerURL) == "" {
 		return fmt.Errorf("server_url is required")
 	}

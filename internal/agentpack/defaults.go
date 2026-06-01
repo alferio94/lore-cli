@@ -60,24 +60,42 @@ func defaultRoles() []Role {
 func defaultProfiles() []Profile {
 	return []Profile{
 		{
-			ID:           "balanced",
+			ID:           ProfileBalanced,
 			Description:  "Default portable profile for daily Lore work.",
-			DefaultModel: "gpt-5",
+			DefaultModel: ModelGPT5,
 			RoleModels: map[string]string{
-				RoleOrchestrator: "gpt-5",
-				RoleLoreWorker:   "gpt-5-mini",
-				"sdd-apply":      "gpt-5",
-				"sdd-verify":     "gpt-5",
+				RoleOrchestrator: ModelGPT5,
+				RoleLoreWorker:   ModelGPT5Mini,
+				"sdd-apply":      ModelGPT5,
+				"sdd-verify":     ModelGPT5,
 			},
 		},
 		{
-			ID:           "speed",
+			ID:           ProfileSpeed,
 			Description:  "Lower-cost profile for broad inspection and routine slices.",
-			DefaultModel: "gpt-5-mini",
+			DefaultModel: ModelGPT5Mini,
 			RoleModels: map[string]string{
-				RoleOrchestrator: "gpt-5-mini",
-				RoleLoreWorker:   "gpt-5-mini",
-				"sdd-verify":     "gpt-5",
+				RoleOrchestrator: ModelGPT5Mini,
+				RoleLoreWorker:   ModelGPT5Mini,
+				"sdd-verify":     ModelGPT5,
+			},
+		},
+		{
+			ID:           ProfileCodex,
+			Description:  "Codex harness profile using gpt-5.4 as the default model.",
+			DefaultModel: ModelGPT54,
+			RoleModels: map[string]string{
+				RoleOrchestrator: ModelGPT54,
+				RoleLoreWorker:   ModelGPT54,
+				"sdd-init":       ModelGPT54,
+				"sdd-explore":    ModelGPT54,
+				"sdd-propose":    ModelGPT54,
+				"sdd-spec":       ModelGPT54,
+				"sdd-design":     ModelGPT54,
+				"sdd-tasks":      ModelGPT54,
+				"sdd-apply":      ModelGPT54,
+				"sdd-verify":     ModelGPT54,
+				"sdd-archive":    ModelGPT54,
 			},
 		},
 	}

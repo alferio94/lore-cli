@@ -38,6 +38,52 @@ const (
 	RoleLoreWorker   = "lore-worker"
 )
 
+// Profile IDs
+const (
+	ProfileBalanced = "balanced"
+	ProfileSpeed    = "speed"
+	ProfileCodex    = "codex"
+)
+
+// Default models
+const (
+	ModelGPT5        = "gpt-5"
+	ModelGPT5Mini    = "gpt-5-mini"
+	ModelGPT54       = "gpt-5.4"
+	ModelGPT4        = "gpt-4"
+	ModelGPT35       = "gpt-3.5"
+)
+
+// DefaultSDDModel is the model assigned to every canonical SDD agent in the
+// initial agent-config.json contract. It is exported so agentconfig package can
+// use it as the canonical default without a hard dependency cycle.
+const DefaultSDDModel = ModelGPT54
+
+// CodexModel represents supported Codex agent models.
+type CodexModel string
+
+const (
+	CodexModelGPT54 CodexModel = "gpt-5.4"
+	CodexModelGPT4   CodexModel = "gpt-4"
+	CodexModelGPT35  CodexModel = "gpt-3.5"
+)
+
+var validCodexModels = map[CodexModel]bool{
+	CodexModelGPT54: true,
+	CodexModelGPT4:  true,
+	CodexModelGPT35: true,
+}
+
+// IsValid returns true if the model is a recognized Codex model.
+func (m CodexModel) IsValid() bool {
+	return validCodexModels[m]
+}
+
+// String returns the model identifier string.
+func (m CodexModel) String() string {
+	return string(m)
+}
+
 type Definition struct {
 	SchemaVersion int
 	PackID        string
@@ -108,6 +154,33 @@ func PhaseAgentName(id PhaseID) string {
 		return "sdd-propose"
 	}
 	return "sdd-" + string(id)
+}
+
+// SDDPhaseAgentNames returns the canonical SDD phase agent names in execution order.
+// These are the names declared in agent-config.json.
+func SDDPhaseAgentNames() []string {
+	return []string{
+		"sdd-init",
+		"sdd-explore",
+		"sdd-propose",
+		"sdd-spec",
+		"sdd-design",
+		"sdd-tasks",
+		"sdd-apply",
+		"sdd-verify",
+		"sdd-archive",
+	}
+}
+
+// IsKnownSDDAgent returns true if the name is a known canonical SDD phase agent.
+// It is exported so agentconfig can validate unknown agents without duplicating the list.
+func IsKnownSDDAgent(name string) bool {
+	for _, known := range SDDPhaseAgentNames() {
+		if name == known {
+			return true
+		}
+	}
+	return false
 }
 
 func (d Definition) Validate() error {

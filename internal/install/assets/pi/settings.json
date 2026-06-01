@@ -1,6 +1,6 @@
 {
   "packages": [
-    "git:github.com/alferio94/lore-pi-subagents"
+    "{{LORE_HOSTED_MCP_PACKAGE}}"
   ],
   "theme": "alferio",
   "lore": {

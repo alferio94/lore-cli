@@ -176,8 +176,14 @@ func TestInstallTargetSelectionAllowsAntigravityExecutionWithoutPiBackupPrompt(t
 	m = updated.(model)
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	m = updated.(model)
+	// First down from Pi goes to Codex (now supported), not Antigravity.
+	if got := m.selectedInstallTarget().ID; got != install.TargetCodex {
+		t.Fatalf("selected target = %q, want codex (first down from Pi)", got)
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = updated.(model)
 	if got := m.selectedInstallTarget().ID; got != install.TargetAntigravity {
-		t.Fatalf("selected target = %q, want antigravity", got)
+		t.Fatalf("selected target = %q, want antigravity (second down from Pi)", got)
 	}
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(model)
@@ -209,6 +215,13 @@ func TestInstallTargetSelectionMovesBetweenSupportedTargetsOnly(t *testing.T) {
 	}
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	m = updated.(model)
+	// First down from Pi goes to Codex (now supported).
+	if got := m.selectedInstallTarget().ID; got != install.TargetCodex {
+		t.Fatalf("selected target after down = %q, want codex (first down from Pi)", got)
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = updated.(model)
+	// Second down goes to Antigravity.
 	if got := m.selectedInstallTarget().ID; got != install.TargetAntigravity {
 		t.Fatalf("selected target after down = %q, want antigravity", got)
 	}

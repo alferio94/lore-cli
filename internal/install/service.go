@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/alferio94/lore-cli/internal/agentconfig"
 	"github.com/alferio94/lore-cli/internal/auth"
 	"github.com/alferio94/lore-cli/internal/config"
 	"github.com/alferio94/lore-cli/internal/httpclient"
@@ -43,19 +44,29 @@ type AuthLoader interface {
 }
 
 type Service struct {
-	Store         ConfigStore
-	Auth          AuthLoader
-	ClientFactory ClientFactory
+	Store             ConfigStore
+	Auth              AuthLoader
+	ClientFactory     ClientFactory
+	AgentConfigStore  AgentConfigStore
+}
+
+// AgentConfigStore abstracts the agent-config store so it can be injected in tests.
+type AgentConfigStore interface {
+	Path() (string, error)
+	Load() (agentconfig.Config, error)
+	EnsureDefault() (agentconfig.Config, bool, error)
 }
 
 type PreflightResult struct {
-	Targets       []Target
-	Checks        []output.Check
-	CanContinue   bool
-	LoginRequired bool
-	ServerURL     string
-	Token         string
-	ConfigPath    string
+	Targets          []Target
+	Checks           []output.Check
+	CanContinue      bool
+	LoginRequired    bool
+	ServerURL        string
+	Token            string
+	ConfigPath       string
+	AgentConfigPath  string
+	AgentConfigValid bool
 }
 
 func DefaultInstallTarget() TargetID {
@@ -79,16 +90,14 @@ func DefaultTargets() []Target {
 }
 
 func supportedTarget(adapter HarnessAdapter) Target {
-	capabilities := adapter.Capabilities()
 	target := Target{ID: adapter.ID(), Title: adapter.Title(), Available: true, Recommended: adapter.ID() == DefaultInstallTarget()}
 	switch adapter.ID() {
 	case TargetPi:
-		target.Description = "Recommended today; keeps the Pi-native Lore extensions path as the default backend and leaves Pi MCP disabled by default."
+		target.Description = "Recommended today; uses hosted Lore MCP via pi-mcp-adapter as the default backend, with optional explicit pi-extensions (lore-memory) via --component pi-extensions."
 	case TargetAntigravity:
 		target.Description = "prompt + skills MVP target with managed Gemini lore agent profile and optional direct MCP config; Pi remains the default recommended path while Antigravity keeps harness-owned prompt, skills, and manifest semantics."
-		if capabilities[CapabilityPrompt].Description == "" || capabilities[CapabilitySkills].Description == "" {
-			target.Description = "prompt + skills MVP target."
-		}
+	case TargetCodex:
+		target.Description = "Config-only Lore projection into ~/.codex: managed agents.md, skills/*.md, and manifest. No MCP, runner, or bootstrap behavior. Use this to keep Codex aligned with your Lore configuration without enabling Lore MCP runtime."
 	default:
 		target.Description = "Supported target."
 	}
@@ -101,8 +110,6 @@ func roadmapTarget(id TargetID) Target {
 		return Target{ID: id, Title: "Claude Code", Description: "Listed for roadmap visibility.", Availability: "Coming soon"}
 	case TargetOpenCode:
 		return Target{ID: id, Title: "OpenCode", Description: "Listed for roadmap visibility.", Availability: "Coming soon"}
-	case TargetCodex:
-		return Target{ID: id, Title: "Codex", Description: "Listed for roadmap visibility.", Availability: "Coming soon"}
 	case TargetAntigravity:
 		return Target{ID: id, Title: "Antigravity", Description: "Listed for roadmap visibility.", Availability: "Coming soon"}
 	default:
@@ -145,7 +152,7 @@ func FormatTargetSelection(targets []Target) string {
 		}
 		fmt.Fprintf(&b, "- %s: %s (%s)\n", label, target.Description, target.Availability)
 	}
-	b.WriteString("\nPi remains the default recommended path. Pi MCP stays disabled by default while Antigravity can write ~/.gemini/config/agents/lore.json and optionally write direct MCP config.")
+	b.WriteString("\nPi remains the default recommended path and uses hosted Lore MCP by default. Antigravity can write ~/.gemini/config/agents/lore.json and optionally write direct MCP config.")
 	return b.String()
 }
 
@@ -221,7 +228,69 @@ func (s Service) Preflight(ctx context.Context) PreflightResult {
 		result.Checks = append(result.Checks, output.Check{Name: "auth", Status: output.StatusOK, Detail: output.FormatSubject(subject)})
 	}
 	result.CanContinue = true
+	s.checkAgentConfig(&result)
 	return result
+}
+
+// checkAgentConfig performs a read-only check of the agent-config contract.
+// It reports path, validity, and declared models without implying Codex execution support.
+// If an AgentConfigStore is not configured, it is skipped silently.
+func (s *Service) checkAgentConfig(result *PreflightResult) {
+	if s.AgentConfigStore == nil {
+		return
+	}
+
+	path, pathErr := s.AgentConfigStore.Path()
+	if pathErr != nil {
+		result.Checks = append(result.Checks, output.Check{
+			Name:   "agent-config",
+			Status: output.StatusWarn,
+			Detail: fmt.Sprintf("agent-config path could not be resolved: %v", pathErr),
+			Action: "Fix the local config directory permissions or override LORE_CONFIG_DIR.",
+		})
+		return
+	}
+	result.AgentConfigPath = path
+
+	cfg, err := s.AgentConfigStore.Load()
+	if err != nil {
+		if errors.Is(err, agentconfig.ErrNotFound) {
+			result.Checks = append(result.Checks, output.Check{
+				Name:   "agent-config",
+				Status: output.StatusWarn,
+				Detail: fmt.Sprintf("agent-config not found at %s", path),
+				Action: "Agent config is optional; run lore install to generate a default one.",
+			})
+			return
+		}
+		result.Checks = append(result.Checks, output.Check{
+			Name:   "agent-config",
+			Status: output.StatusFail,
+			Detail: fmt.Sprintf("agent-config invalid: %v", err),
+			Action: "Inspect or remove the agent-config.json file and rerun lore install.",
+		})
+		return
+	}
+
+	if err := cfg.Validate(); err != nil {
+		result.AgentConfigValid = false
+		result.Checks = append(result.Checks, output.Check{
+			Name:   "agent-config",
+			Status: output.StatusFail,
+			Detail: fmt.Sprintf("agent-config validation failed: %v", err),
+			Action: "Inspect or remove the agent-config.json file and rerun lore install.",
+		})
+		return
+	}
+
+	result.AgentConfigValid = true
+	// Report path + validity + model count without exposing model names.
+	modelCount := len(cfg.SDDAgents)
+	result.Checks = append(result.Checks, output.Check{
+		Name:   "agent-config",
+		Status: output.StatusOK,
+		Detail: fmt.Sprintf("agent-config path=%s schema_version=%d sdd_agents=%d", path, cfg.SchemaVersion, modelCount),
+	})
 }
 
 func explainAuthLoadError(err error) string {

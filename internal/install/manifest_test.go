@@ -62,11 +62,14 @@ func TestUpgradeLegacyManifestAssignsPortableComponentMetadata(t *testing.T) {
 		ServerURL:     "https://example.test",
 		LoreBinary:    "/usr/local/bin/lore",
 		LoreConfigDir: "/tmp/lore",
+		// Legacy manifests include lore-memory.ts, lore-delegation.ts, lore-footer.ts, settings.json.
+		// The layout.ManagedFiles now points to settings.json + mcp.json + skills, but legacy
+		// manifests pre-date the hosted MCP change and include the extension files.
 		ManagedFiles: []string{
-			layout.ManagedFiles[0],
+			filepath.Join(layout.ExtensionsDir, "lore-memory.ts"),
 			filepath.Join(layout.ExtensionsDir, "lore-delegation.ts"),
-			layout.ManagedFiles[1],
-			layout.ManagedFiles[2],
+			filepath.Join(layout.ExtensionsDir, "lore-footer.ts"),
+			filepath.Join(layout.AgentDir, "settings.json"),
 		},
 		BackupRoot:  filepath.Join(layout.AgentDir, "backups", "20260525T020304Z"),
 		InstalledAt: time.Date(2026, 5, 25, 2, 3, 4, 0, time.UTC).Format(time.RFC3339),
@@ -157,14 +160,13 @@ func validManifestForTest(layout PiLayout) Manifest {
 		ServerURL:     "https://example.test",
 		LoreBinary:    "/usr/local/bin/lore",
 		LoreConfigDir: filepath.Join(layout.HomeDir, ".lore"),
-		Components:    []ComponentID{ComponentCorePack, ComponentPiExtensions, ComponentExtendedSkills},
+		Components:    []ComponentID{ComponentCorePack, ComponentLoreServerMCP, ComponentExtendedSkills},
 		ManagedFiles: []ManagedFileRecord{
-			{Path: layout.ManagedFiles[0], Component: ComponentPiExtensions, MergeMode: MergeModeReplace, ContentHash: contentHash([]byte("memory"))},
-			{Path: layout.ManagedFiles[1], Component: ComponentPiExtensions, MergeMode: MergeModeReplace, ContentHash: contentHash([]byte("footer"))},
-			{Path: layout.ManagedFiles[2], Component: ComponentCorePack, MergeMode: MergeModeAdditiveJSON, ContentHash: contentHash([]byte("settings"))},
-			{Path: layout.ManagedFiles[3], Component: ComponentExtendedSkills, MergeMode: MergeModeReplace, ContentHash: contentHash([]byte("judgment-day"))},
-			{Path: layout.ManagedFiles[4], Component: ComponentExtendedSkills, MergeMode: MergeModeReplace, ContentHash: contentHash([]byte("skill-creator"))},
-			{Path: layout.ManagedFiles[5], Component: ComponentExtendedSkills, MergeMode: MergeModeReplace, ContentHash: contentHash([]byte("skill-registry"))},
+			{Path: layout.ManagedFiles[0], Component: ComponentCorePack, MergeMode: MergeModeAdditiveJSON, ContentHash: contentHash([]byte("settings"))},
+			{Path: layout.ManagedFiles[1], Component: ComponentLoreServerMCP, MergeMode: MergeModeAdditiveJSON, ContentHash: contentHash([]byte("mcp"))},
+			{Path: layout.ManagedFiles[2], Component: ComponentExtendedSkills, MergeMode: MergeModeReplace, ContentHash: contentHash([]byte("judgment-day"))},
+			{Path: layout.ManagedFiles[3], Component: ComponentExtendedSkills, MergeMode: MergeModeReplace, ContentHash: contentHash([]byte("skill-creator"))},
+			{Path: layout.ManagedFiles[4], Component: ComponentExtendedSkills, MergeMode: MergeModeReplace, ContentHash: contentHash([]byte("skill-registry"))},
 		},
 		BackupRoot:  backupRoot,
 		InstalledAt: installedAt,
@@ -209,6 +211,162 @@ func TestLoadManifestCurrentSchemaTracksManagedAgentOverlays(t *testing.T) {
 	}
 	if len(loaded.ManagedAgentOverlays) != 1 || loaded.ManagedAgentOverlays[0].AgentName != "lore-worker" {
 		t.Fatalf("ManagedAgentOverlays = %+v, want lore-worker overlay metadata", loaded.ManagedAgentOverlays)
+	}
+}
+
+// TestManifestValidateForLayoutConfigOnlyFailsClosed verifies that config-only
+// manifest validation fails closed on invalid/missing managed content.
+func TestManifestValidateForLayoutConfigOnlyFailsClosed(t *testing.T) {
+	homeDir := t.TempDir()
+	layout := ResolveCodexLayout(homeDir)
+	// BackupRoot must be a subdirectory of backupRootDir (the parent backups directory).
+	// Use a subdirectory so strings.HasPrefix check passes.
+	backupRoot := filepath.Join(layout.RootDir, "backups", "20260529T120000Z")
+
+	tests := []struct {
+		name    string
+		manifest Manifest
+		wantErr  string
+	}{
+		{
+			name: "missing managed_files",
+			manifest: Manifest{
+				SchemaVersion: PortableManifestSchemaVersion,
+				Target:        TargetCodex,
+				AuthMode:      "config-only",
+				BackupRoot:    backupRoot,
+				InstalledAt:   "2026-05-29T12:00:00Z",
+			},
+			wantErr: "managed_files are required",
+		},
+		{
+			name: "managed_file missing path",
+			manifest: Manifest{
+				SchemaVersion: PortableManifestSchemaVersion,
+				Target:        TargetCodex,
+				AuthMode:      "config-only",
+				ManagedFiles: []ManagedFileRecord{
+					{Path: "", Component: ComponentCorePack, MergeMode: MergeModeReplace, ContentHash: "abc"},
+				},
+				BackupRoot:  backupRoot,
+				InstalledAt: "2026-05-29T12:00:00Z",
+			},
+			wantErr: "managed_files[0].path is required",
+		},
+		{
+			name: "managed_file missing component",
+			manifest: Manifest{
+				SchemaVersion: PortableManifestSchemaVersion,
+				Target:        TargetCodex,
+				AuthMode:      "config-only",
+				ManagedFiles: []ManagedFileRecord{
+					{Path: filepath.Join(layout.RootDir, "agents.md"), Component: "", MergeMode: MergeModeReplace, ContentHash: "abc"},
+				},
+				BackupRoot:  backupRoot,
+				InstalledAt: "2026-05-29T12:00:00Z",
+			},
+			wantErr: "managed_files[0].component is required",
+		},
+		{
+			name: "managed_file missing merge_mode",
+			manifest: Manifest{
+				SchemaVersion: PortableManifestSchemaVersion,
+				Target:        TargetCodex,
+				AuthMode:      "config-only",
+				ManagedFiles: []ManagedFileRecord{
+					{Path: filepath.Join(layout.RootDir, "agents.md"), Component: ComponentCorePack, MergeMode: "", ContentHash: "abc"},
+				},
+				BackupRoot:  backupRoot,
+				InstalledAt: "2026-05-29T12:00:00Z",
+			},
+			wantErr: "managed_files[0].merge_mode is required",
+		},
+		{
+			name: "backup_root outside layout backups",
+			manifest: Manifest{
+				SchemaVersion: PortableManifestSchemaVersion,
+				Target:        TargetCodex,
+				AuthMode:      "config-only",
+				ManagedFiles: []ManagedFileRecord{
+					{Path: filepath.Join(layout.RootDir, "agents.md"), Component: ComponentCorePack, MergeMode: MergeModeReplace, ContentHash: "abc"},
+				},
+				BackupRoot:  filepath.Join(homeDir, "elsewhere"),
+				InstalledAt: "2026-05-29T12:00:00Z",
+			},
+			wantErr: "backup_root",
+		},
+		{
+			name: "invalid installed_at",
+			manifest: Manifest{
+				SchemaVersion: PortableManifestSchemaVersion,
+				Target:        TargetCodex,
+				AuthMode:      "config-only",
+				ManagedFiles: []ManagedFileRecord{
+					{Path: filepath.Join(layout.RootDir, "agents.md"), Component: ComponentCorePack, MergeMode: MergeModeReplace, ContentHash: "abc"},
+				},
+				BackupRoot:  backupRoot,
+				InstalledAt: "not-a-timestamp",
+			},
+			wantErr: "installed_at",
+		},
+		{
+			name: "wrong target",
+			manifest: Manifest{
+				SchemaVersion: PortableManifestSchemaVersion,
+				Target:        TargetAntigravity,
+				AuthMode:      "config-only",
+				ManagedFiles: []ManagedFileRecord{
+					{Path: filepath.Join(layout.RootDir, "agents.md"), Component: ComponentCorePack, MergeMode: MergeModeReplace, ContentHash: "abc"},
+				},
+				BackupRoot:  backupRoot,
+				InstalledAt: "2026-05-29T12:00:00Z",
+			},
+			wantErr: "target",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// backupRootDir is the parent backups directory; BackupRoot must be a subdirectory.
+			backupParentDir := filepath.Join(layout.RootDir, "backups")
+			err := tt.manifest.ValidateForLayout(layout, []string{filepath.Join(layout.RootDir, "agents.md")}, backupParentDir)
+			if err == nil {
+				t.Fatalf("ValidateForLayout() error = nil, want error containing %q", tt.wantErr)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("ValidateForLayout() error = %q, want error containing %q", err.Error(), tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestManifestValidateForLayoutConfigOnlyPassesValid verifies that a well-formed
+// config-only manifest passes validation.
+func TestManifestValidateForLayoutConfigOnlyPassesValid(t *testing.T) {
+	homeDir := t.TempDir()
+	layout := ResolveCodexLayout(homeDir)
+	// BackupRoot must be a subdirectory of the parent backups directory.
+	backupParentDir := filepath.Join(layout.RootDir, "backups")
+	backupRoot := filepath.Join(backupParentDir, "20260529T120000Z")
+
+	manifest := Manifest{
+		SchemaVersion: PortableManifestSchemaVersion,
+		Target:        TargetCodex,
+		AuthMode:      "config-only",
+		ManagedFiles: []ManagedFileRecord{
+			{Path: filepath.Join(layout.RootDir, "agents.md"), Component: ComponentCorePack, MergeMode: MergeModeReplace, ContentHash: "abc123"},
+			{Path: filepath.Join(layout.RootDir, "skills", "sdd-apply", "SKILL.md"), Component: ComponentCorePack, MergeMode: MergeModeReplace, ContentHash: "def456"},
+		},
+		BackupRoot:  backupRoot,
+		InstalledAt: "2026-05-29T12:00:00Z",
+	}
+
+	err := manifest.ValidateForLayout(layout, []string{
+		filepath.Join(layout.RootDir, "agents.md"),
+		filepath.Join(layout.RootDir, "skills", "sdd-apply", "SKILL.md"),
+	}, backupParentDir)
+	if err != nil {
+		t.Fatalf("ValidateForLayout() error = %v, want nil", err)
 	}
 }
 

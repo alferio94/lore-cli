@@ -7,10 +7,17 @@ import (
 type ComponentID string
 
 const (
-	ComponentCorePack       ComponentID = "core-pack"
-	ComponentLoreServerMCP  ComponentID = "lore-server-mcp"
-	ComponentPiExtensions   ComponentID = "pi-extensions"
-	ComponentExtendedSkills  ComponentID = "extended-skills"
+	ComponentCorePack        ComponentID = "core-pack"
+	ComponentLoreServerMCP   ComponentID = "lore-server-mcp"
+	ComponentPiExtensions    ComponentID = "pi-extensions"
+	ComponentExtendedSkills   ComponentID = "extended-skills"
+	ComponentCodexAgentConfig ComponentID = "codex-agent-config"
+
+	// PiHostedMCPPackageRepo is the canonical git source for the hosted Lore MCP adapter.
+	PiHostedMCPPackageRepo = "github.com/nicobailon/pi-mcp-adapter"
+	// PiHostedMCPPackageRef is the immutable commit SHA for the hosted MCP adapter.
+	// Update this value when a new stable release is approved.
+	PiHostedMCPPackageRef = "1091b34da83d58bd2d9fcaff2dc31f449a94bf1f"
 )
 
 const (
@@ -24,6 +31,10 @@ type Component struct {
 	Description      string
 	Optional         bool
 	DefaultForTarget map[TargetID]bool
+}
+
+func PiHostedMCPPackageSource() string {
+	return "git:" + PiHostedMCPPackageRepo + "@" + PiHostedMCPPackageRef
 }
 
 func ComponentCatalog() map[ComponentID]Component {
@@ -43,19 +54,19 @@ func ComponentCatalog() map[ComponentID]Component {
 		ComponentLoreServerMCP: {
 			ID:          ComponentLoreServerMCP,
 			Title:       "Lore Server MCP",
-			Description: "Optional direct Lore Server MCP configuration.",
-			Optional:    true,
+			Description: "Hosted Lore MCP via pi-mcp-adapter — the default Pi backend.",
+			Optional:    false,
 			DefaultForTarget: map[TargetID]bool{
+				TargetPi:          true,
 				TargetAntigravity: true,
 			},
 		},
 		ComponentPiExtensions: {
 			ID:          ComponentPiExtensions,
 			Title:       "Pi Extensions",
-			Description: "Pi-native Lore extensions path kept as the default Pi backend.",
-			DefaultForTarget: map[TargetID]bool{
-				TargetPi: true,
-			},
+			Description: "Dormant Pi-native Lore extensions path (lore-memory). Available for rollback/testing only; not installed by default.",
+			Optional:    true,
+			DefaultForTarget: map[TargetID]bool{},
 		},
 		ComponentExtendedSkills: {
 			ID:          ComponentExtendedSkills,
@@ -64,6 +75,16 @@ func ComponentCatalog() map[ComponentID]Component {
 			DefaultForTarget: map[TargetID]bool{
 				TargetPi:          true,
 				TargetAntigravity: true,
+				TargetCodex:       true,
+			},
+		},
+		ComponentCodexAgentConfig: {
+			ID:          ComponentCodexAgentConfig,
+			Title:       "Codex Agent Config",
+			Description: "Project Lore-managed agent-config.json into Codex (auto-managed, not selectable).",
+			Optional:    true,
+			DefaultForTarget: map[TargetID]bool{
+				TargetCodex: true,
 			},
 		},
 	}

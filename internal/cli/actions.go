@@ -14,6 +14,7 @@ import (
 
 	"github.com/charmbracelet/x/term"
 
+	"github.com/alferio94/lore-cli/internal/agentconfig"
 	"github.com/alferio94/lore-cli/internal/auth"
 	"github.com/alferio94/lore-cli/internal/config"
 	"github.com/alferio94/lore-cli/internal/httpclient"
@@ -545,6 +546,9 @@ func (a *App) updateActionWithOptions(ctx context.Context, opts updateCommandOpt
 
 func (a *App) installActionWithOptions(ctx context.Context, opts installCommandOptions) ActionReport {
 	selectedTarget, err := install.ResolveInstallTarget(opts.Target)
+	if err == nil && selectedTarget.ID == install.TargetCodex {
+		return a.installCodexActionWithOptions(ctx, opts)
+	}
 	if err == nil && selectedTarget.ID == install.TargetAntigravity {
 		return a.installAntigravityActionWithOptions(ctx, opts)
 	}
@@ -577,7 +581,7 @@ func (a *App) installActionWithOptions(ctx context.Context, opts installCommandO
 }
 
 func (a *App) installAntigravityActionWithOptions(ctx context.Context, opts installCommandOptions) ActionReport {
-	service := install.Service{Store: a.Store, Auth: a.authManager(), ClientFactory: install.ClientFactory(a.ClientFactory)}
+	service := install.Service{Store: a.Store, Auth: a.authManager(), ClientFactory: install.ClientFactory(a.ClientFactory), AgentConfigStore: a.AgentConfigStore}
 	report := ActionReport{Title: "Lore install"}
 	preflight := service.Preflight(ctx)
 	report.Checks = append(report.Checks, preflight.Checks...)
@@ -648,8 +652,78 @@ func (a *App) installAntigravityActionWithOptions(ctx context.Context, opts inst
 	return report
 }
 
+func (a *App) installCodexActionWithOptions(ctx context.Context, opts installCommandOptions) ActionReport {
+	service := install.Service{Store: a.Store, Auth: a.authManager(), ClientFactory: install.ClientFactory(a.ClientFactory), AgentConfigStore: a.AgentConfigStore}
+	report := ActionReport{Title: "Lore install"}
+	preflight := service.Preflight(ctx)
+	report.Checks = append(report.Checks, preflight.Checks...)
+	if !preflight.CanContinue {
+		report.ExitCode = 1
+		return report
+	}
+
+	homeDir, err := a.resolveUserHomeDir()
+	if err != nil {
+		report.Checks = append(report.Checks, output.Check{Name: "install", Status: output.StatusFail, Detail: err.Error(), Action: "Retry after HOME can be resolved for the current user."})
+		report.ExitCode = 1
+		return report
+	}
+	binaryPath, err := a.resolveExecutablePath()
+	if err != nil {
+		report.Checks = append(report.Checks, output.Check{Name: "install", Status: output.StatusFail, Detail: err.Error(), Action: "Retry from a normal Lore CLI binary context so the managed manifest can record the CLI path."})
+		report.ExitCode = 1
+		return report
+	}
+	configPath, err := a.Store.Path()
+	if err != nil {
+		report.Checks = append(report.Checks, output.Check{Name: "install", Status: output.StatusFail, Detail: err.Error(), Action: "Fix the local config directory permissions or override LORE_CONFIG_DIR."})
+		report.ExitCode = 1
+		return report
+	}
+
+	plan, err := service.PlanCodexInstall(install.InstallRequest{
+		HomeDir:        homeDir,
+		ServerURL:      preflight.ServerURL,
+		LoreBinaryPath: binaryPath,
+		LoreConfigDir:  filepath.Dir(configPath),
+		LoreCLIVersion: a.BuildInfo.Normalized().Version,
+		Target:         install.TargetCodex,
+		Components:     append([]install.ComponentID(nil), opts.Components...),
+	})
+	if err != nil {
+		report.Checks = append(report.Checks, output.Check{Name: "install", Status: output.StatusFail, Detail: err.Error(), Action: "Inspect the requested Codex components and rerun lore install after fixing the reported issue."})
+		report.ExitCode = 1
+		return report
+	}
+	if opts.DryRun {
+		report.Checks = append(report.Checks, output.Check{Name: "install", Status: output.StatusOK, Detail: formatSharedInstallPlanSummary(plan, true)})
+		return report
+	}
+	result, err := service.ExecuteCodexInstall(plan, install.InstallCommandOptions{})
+	if err != nil {
+		report.Checks = append(report.Checks, output.Check{Name: "install", Status: output.StatusFail, Detail: err.Error(), Action: "Inspect the Codex runtime directory and rerun lore install after fixing the reported issue."})
+		report.ExitCode = 1
+		return report
+	}
+	status := output.StatusOK
+	if len(result.Summary.Failed) > 0 {
+		status = output.StatusFail
+		report.ExitCode = 1
+	}
+	report.Checks = append(report.Checks,
+		output.Check{Name: "install", Status: status, Detail: formatSharedInstallSummary(result)},
+	)
+	report.Checks = append(report.Checks,
+		output.Check{Name: "manifest", Status: output.StatusOK, Detail: fmt.Sprintf("verified %s auth_mode=%s managed_files=%d", result.Layout.ManifestPath, result.Manifest.AuthMode, len(result.Manifest.ManagedFiles))},
+	)
+	report.Checks = append(report.Checks,
+		output.Check{Name: "codex-config", Status: output.StatusWarn, Detail: "Codex install is config-only projection. No MCP, runner, or bootstrap behavior is installed. See ~/.codex/agents.md and ~/.codex/skills/."},
+	)
+	return report
+}
+
 func (a *App) planPiInstallAction(ctx context.Context, opts installCommandOptions) (install.PiInstallPlan, ActionReport, bool) {
-	service := install.Service{Store: a.Store, Auth: a.authManager(), ClientFactory: install.ClientFactory(a.ClientFactory)}
+	service := install.Service{Store: a.Store, Auth: a.authManager(), ClientFactory: install.ClientFactory(a.ClientFactory), AgentConfigStore: a.AgentConfigStore}
 	report := ActionReport{Title: "Lore install"}
 	preflight := service.Preflight(ctx)
 	report.Checks = append(report.Checks, preflight.Checks...)
@@ -708,7 +782,7 @@ func (a *App) planPiInstallAction(ctx context.Context, opts installCommandOption
 }
 
 func (a *App) executePiInstallAction(ctx context.Context, plan install.PiInstallPlan) ActionReport {
-	service := install.Service{Store: a.Store, Auth: a.authManager(), ClientFactory: install.ClientFactory(a.ClientFactory)}
+	service := install.Service{Store: a.Store, Auth: a.authManager(), ClientFactory: install.ClientFactory(a.ClientFactory), AgentConfigStore: a.AgentConfigStore}
 	report := ActionReport{Title: "Lore install"}
 	result, err := service.ExecutePiInstall(plan, install.InstallCommandOptions{})
 	if err != nil {
@@ -813,6 +887,9 @@ func (a *App) collectChecks(ctx context.Context, includePi bool) ([]output.Check
 		}
 	}
 
+	// Read-only agent-config check in status and doctor; does not imply Codex execution support.
+	checks = append(checks, a.agentConfigCheck())
+
 	return checks, exitCode
 }
 
@@ -844,15 +921,10 @@ func formatSharedInstallSummary(result install.InstallResult) string {
 	if result.Target == install.TargetPi {
 		return fmt.Sprintf("install_target=%s runtime=pi-remote-package", result.Target)
 	}
-	summary := fmt.Sprintf("install_target=%s runtime=antigravity-prompt-skills components=%s managed_local_files=%d created=%d updated=%d deleted=%d unchanged=%d backed_up=%d conflicted=%d failed=%d", result.Target, formatComponentIDs(result.Manifest.Components), len(result.Manifest.ManagedFiles), len(result.Summary.Created), len(result.Summary.Updated), len(result.Summary.Deleted), len(result.Summary.Unchanged), len(result.Summary.BackedUp), len(result.Summary.Conflicted), len(result.Summary.Failed))
-	parts := append([]string{summary}, formatManagedFileSummaryParts(result.Summary.Created, "create")...)
-	parts = append(parts, formatManagedFileSummaryParts(result.Summary.Updated, "update")...)
-	parts = append(parts, formatManagedFileSummaryParts(result.Summary.Deleted, "delete")...)
-	parts = append(parts, formatManagedFileSummaryParts(result.Summary.Unchanged, "unchanged")...)
-	if len(result.Summary.Failed) > 0 {
-		parts = append(parts, fmt.Sprintf("findings=%s", strings.Join(result.Summary.Failed, "; ")))
+	if result.Target == install.TargetCodex {
+		return formatCodexInstallSummary(result)
 	}
-	return strings.Join(parts, " ")
+	return formatAntigravityInstallSummary(result)
 }
 
 func formatInstallPlanSummary(plan install.PiInstallPlan, dryRun bool) string {
@@ -891,22 +963,10 @@ func formatSharedInstallPlanSummary(plan install.InstallPlan, dryRun bool) strin
 	if plan.Layout.Target == install.TargetPi {
 		return fmt.Sprintf("install_target=%s runtime=pi-remote-package", plan.Layout.Target)
 	}
-	parts := []string{
-		fmt.Sprintf("install_target=%s", plan.Layout.Target),
-		"runtime=antigravity-prompt-skills",
-		fmt.Sprintf("components=%s", formatComponentIDs(plan.Components)),
-		fmt.Sprintf("target=%s", plan.Layout.RootDir),
-		fmt.Sprintf("prompt=%s", plan.Layout.Paths["shared_prompt"]),
-		fmt.Sprintf("manifest=%s", plan.Layout.ManifestPath),
-		"mcp_optional=true",
+	if plan.Layout.Target == install.TargetCodex {
+		return formatCodexInstallPlanSummary(plan, dryRun)
 	}
-	if dryRun {
-		parts = append(parts, "mode=dry-run")
-	}
-	for _, action := range plan.Files {
-		parts = append(parts, fmt.Sprintf("managed_action=%s:%s", action.Action, action.RelativePath))
-	}
-	return strings.Join(parts, " ")
+	return formatAntigravityInstallPlanSummary(plan, dryRun)
 }
 
 func antigravityMCPInstalled(components []install.ComponentID) bool {
@@ -918,6 +978,86 @@ func antigravityMCPInstalled(components []install.ComponentID) bool {
 	return false
 }
 
+// formatCodexInstallSummary produces the Codex-specific dry-run/apply summary.
+// It is config-only: no Antigravity runtime, prompt, MCP, or runner semantics.
+func formatCodexInstallSummary(result install.InstallResult) string {
+	summary := fmt.Sprintf("install_target=%s scope=config-only auth_mode=%s components=%s managed_files=%d created=%d updated=%d unchanged=%d backed_up=%d failed=%d",
+		result.Target, result.Manifest.AuthMode, formatComponentIDs(result.Manifest.Components),
+		len(result.Manifest.ManagedFiles), len(result.Summary.Created), len(result.Summary.Updated),
+		len(result.Summary.Unchanged), len(result.Summary.BackedUp), len(result.Summary.Failed))
+	parts := []string{summary}
+	parts = append(parts, formatManagedFileSummaryParts(result.Summary.Created, "create")...)
+	parts = append(parts, formatManagedFileSummaryParts(result.Summary.Updated, "update")...)
+	parts = append(parts, formatManagedFileSummaryParts(result.Summary.Unchanged, "unchanged")...)
+	parts = append(parts, "mcp=none", "runner=none", "bootstrap=none")
+	if len(result.Summary.Failed) > 0 {
+		parts = append(parts, fmt.Sprintf("findings=%s", strings.Join(result.Summary.Failed, "; ")))
+	}
+	return strings.Join(parts, " ")
+}
+
+// formatAntigravityInstallSummary produces the Antigravity-specific install summary.
+func formatAntigravityInstallSummary(result install.InstallResult) string {
+	summary := fmt.Sprintf("install_target=%s runtime=antigravity-prompt-skills components=%s managed_local_files=%d created=%d updated=%d unchanged=%d backed_up=%d failed=%d",
+		result.Target, formatComponentIDs(result.Manifest.Components), len(result.Manifest.ManagedFiles),
+		len(result.Summary.Created), len(result.Summary.Updated), len(result.Summary.Unchanged),
+		len(result.Summary.BackedUp), len(result.Summary.Failed))
+	parts := []string{summary}
+	parts = append(parts, formatManagedFileSummaryParts(result.Summary.Created, "create")...)
+	parts = append(parts, formatManagedFileSummaryParts(result.Summary.Updated, "update")...)
+	parts = append(parts, formatManagedFileSummaryParts(result.Summary.Unchanged, "unchanged")...)
+	if len(result.Summary.Failed) > 0 {
+		parts = append(parts, fmt.Sprintf("findings=%s", strings.Join(result.Summary.Failed, "; ")))
+	}
+	return strings.Join(parts, " ")
+}
+
+// formatCodexInstallPlanSummary produces the Codex-specific plan summary.
+// It is config-only: no Antigravity runtime, prompt, MCP, or runner semantics.
+func formatCodexInstallPlanSummary(plan install.InstallPlan, dryRun bool) string {
+	parts := []string{
+		fmt.Sprintf("install_target=%s", plan.Layout.Target),
+		"scope=config-only",
+		"auth_mode=config-only",
+		fmt.Sprintf("components=%s", formatComponentIDs(plan.Components)),
+		fmt.Sprintf("target=%s", plan.Layout.RootDir),
+		fmt.Sprintf("manifest=%s", plan.Layout.ManifestPath),
+		"mcp=none",
+		"runner=none",
+		"bootstrap=none",
+	}
+	if dryRun {
+		parts = append(parts, "mode=dry-run")
+	}
+	for _, action := range plan.Files {
+		parts = append(parts, fmt.Sprintf("managed_action=%s:%s", action.Action, action.RelativePath))
+	}
+	return strings.Join(parts, " ")
+}
+
+// formatAntigravityInstallPlanSummary produces the Antigravity-specific plan summary.
+func formatAntigravityInstallPlanSummary(plan install.InstallPlan, dryRun bool) string {
+	parts := []string{
+		fmt.Sprintf("install_target=%s", plan.Layout.Target),
+		"runtime=antigravity-prompt-skills",
+		fmt.Sprintf("components=%s", formatComponentIDs(plan.Components)),
+		fmt.Sprintf("target=%s", plan.Layout.RootDir),
+		fmt.Sprintf("manifest=%s", plan.Layout.ManifestPath),
+	}
+	// Antigravity may have a shared prompt path.
+	if promptPath, ok := plan.Layout.Paths["shared_prompt"]; ok && promptPath != "" {
+		parts = append(parts, fmt.Sprintf("prompt=%s", promptPath))
+	}
+	parts = append(parts, "mcp_optional=true")
+	if dryRun {
+		parts = append(parts, "mode=dry-run")
+	}
+	for _, action := range plan.Files {
+		parts = append(parts, fmt.Sprintf("managed_action=%s:%s", action.Action, action.RelativePath))
+	}
+	return strings.Join(parts, " ")
+}
+
 func formatManagedFileSummaryParts(paths []string, action string) []string {
 	parts := make([]string, 0, len(paths))
 	for _, path := range paths {
@@ -927,7 +1067,7 @@ func formatManagedFileSummaryParts(paths []string, action string) []string {
 }
 
 func installPiRemotePackage() string {
-	return "git:github.com/alferio94/lore-pi-subagents"
+	return install.PiHostedMCPPackageSource()
 }
 
 func formatProjectAgentsPolicy() string {
@@ -1024,6 +1164,30 @@ func (a *App) resolveExecutablePath() (string, error) {
 		return a.ExecutablePath()
 	}
 	return os.Executable()
+}
+
+// agentConfigCheck performs a read-only diagnostic check of agent-config.json.
+// It is included in status and doctor output. The check does not imply Codex execution support.
+func (a *App) agentConfigCheck() output.Check {
+	store := agentconfig.NewStore("")
+	path, pathErr := store.Path()
+	if pathErr != nil {
+		return output.Check{Name: "agent-config", Status: output.StatusWarn, Detail: fmt.Sprintf("agent-config path could not be resolved: %v", pathErr)}
+	}
+
+	cfg, err := store.Load()
+	if err != nil {
+		if errors.Is(err, agentconfig.ErrNotFound) {
+			return output.Check{Name: "agent-config", Status: output.StatusWarn, Detail: fmt.Sprintf("agent-config not found at %s (optional)", path)}
+		}
+		return output.Check{Name: "agent-config", Status: output.StatusFail, Detail: fmt.Sprintf("agent-config error: %v", err)}
+	}
+
+	if err := cfg.Validate(); err != nil {
+		return output.Check{Name: "agent-config", Status: output.StatusFail, Detail: fmt.Sprintf("agent-config invalid: %v", err)}
+	}
+
+	return output.Check{Name: "agent-config", Status: output.StatusOK, Detail: fmt.Sprintf("agent-config path=%s schema=%d agents=%d", path, cfg.SchemaVersion, len(cfg.SDDAgents))}
 }
 
 func (a *App) piCheck() output.Check {

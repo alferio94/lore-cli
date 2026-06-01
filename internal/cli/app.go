@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/alferio94/lore-cli/internal/agentconfig"
 	"github.com/alferio94/lore-cli/internal/auth"
 	"github.com/alferio94/lore-cli/internal/config"
 	"github.com/alferio94/lore-cli/internal/httpclient"
@@ -36,6 +37,14 @@ type AuthManager interface {
 	Logout() error
 }
 
+// AgentConfigStore abstracts the agent-config store so it can be injected in tests.
+// When nil, the agent-config check is skipped in status/doctor and install summaries.
+type AgentConfigStore interface {
+	Path() (string, error)
+	Load() (agentconfig.Config, error)
+	EnsureDefault() (agentconfig.Config, bool, error)
+}
+
 // App wires command IO and dependencies.
 type App struct {
 	Stdout               io.Writer
@@ -51,12 +60,15 @@ type App struct {
 	TUIRunner            func(context.Context, InteractiveActions) error
 	UpdateServiceFactory func() (cliupdate.Service, error)
 	BuildInfo            version.Info
+	// AgentConfigStore is the optional agent-config store for read-only diagnostics
+	// in status/doctor and install summaries. When nil, agent-config checks are skipped.
+	AgentConfigStore AgentConfigStore
 }
 
 // New returns a CLI app with production defaults.
 func New(configDir string, stdout, stderr io.Writer, buildInfo version.Info) *App {
 	store := config.NewStore(configDir)
-	return &App{
+	app := &App{
 		Stdout: stdout,
 		Stderr: stderr,
 		Store:  store,
@@ -70,6 +82,8 @@ func New(configDir string, stdout, stderr io.Writer, buildInfo version.Info) *Ap
 		ExecutablePath: os.Executable,
 		BuildInfo:      buildInfo.Normalized(),
 	}
+	app.AgentConfigStore = agentconfig.NewStore(configDir)
+	return app
 }
 
 // Run executes the Lore CLI command.
@@ -301,14 +315,16 @@ func (a *App) runInstall(_ InteractiveActions, args []string) int {
 	yes := fs.Bool("yes", false, "Accept the safe default full-backup behavior without prompting")
 	target := fs.String("target", string(install.DefaultInstallTarget()), "Install target (Pi stays the default recommended target; Antigravity is the prompt + skills MVP target)")
 	var components componentFlag
-	fs.Var(&components, "component", "Optional component override; repeat or use a comma-separated list (Pi supports core-pack and pi-extensions; Antigravity supports core-pack, lore-server-mcp, and extended-skills)")
+	fs.Var(&components, "component", "Optional component override; repeat or use a comma-separated list (Pi supports core-pack, lore-server-mcp, and extended-skills; Antigravity supports core-pack, lore-server-mcp, and extended-skills)")
 	fs.Usage = func() {
-		fmt.Fprintln(a.Stderr, "Usage: lore install [--dry-run] [--yes] [--target pi|antigravity] [--component <id>]")
+		fmt.Fprintln(a.Stderr, "Usage: lore install [--dry-run] [--yes] [--target pi|codex|antigravity] [--component <id>]")
 		fmt.Fprintln(a.Stderr, "Install the Pi-first managed runtime using saved Lore login state.")
-		fmt.Fprintln(a.Stderr, "Pi is the default and installs the portable Lore agent pack, pi-extensions, and an extended-skills bundle (skill-creator, skill-registry, judgment-day). Antigravity is the prompt + skills MVP target with the portable pack, lore-server-mcp, and extended-skills bundle.")
+		fmt.Fprintln(a.Stderr, "Pi is the default and installs the portable Lore agent pack, hosted Lore MCP via pi-mcp-adapter, and an extended-skills bundle (skill-creator, skill-registry, judgment-day).")
+		fmt.Fprintln(a.Stderr, "Antigravity is the prompt + skills MVP target with the portable pack, lore-server-mcp, and extended-skills bundle.")
+		fmt.Fprintln(a.Stderr, "Codex is the config-only Lore projection into ~/.codex: managed agents.md, skills/*.md, and manifest. No MCP, runner, or bootstrap behavior.")
 		fmt.Fprintln(a.Stderr, "Use --component to override defaults. Without flags, a complete default install is selected. Rerun lore install to refresh the extended-skills bundle; lore update does not touch skill files or managed runtime content.")
-		fmt.Fprintln(a.Stderr, "Healthy saved OS keychain-backed login metadata is reused automatically; Claude Code, OpenCode, and Codex are Coming soon.")
-		fmt.Fprintln(a.Stderr, "Pi keeps the native Lore extensions path; Antigravity keeps prompt + skills first, does not emulate Pi overlays, makes no auto-install guarantee, and keeps MCP optional.")
+		fmt.Fprintln(a.Stderr, "Healthy saved OS keychain-backed login metadata is reused automatically; Claude Code and OpenCode are Coming soon.")
+		fmt.Fprintln(a.Stderr, "Pi uses hosted Lore MCP via pi-mcp-adapter by default; legacy pi-extensions (lore-memory.ts) are available as an optional explicit override via --component pi-extensions but are not installed by default.")
 		fmt.Fprintln(a.Stderr, "Antigravity install writes ~/.gemini/config/agents/lore.json for the managed Lore profile and, when MCP is selected, writes ~/.gemini/config/mcp_config.json with the Lore /v1/mcp server URL plus a plaintext Authorization bearer token.")
 		fs.PrintDefaults()
 	}

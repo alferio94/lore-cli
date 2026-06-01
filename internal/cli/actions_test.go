@@ -302,14 +302,14 @@ func TestStatusAndDoctorActionsPreserveDiagnosticSemantics(t *testing.T) {
 	if status.Title != "Lore status" || status.ExitCode != 1 {
 		t.Fatalf("statusAction() = %+v, want failing Lore status report", status)
 	}
-	assertCheckNames(t, status.Checks, "config", "healthz", "readyz", "auth")
+	assertCheckNames(t, status.Checks, "config", "healthz", "readyz", "auth", "agent-config")
 	assertNoTokenLeak(t, output.RenderChecks(status.Title, status.Checks), "", "secret-token")
 
 	doctor := app.doctorAction(context.Background())
 	if doctor.Title != "Lore doctor" || doctor.ExitCode != 1 {
 		t.Fatalf("doctorAction() = %+v, want failing Lore doctor report", doctor)
 	}
-	assertCheckNames(t, doctor.Checks, "config", "healthz", "readyz", "auth", "pi")
+	assertCheckNames(t, doctor.Checks, "config", "healthz", "readyz", "auth", "pi", "agent-config")
 	assertNoTokenLeak(t, output.RenderChecks(doctor.Title, doctor.Checks), "", "secret-token")
 }
 
@@ -362,6 +362,144 @@ func TestUpdateServiceWiresProductionCandidateProbe(t *testing.T) {
 	want := (version.Info{Version: "v1.2.3", Commit: "abc1234", BuildDate: "2026-05-20T00:00:00Z"}).Normalized()
 	if got != want {
 		t.Fatalf("CandidateVersion() = %+v, want %+v", got, want)
+	}
+}
+
+// TestCodexInstallPlanSummaryNoAntigravityRuntime verifies that Codex dry-run/apply
+// summaries do NOT mention Antigravity runtime, prompt, or MCP false claims.
+func TestCodexInstallPlanSummaryNoAntigravityRuntime(t *testing.T) {
+	plan := install.InstallPlan{
+		Layout: install.HarnessLayout{
+			Target:       install.TargetCodex,
+			RootDir:      "/home/user/.codex",
+			ManifestPath: "/home/user/.codex/lore-install.json",
+			Paths:        map[string]string{"agents_md": "/home/user/.codex/agents.md"},
+		},
+		Components: []install.ComponentID{install.ComponentCorePack},
+		Files: []install.PlanFileAction{
+			{RelativePath: "agents.md", Action: "create"},
+			{RelativePath: "lore-install.json", Action: "create"},
+		},
+	}
+
+	// Dry-run summary
+	dryRun := formatCodexInstallPlanSummary(plan, true)
+	if strings.Contains(dryRun, "runtime=antigravity") {
+		t.Errorf("dry-run summary should not contain Antigravity runtime: %s", dryRun)
+	}
+	if strings.Contains(dryRun, "prompt=") {
+		t.Errorf("dry-run summary should not contain prompt field: %s", dryRun)
+	}
+	if strings.Contains(dryRun, "mcp_optional") {
+		t.Errorf("dry-run summary should not contain mcp_optional: %s", dryRun)
+	}
+	if !strings.Contains(dryRun, "scope=config-only") {
+		t.Errorf("dry-run summary should contain scope=config-only: %s", dryRun)
+	}
+	if !strings.Contains(dryRun, "install_target=codex") {
+		t.Errorf("dry-run summary should contain install_target=codex: %s", dryRun)
+	}
+	if !strings.Contains(dryRun, "mode=dry-run") {
+		t.Errorf("dry-run summary should contain mode=dry-run: %s", dryRun)
+	}
+
+	// Apply summary
+	apply := formatCodexInstallPlanSummary(plan, false)
+	if strings.Contains(apply, "runtime=antigravity") {
+		t.Errorf("apply summary should not contain Antigravity runtime: %s", apply)
+	}
+	if strings.Contains(apply, "prompt=") {
+		t.Errorf("apply summary should not contain prompt field: %s", apply)
+	}
+	if strings.Contains(apply, "mcp_optional") {
+		t.Errorf("apply summary should not contain mcp_optional: %s", apply)
+	}
+	if strings.Contains(apply, "mode=dry-run") {
+		t.Errorf("apply summary should not contain mode=dry-run: %s", apply)
+	}
+}
+
+// TestCodexInstallSummaryNoAntigravityRuntime verifies that Codex apply results
+// summaries do NOT mention Antigravity runtime, prompt, or MCP false claims.
+func TestCodexInstallSummaryNoAntigravityRuntime(t *testing.T) {
+	result := install.InstallResult{
+		Target: install.TargetCodex,
+		Layout: install.HarnessLayout{
+			Target:       install.TargetCodex,
+			RootDir:      "/home/user/.codex",
+			ManifestPath: "/home/user/.codex/lore-install.json",
+		},
+		Manifest: install.Manifest{
+			SchemaVersion: "1.0",
+			Target:       install.TargetCodex,
+			AuthMode:     "config-only",
+			Components:   []install.ComponentID{install.ComponentCorePack},
+			ManagedFiles: []install.ManagedFileRecord{
+				{Path: "/home/user/.codex/agents.md", Component: install.ComponentCorePack, MergeMode: install.MergeModeReplace, ContentHash: "abc"},
+			},
+		},
+		Summary: install.InstallSummary{
+			Created:   []string{"/home/user/.codex/agents.md"},
+			Updated:   nil,
+			Deleted:   nil,
+			Unchanged: nil,
+			BackedUp:  nil,
+			Conflicted: nil,
+			Failed:    nil,
+		},
+	}
+
+	summary := formatCodexInstallSummary(result)
+	if strings.Contains(summary, "runtime=antigravity") {
+		t.Errorf("summary should not contain Antigravity runtime: %s", summary)
+	}
+	if strings.Contains(summary, "mcp_optional") {
+		t.Errorf("summary should not contain mcp_optional: %s", summary)
+	}
+	if !strings.Contains(summary, "install_target=codex") {
+		t.Errorf("summary should contain install_target=codex: %s", summary)
+	}
+	if !strings.Contains(summary, "scope=config-only") {
+		t.Errorf("summary should contain scope=config-only: %s", summary)
+	}
+	if !strings.Contains(summary, "auth_mode=config-only") {
+		t.Errorf("summary should contain auth_mode=config-only: %s", summary)
+	}
+	if !strings.Contains(summary, "mcp=none") {
+		t.Errorf("summary should contain mcp=none: %s", summary)
+	}
+	if !strings.Contains(summary, "runner=none") {
+		t.Errorf("summary should contain runner=none: %s", summary)
+	}
+	if !strings.Contains(summary, "bootstrap=none") {
+		t.Errorf("summary should contain bootstrap=none: %s", summary)
+	}
+}
+
+// TestCodexInstallPlanSummaryIncludesManagedActions verifies that Codex plan
+// summaries honestly report managed file actions.
+func TestCodexInstallPlanSummaryIncludesManagedActions(t *testing.T) {
+	plan := install.InstallPlan{
+		Layout: install.HarnessLayout{
+			Target:       install.TargetCodex,
+			RootDir:      "/home/user/.codex",
+			ManifestPath: "/home/user/.codex/lore-install.json",
+			Paths:        map[string]string{"agents_md": "/home/user/.codex/agents.md"},
+		},
+		Components: []install.ComponentID{install.ComponentCorePack},
+		Files: []install.PlanFileAction{
+			{RelativePath: "agents.md", Action: "create"},
+			{RelativePath: "skills/sdd-apply/SKILL.md", Action: "create"},
+			{RelativePath: "lore-install.json", Action: "create"},
+		},
+	}
+
+	summary := formatCodexInstallPlanSummary(plan, false)
+	if !strings.Contains(summary, "managed_action=create:agents.md") {
+		t.Errorf("summary should contain create:agents.md action: %s", summary)
+	}
+	if !strings.Contains(summary, "managed_action=create:skills/sdd-apply/SKILL.md") {
+		t.Errorf("summary should contain create action for skill file: %s", summary)
 	}
 }
 

@@ -216,8 +216,8 @@ func TestPlanPiInstallFailsClosedOnTopLevelPiSymlink(t *testing.T) {
 }
 
 func TestValidateInstallResultAgainstPlanRejectsActionMismatch(t *testing.T) {
-	plan := PiInstallPlan{ManagedFileActions: []ManagedFileAction{{RelativePath: "extensions/lore-memory.ts", Action: "update"}}}
-	result := PiInstallResult{Summary: InstallSummary{Created: []string{"extensions/lore-memory.ts"}}}
+	plan := PiInstallPlan{ManagedFileActions: []ManagedFileAction{{RelativePath: "mcp.json", Action: "update"}}}
+	result := PiInstallResult{Summary: InstallSummary{Created: []string{"mcp.json"}}}
 
 	err := validateInstallResultAgainstPlan(plan, result)
 	if err == nil || !containsAll(err.Error(), "action drift", "planned=update", "actual=create") {
