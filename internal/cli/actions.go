@@ -684,6 +684,7 @@ func (a *App) installCodexActionWithOptions(ctx context.Context, opts installCom
 	plan, err := service.PlanCodexInstall(install.InstallRequest{
 		HomeDir:        homeDir,
 		ServerURL:      preflight.ServerURL,
+		SavedToken:     preflight.Token,
 		LoreBinaryPath: binaryPath,
 		LoreConfigDir:  filepath.Dir(configPath),
 		LoreCLIVersion: a.BuildInfo.Normalized().Version,
@@ -717,7 +718,7 @@ func (a *App) installCodexActionWithOptions(ctx context.Context, opts installCom
 		output.Check{Name: "manifest", Status: output.StatusOK, Detail: fmt.Sprintf("verified %s auth_mode=%s managed_files=%d", result.Layout.ManifestPath, result.Manifest.AuthMode, len(result.Manifest.ManagedFiles))},
 	)
 	report.Checks = append(report.Checks,
-		output.Check{Name: "codex-config", Status: output.StatusWarn, Detail: "Codex install is config-only projection. No MCP, runner, or bootstrap behavior is installed. See ~/.codex/agents.md and ~/.codex/skills/."},
+		output.Check{Name: "codex-config", Status: output.StatusWarn, Detail: fmt.Sprintf("managed MCP config path=%s server_url=%s auth_header=plaintext-bearer-token; Lore also manages ~/.codex/agents.md and ~/.codex/skills/.", result.Layout.Paths["config_toml"], preflight.ServerURL), Action: "Rerun lore install after lore login if the saved session changes or if the Lore server URL changes."},
 	)
 	return report
 }
@@ -979,9 +980,8 @@ func antigravityMCPInstalled(components []install.ComponentID) bool {
 }
 
 // formatCodexInstallSummary produces the Codex-specific dry-run/apply summary.
-// It is config-only: no Antigravity runtime, prompt, MCP, or runner semantics.
 func formatCodexInstallSummary(result install.InstallResult) string {
-	summary := fmt.Sprintf("install_target=%s scope=config-only auth_mode=%s components=%s managed_files=%d created=%d updated=%d unchanged=%d backed_up=%d failed=%d",
+	summary := fmt.Sprintf("install_target=%s runtime=codex-remote-mcp auth_mode=%s components=%s managed_files=%d created=%d updated=%d unchanged=%d backed_up=%d failed=%d",
 		result.Target, result.Manifest.AuthMode, formatComponentIDs(result.Manifest.Components),
 		len(result.Manifest.ManagedFiles), len(result.Summary.Created), len(result.Summary.Updated),
 		len(result.Summary.Unchanged), len(result.Summary.BackedUp), len(result.Summary.Failed))
@@ -989,7 +989,7 @@ func formatCodexInstallSummary(result install.InstallResult) string {
 	parts = append(parts, formatManagedFileSummaryParts(result.Summary.Created, "create")...)
 	parts = append(parts, formatManagedFileSummaryParts(result.Summary.Updated, "update")...)
 	parts = append(parts, formatManagedFileSummaryParts(result.Summary.Unchanged, "unchanged")...)
-	parts = append(parts, "mcp=none", "runner=none", "bootstrap=none")
+	parts = append(parts, "mcp=remote", "runner=none", "bootstrap=none")
 	if len(result.Summary.Failed) > 0 {
 		parts = append(parts, fmt.Sprintf("findings=%s", strings.Join(result.Summary.Failed, "; ")))
 	}
@@ -1013,16 +1013,15 @@ func formatAntigravityInstallSummary(result install.InstallResult) string {
 }
 
 // formatCodexInstallPlanSummary produces the Codex-specific plan summary.
-// It is config-only: no Antigravity runtime, prompt, MCP, or runner semantics.
 func formatCodexInstallPlanSummary(plan install.InstallPlan, dryRun bool) string {
 	parts := []string{
 		fmt.Sprintf("install_target=%s", plan.Layout.Target),
-		"scope=config-only",
+		"runtime=codex-remote-mcp",
 		"auth_mode=config-only",
 		fmt.Sprintf("components=%s", formatComponentIDs(plan.Components)),
 		fmt.Sprintf("target=%s", plan.Layout.RootDir),
 		fmt.Sprintf("manifest=%s", plan.Layout.ManifestPath),
-		"mcp=none",
+		"mcp=remote",
 		"runner=none",
 		"bootstrap=none",
 	}

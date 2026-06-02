@@ -205,6 +205,12 @@ func planCodexRenderedFileAction(layout HarnessLayout, file RenderedFile, backup
 	if err != nil && !os.IsNotExist(err) {
 		return nil, PlanFileAction{}, fmt.Errorf("read existing file: %w", err)
 	}
+	if filepath.ToSlash(file.RelativePath) == codexConfigTomlRelativePath {
+		desired, err = mergeCodexMCPConfig(existing, desired)
+		if err != nil {
+			return nil, PlanFileAction{}, err
+		}
+	}
 	action := PlanFileAction{Component: file.Component, RelativePath: filepath.ToSlash(file.RelativePath), AbsolutePath: absolutePath}
 	if exists && string(existing) == string(desired) {
 		action.Action = "unchanged"
@@ -321,5 +327,76 @@ func codexBackupRelativePath(relativePath string) string {
 		return "agents.md"
 	default:
 		return filepath.ToSlash(strings.TrimPrefix(filepath.ToSlash(relativePath), "./"))
+	}
+}
+
+func mergeCodexMCPConfig(existing, managed []byte) ([]byte, error) {
+	managedText := strings.TrimSpace(string(managed))
+	if managedText == "" {
+		return nil, fmt.Errorf("managed Codex MCP config block is required")
+	}
+	existingText := strings.ReplaceAll(string(existing), "\r\n", "\n")
+	if strings.TrimSpace(existingText) == "" {
+		return []byte(managedText + "\n"), nil
+	}
+	if strings.Contains(existingText, codexMCPBlockStartMarker) || strings.Contains(existingText, codexMCPBlockEndMarker) {
+		start := strings.Index(existingText, codexMCPBlockStartMarker)
+		end := strings.Index(existingText, codexMCPBlockEndMarker)
+		if start < 0 || end < start {
+			return nil, fmt.Errorf("existing config.toml contains an incomplete Lore-managed Codex MCP block")
+		}
+		end += len(codexMCPBlockEndMarker)
+		prefix := strings.TrimRight(existingText[:start], "\n")
+		suffix := strings.TrimLeft(existingText[end:], "\n")
+		parts := make([]string, 0, 3)
+		if strings.TrimSpace(prefix) != "" {
+			parts = append(parts, prefix)
+		}
+		parts = append(parts, managedText)
+		if strings.TrimSpace(suffix) != "" {
+			parts = append(parts, suffix)
+		}
+		return []byte(strings.Join(parts, "\n\n") + "\n"), nil
+	}
+
+	stripped := stripLegacyCodexLoreMCPBlock(existingText)
+	stripped = strings.TrimRight(stripped, "\n")
+	if strings.TrimSpace(stripped) == "" {
+		return []byte(managedText + "\n"), nil
+	}
+	return []byte(stripped + "\n\n" + managedText + "\n"), nil
+}
+
+func stripLegacyCodexLoreMCPBlock(existing string) string {
+	lines := strings.Split(existing, "\n")
+	kept := make([]string, 0, len(lines))
+	skipping := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if skipping {
+			if isCodexLoreTableHeader(trimmed) {
+				continue
+			}
+			if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+				skipping = false
+			} else {
+				continue
+			}
+		}
+		if isCodexLoreTableHeader(trimmed) {
+			skipping = true
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.Join(kept, "\n")
+}
+
+func isCodexLoreTableHeader(line string) bool {
+	switch line {
+	case "[mcp_servers.lore]", "[mcp_servers.lore.headers]", "[mcp_servers.lore.http_headers]":
+		return true
+	default:
+		return false
 	}
 }

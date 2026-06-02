@@ -7,9 +7,9 @@ import (
 type ComponentID string
 
 const (
-	ComponentCorePack        ComponentID = "core-pack"
-	ComponentLoreServerMCP   ComponentID = "lore-server-mcp"
-	ComponentPiExtensions    ComponentID = "pi-extensions"
+	ComponentCorePack         ComponentID = "core-pack"
+	ComponentLoreServerMCP    ComponentID = "lore-server-mcp"
+	ComponentPiExtensions     ComponentID = "pi-extensions"
 	ComponentExtendedSkills   ComponentID = "extended-skills"
 	ComponentCodexAgentConfig ComponentID = "codex-agent-config"
 
@@ -54,18 +54,19 @@ func ComponentCatalog() map[ComponentID]Component {
 		ComponentLoreServerMCP: {
 			ID:          ComponentLoreServerMCP,
 			Title:       "Lore Server MCP",
-			Description: "Hosted Lore MCP via pi-mcp-adapter — the default Pi backend.",
+			Description: "Managed Lore MCP configuration for supported targets.",
 			Optional:    false,
 			DefaultForTarget: map[TargetID]bool{
 				TargetPi:          true,
 				TargetAntigravity: true,
+				TargetCodex:       true,
 			},
 		},
 		ComponentPiExtensions: {
-			ID:          ComponentPiExtensions,
-			Title:       "Pi Extensions",
-			Description: "Dormant Pi-native Lore extensions path (lore-memory). Available for rollback/testing only; not installed by default.",
-			Optional:    true,
+			ID:               ComponentPiExtensions,
+			Title:            "Pi Extensions",
+			Description:      "Dormant Pi-native Lore extensions path (lore-memory). Available for rollback/testing only; not installed by default.",
+			Optional:         true,
 			DefaultForTarget: map[TargetID]bool{},
 		},
 		ComponentExtendedSkills: {

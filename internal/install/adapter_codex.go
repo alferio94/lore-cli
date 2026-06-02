@@ -2,14 +2,21 @@ package install
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 
 	"github.com/alferio94/lore-cli/internal/agentpack"
 )
 
+const (
+	codexConfigTomlRelativePath = "config.toml"
+	codexMCPBlockStartMarker    = "# BEGIN lore-cli managed Lore MCP"
+	codexMCPBlockEndMarker      = "# END lore-cli managed Lore MCP"
+)
+
 // codexAdapter implements the shared-harness install pattern for Codex.
-// It projects Lore-managed agents.md and skills into ~/.codex.
+// It projects Lore-managed agents.md, config.toml, and skills into ~/.codex.
 type codexAdapter struct {
 	target       TargetID
 	title        string
@@ -25,6 +32,12 @@ func defaultCodexAdapter() HarnessAdapter {
 				ID:               CapabilityAgentPack,
 				Component:        ComponentCorePack,
 				Description:      "Render the portable Lore core pack for Codex-owned agents.md and skills.",
+				EnabledByDefault: true,
+			},
+			CapabilityLoreServerMCP: {
+				ID:               CapabilityLoreServerMCP,
+				Component:        ComponentLoreServerMCP,
+				Description:      "Managed remote Lore MCP config for Codex.",
 				EnabledByDefault: true,
 			},
 			CapabilityExtendedSkills: {
@@ -63,6 +76,7 @@ func ResolveCodexLayout(homeDir string) HarnessLayout {
 	manifestPath := filepath.Join(codexDir, "lore-install.json")
 	agentsPath := filepath.Join(codexDir, "agents.md")
 	skillsDir := filepath.Join(codexDir, "skills")
+	configTomlPath := filepath.Join(codexDir, codexConfigTomlRelativePath)
 	return HarnessLayout{
 		Target:       TargetCodex,
 		RootDir:      codexDir,
@@ -71,6 +85,7 @@ func ResolveCodexLayout(homeDir string) HarnessLayout {
 			"codex_dir":    codexDir,
 			"agents_md":    agentsPath,
 			"skills_dir":   skillsDir,
+			"config_toml":  configTomlPath,
 			"manifest":     manifestPath,
 			"harness_root": codexDir,
 		},
@@ -87,13 +102,12 @@ func (a codexAdapter) Render(_ context.Context, req RenderRequest) ([]RenderedFi
 	}
 	for _, component := range components {
 		if !a.Supports(component) {
-			return nil, err
+			return nil, fmt.Errorf("component %q is not supported by target %q", component, a.target)
 		}
 	}
 
 	rendered := []RenderedFile{}
 
-	// Render agents.md from agent-config.json source of truth.
 	if containsComponent(components, ComponentCorePack) {
 		agentsContent, err := renderCodexAgentsMD(req)
 		if err != nil {
@@ -107,10 +121,20 @@ func (a codexAdapter) Render(_ context.Context, req RenderRequest) ([]RenderedFi
 		})
 	}
 
-	// Render managed agent skills.
-	rendered = append(rendered, renderCodexManagedSkills(req)...)
+	if containsComponent(components, ComponentLoreServerMCP) {
+		mcpContent, err := renderCodexMCPConfig(req.ServerURL, req.SavedToken)
+		if err != nil {
+			return nil, err
+		}
+		rendered = append(rendered, RenderedFile{
+			Component:    ComponentLoreServerMCP,
+			RelativePath: codexConfigTomlRelativePath,
+			MergeMode:    MergeModeReplace,
+			Content:      mcpContent,
+		})
+	}
 
-	// Render extended skills.
+	rendered = append(rendered, renderCodexManagedSkills(req)...)
 	rendered = append(rendered, renderCodexExtendedSkills(req)...)
 
 	return rendered, nil
@@ -130,7 +154,6 @@ func (a codexAdapter) RenderExtendedSkills(_ context.Context, req RenderRequest,
 // renderCodexAgentsMD renders the agents.md file from agent-config.json.
 // It uses agentconfig as the source of truth for model declarations.
 func renderCodexAgentsMD(req RenderRequest) ([]byte, error) {
-	// Try to load agent config if available.
 	var agentConfig map[string]string
 	if len(req.AgentConfig.SDDAgents) > 0 {
 		agentConfig = make(map[string]string, len(req.AgentConfig.SDDAgents))
@@ -141,7 +164,6 @@ func renderCodexAgentsMD(req RenderRequest) ([]byte, error) {
 
 	definition := req.effectiveDefinition()
 
-	// Build phase list from definition.
 	var phases []string
 	for _, phase := range definition.Workflow.Phases {
 		name := agentpack.PhaseAgentName(phase.ID)
@@ -172,18 +194,41 @@ func renderCodexAgentsMD(req RenderRequest) ([]byte, error) {
 		"## Lore Skills",
 		"- Managed skills directory: `~/.codex/skills`",
 		"- Managed manifest: `~/.codex/lore-install.json`",
+		"- Managed MCP config: `~/.codex/config.toml`",
 		"",
 		"## SDD Agents",
 		"",
 		phasesStr,
 		"",
 		"## Notes",
-		"- This is a **config-only** Lore projection; it does not enable live `codex exec` or Lore MCP runtime.",
-		"- No MCP server, runner, npm bootstrap, or per-harness configurators are installed by this target.",
+		"- Codex receives a Lore-managed remote MCP entry pointing at your saved Lore server `/v1/mcp` endpoint.",
+		"- No `codex exec` runner, npm bootstrap, or per-harness configurators are installed by this target.",
 		"",
 		"Load the Lore-managed skill files from `~/.codex/skills` when a task explicitly requires them.",
 	}, "\n") + "\n"
 
+	return []byte(text), nil
+}
+
+func renderCodexMCPConfig(serverURL, token string) ([]byte, error) {
+	normalizedServerURL := strings.TrimRight(strings.TrimSpace(serverURL), "/")
+	if normalizedServerURL == "" {
+		return nil, fmt.Errorf("server url is required")
+	}
+	trimmedToken := strings.TrimSpace(token)
+	if trimmedToken == "" {
+		return nil, fmt.Errorf("saved token is required")
+	}
+	text := strings.Join([]string{
+		codexMCPBlockStartMarker,
+		"[mcp_servers.lore]",
+		fmt.Sprintf("url = %q", normalizedServerURL+"/v1/mcp"),
+		"",
+		"[mcp_servers.lore.http_headers]",
+		fmt.Sprintf("Authorization = %q", "Bearer "+trimmedToken),
+		codexMCPBlockEndMarker,
+		"",
+	}, "\n")
 	return []byte(text), nil
 }
 
@@ -224,8 +269,8 @@ func renderCodexExtendedSkills(req RenderRequest) []RenderedFile {
 		rendered = append(rendered, RenderedFile{
 			Component:    ComponentExtendedSkills,
 			RelativePath: filepath.ToSlash(filepath.Join("skills", skill.Name, "SKILL.md")),
-			MergeMode:   MergeModeReplace,
-			Content:     []byte(content),
+			MergeMode:    MergeModeReplace,
+			Content:      []byte(content),
 		})
 	}
 	return rendered
@@ -253,6 +298,8 @@ func codexAbsolutePath(layout HarnessLayout, relativePath string) string {
 	switch cleanRelativePath {
 	case "agents.md":
 		return layout.Paths["agents_md"]
+	case codexConfigTomlRelativePath:
+		return layout.Paths["config_toml"]
 	case "lore-install.json":
 		return layout.Paths["manifest"]
 	default:

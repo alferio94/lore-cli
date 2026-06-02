@@ -35,8 +35,10 @@ func TestCodexAdapterCapabilities(t *testing.T) {
 		t.Fatalf("capability %q component = %q, want %q", CapabilityAgentPack, cap.Component, ComponentCorePack)
 	}
 
-	if _, ok := caps[CapabilityLoreServerMCP]; ok {
-		t.Fatal("Codex should not have lore-server-mcp capability")
+	if cap, ok := caps[CapabilityLoreServerMCP]; !ok {
+		t.Fatal("Codex should have lore-server-mcp capability")
+	} else if cap.Component != ComponentLoreServerMCP {
+		t.Fatalf("capability %q component = %q, want %q", CapabilityLoreServerMCP, cap.Component, ComponentLoreServerMCP)
 	}
 }
 
@@ -48,8 +50,8 @@ func TestCodexAdapterSupports(t *testing.T) {
 	if !adapter.Supports(ComponentExtendedSkills) {
 		t.Fatal("Codex adapter should support extended-skills")
 	}
-	if adapter.Supports(ComponentLoreServerMCP) {
-		t.Fatal("Codex adapter should not support lore-server-mcp")
+	if !adapter.Supports(ComponentLoreServerMCP) {
+		t.Fatal("Codex adapter should support lore-server-mcp")
 	}
 }
 
@@ -72,6 +74,9 @@ func TestResolveCodexLayout(t *testing.T) {
 	if layout.ManifestPath != filepath.Join(homeDir, ".codex", "lore-install.json") {
 		t.Fatalf("manifest_path = %q, want %q", layout.ManifestPath, filepath.Join(homeDir, ".codex", "lore-install.json"))
 	}
+	if layout.Paths["config_toml"] != filepath.Join(homeDir, ".codex", "config.toml") {
+		t.Fatalf("config_toml = %q, want %q", layout.Paths["config_toml"], filepath.Join(homeDir, ".codex", "config.toml"))
+	}
 }
 
 func TestCodexAdapterRenderAgentsMD(t *testing.T) {
@@ -88,10 +93,10 @@ func TestCodexAdapterRenderAgentsMD(t *testing.T) {
 	}
 
 	req := RenderRequest{
-		Target:       TargetCodex,
-		Assets:       agentpack.DefaultOperationalAssets(),
-		Components:   []ComponentID{ComponentCorePack},
-		AgentConfig:  agentConfig,
+		Target:      TargetCodex,
+		Assets:      agentpack.DefaultOperationalAssets(),
+		Components:  []ComponentID{ComponentCorePack},
+		AgentConfig: agentConfig,
 	}
 
 	adapter := defaultCodexAdapter()
@@ -119,11 +124,14 @@ func TestCodexAdapterRenderAgentsMD(t *testing.T) {
 	if !strings.Contains(content, "- sdd-init: gpt-5.4") {
 		t.Fatalf("agents.md should contain sdd-init with gpt-5.4, got: %s", content)
 	}
-	if !strings.Contains(content, "config-only") {
-		t.Fatal("agents.md should contain config-only warning")
+	if !strings.Contains(content, "~/.codex/config.toml") {
+		t.Fatal("agents.md should reference ~/.codex/config.toml")
+	}
+	if !strings.Contains(content, "remote MCP entry") {
+		t.Fatal("agents.md should describe managed remote MCP config")
 	}
 	if strings.Contains(content, "[mcp_servers]") {
-		t.Fatal("agents.md should NOT contain [mcp_servers] TOML blocks")
+		t.Fatal("agents.md should NOT inline TOML MCP blocks")
 	}
 	if !strings.Contains(content, "~/.codex/skills") {
 		t.Fatal("agents.md should reference ~/.codex/skills")
@@ -167,11 +175,13 @@ func TestCodexAdapterRenderWithExtendedSkills(t *testing.T) {
 	}
 }
 
-func TestCodexAdapterRenderNoMCP(t *testing.T) {
+func TestCodexAdapterRenderWithManagedRemoteMCP(t *testing.T) {
 	req := RenderRequest{
 		Target:     TargetCodex,
 		Assets:     agentpack.DefaultOperationalAssets(),
-		Components: []ComponentID{ComponentCorePack},
+		Components: []ComponentID{ComponentCorePack, ComponentLoreServerMCP},
+		ServerURL:  "https://example.test",
+		SavedToken: "secret-token",
 	}
 
 	adapter := defaultCodexAdapter()
@@ -180,13 +190,22 @@ func TestCodexAdapterRenderNoMCP(t *testing.T) {
 		t.Fatalf("Render error: %v", err)
 	}
 
+	foundConfig := false
 	for _, f := range files {
-		content := string(f.Content)
-		if strings.Contains(content, "[mcp_servers]") {
-			t.Errorf("Rendered file %q should not contain [mcp_servers] TOML blocks", f.RelativePath)
+		if f.RelativePath == codexConfigTomlRelativePath {
+			foundConfig = true
+			content := string(f.Content)
+			if !containsAll(content, codexMCPBlockStartMarker, "[mcp_servers.lore]", `url = "https://example.test/v1/mcp"`, `[mcp_servers.lore.http_headers]`, `Authorization = "Bearer secret-token"`) {
+				t.Fatalf("config.toml = %q, want managed Lore MCP block", content)
+			}
+			if strings.Contains(content, `[mcp_servers.lore.headers]`) || strings.Contains(content, `bearer_token_env_var`) {
+				t.Fatalf("config.toml = %q, want http_headers auth only", content)
+			}
 		}
 	}
-	_ = files
+	if !foundConfig {
+		t.Fatal("Render should produce config.toml when lore-server-mcp is selected")
+	}
 }
 
 func TestCodexSkillPathResolver(t *testing.T) {
@@ -212,7 +231,7 @@ func TestCodexSkillPathResolver(t *testing.T) {
 func TestCodexBackupRelativePath(t *testing.T) {
 	tests := []struct {
 		relativePath string
-		want          string
+		want         string
 	}{
 		{"agents.md", "agents.md"},
 		{"skills/sdd-apply/SKILL.md", "skills/sdd-apply/SKILL.md"},
@@ -231,9 +250,10 @@ func TestCodexAbsolutePath(t *testing.T) {
 
 	tests := []struct {
 		relativePath string
-		want          string
+		want         string
 	}{
 		{"agents.md", filepath.Join(layout.RootDir, "agents.md")},
+		{"config.toml", filepath.Join(layout.RootDir, "config.toml")},
 		{"lore-install.json", layout.ManifestPath},
 		{"skills/sdd-apply/SKILL.md", filepath.Join(layout.RootDir, "skills", "sdd-apply", "SKILL.md")},
 	}
@@ -472,7 +492,7 @@ func TestExecuteCodexInstallIdempotent(t *testing.T) {
 		HomeDir:    tmpDir,
 		ServerURL:  "https://lore.test",
 		Target:     TargetCodex,
-		Components:     []ComponentID{ComponentCorePack},
+		Components: []ComponentID{ComponentCorePack},
 	}
 
 	plan1, err := svc.PlanCodexInstall(req)
@@ -517,16 +537,17 @@ func planActions(files []PlanFileAction) []string {
 	return actions
 }
 
-func TestExecuteCodexInstallNoConfigToml(t *testing.T) {
+func TestExecuteCodexInstallWritesConfigToml(t *testing.T) {
 	svc := Service{}
 	tmpDir := t.TempDir()
 
 	req := InstallRequest{
 		HomeDir:        tmpDir,
 		ServerURL:      "https://lore.test",
+		SavedToken:     "secret-token",
 		LoreBinaryPath: "/usr/local/bin/lore",
 		Target:         TargetCodex,
-		Components:     []ComponentID{ComponentCorePack},
+		Components:     []ComponentID{ComponentCorePack, ComponentLoreServerMCP},
 	}
 
 	plan, err := svc.PlanCodexInstall(req)
@@ -534,17 +555,81 @@ func TestExecuteCodexInstallNoConfigToml(t *testing.T) {
 		t.Fatalf("PlanCodexInstall error: %v", err)
 	}
 
-	result, err := svc.ExecuteCodexInstall(plan, InstallCommandOptions{DryRun: false})
+	_, err = svc.ExecuteCodexInstall(plan, InstallCommandOptions{DryRun: false})
 	if err != nil {
 		t.Fatalf("ExecuteCodexInstall error: %v", err)
 	}
 
-	// Verify no config.toml was created or modified.
 	configTomlPath := filepath.Join(tmpDir, ".codex", "config.toml")
-	if _, err := os.Stat(configTomlPath); !os.IsNotExist(err) {
-		t.Errorf("config.toml should not be created by Codex install")
+	content, err := os.ReadFile(configTomlPath)
+	if err != nil {
+		t.Fatalf("ReadFile(config.toml) error: %v", err)
 	}
-	_ = result
+	if !containsAll(string(content), codexMCPBlockStartMarker, `[mcp_servers.lore]`, `url = "https://lore.test/v1/mcp"`, `[mcp_servers.lore.http_headers]`, `Authorization = "Bearer secret-token"`) {
+		t.Fatalf("config.toml = %q, want managed Lore MCP block", string(content))
+	}
+	if strings.Contains(string(content), `[mcp_servers.lore.headers]`) || strings.Contains(string(content), `bearer_token_env_var`) {
+		t.Fatalf("config.toml = %q, want http_headers auth only", string(content))
+	}
+}
+
+func TestExecuteCodexInstallMergesConfigToml(t *testing.T) {
+	svc := Service{}
+	tmpDir := t.TempDir()
+	codexDir := filepath.Join(tmpDir, ".codex")
+	if err := os.MkdirAll(codexDir, 0o755); err != nil {
+		t.Fatalf("mkdir codex dir: %v", err)
+	}
+	configTomlPath := filepath.Join(codexDir, "config.toml")
+	existing := strings.Join([]string{
+		"model = \"gpt-5\"",
+		"",
+		"[mcp_servers.existing]",
+		"command = \"keep-me\"",
+		"",
+		"[mcp_servers.lore]",
+		"url = \"https://old.example/v1/mcp\"",
+		"bearer_token_env_var = \"old-token\"",
+		"",
+		"[mcp_servers.lore.headers]",
+		"Authorization = \"Bearer old-token\"",
+		"",
+		"[mcp_servers.lore.http_headers]",
+		"Authorization = \"Bearer old-token\"",
+		"",
+	}, "\n")
+	if err := os.WriteFile(configTomlPath, []byte(existing), 0o600); err != nil {
+		t.Fatalf("write existing config.toml: %v", err)
+	}
+
+	req := InstallRequest{
+		HomeDir:        tmpDir,
+		ServerURL:      "https://lore.test",
+		SavedToken:     "secret-token",
+		LoreBinaryPath: "/usr/local/bin/lore",
+		Target:         TargetCodex,
+		Components:     []ComponentID{ComponentCorePack, ComponentLoreServerMCP},
+	}
+	plan, err := svc.PlanCodexInstall(req)
+	if err != nil {
+		t.Fatalf("PlanCodexInstall error: %v", err)
+	}
+	_, err = svc.ExecuteCodexInstall(plan, InstallCommandOptions{DryRun: false})
+	if err != nil {
+		t.Fatalf("ExecuteCodexInstall error: %v", err)
+	}
+
+	merged, err := os.ReadFile(configTomlPath)
+	if err != nil {
+		t.Fatalf("ReadFile(config.toml) error: %v", err)
+	}
+	text := string(merged)
+	if !containsAll(text, `model = "gpt-5"`, `[mcp_servers.existing]`, `command = "keep-me"`, `[mcp_servers.lore.http_headers]`, `url = "https://lore.test/v1/mcp"`, `Authorization = "Bearer secret-token"`) {
+		t.Fatalf("merged config.toml = %q, want existing content preserved plus managed Lore MCP block", text)
+	}
+	if strings.Contains(text, "old-token") || strings.Contains(text, "https://old.example") || strings.Contains(text, `[mcp_servers.lore.headers]`) || strings.Contains(text, `bearer_token_env_var`) {
+		t.Fatalf("merged config.toml = %q, want stale Lore MCP entry replaced", text)
+	}
 }
 
 // TestCodexInstallUsesCustomAgentConfigModels verifies that persisted

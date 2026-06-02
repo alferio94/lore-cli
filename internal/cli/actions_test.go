@@ -375,9 +375,10 @@ func TestCodexInstallPlanSummaryNoAntigravityRuntime(t *testing.T) {
 			ManifestPath: "/home/user/.codex/lore-install.json",
 			Paths:        map[string]string{"agents_md": "/home/user/.codex/agents.md"},
 		},
-		Components: []install.ComponentID{install.ComponentCorePack},
+		Components: []install.ComponentID{install.ComponentCorePack, install.ComponentLoreServerMCP},
 		Files: []install.PlanFileAction{
 			{RelativePath: "agents.md", Action: "create"},
+			{RelativePath: "config.toml", Action: "create"},
 			{RelativePath: "lore-install.json", Action: "create"},
 		},
 	}
@@ -393,8 +394,8 @@ func TestCodexInstallPlanSummaryNoAntigravityRuntime(t *testing.T) {
 	if strings.Contains(dryRun, "mcp_optional") {
 		t.Errorf("dry-run summary should not contain mcp_optional: %s", dryRun)
 	}
-	if !strings.Contains(dryRun, "scope=config-only") {
-		t.Errorf("dry-run summary should contain scope=config-only: %s", dryRun)
+	if !strings.Contains(dryRun, "runtime=codex-remote-mcp") {
+		t.Errorf("dry-run summary should contain runtime=codex-remote-mcp: %s", dryRun)
 	}
 	if !strings.Contains(dryRun, "install_target=codex") {
 		t.Errorf("dry-run summary should contain install_target=codex: %s", dryRun)
@@ -431,21 +432,22 @@ func TestCodexInstallSummaryNoAntigravityRuntime(t *testing.T) {
 		},
 		Manifest: install.Manifest{
 			SchemaVersion: "1.0",
-			Target:       install.TargetCodex,
-			AuthMode:     "config-only",
-			Components:   []install.ComponentID{install.ComponentCorePack},
+			Target:        install.TargetCodex,
+			AuthMode:      "config-only",
+			Components:    []install.ComponentID{install.ComponentCorePack, install.ComponentLoreServerMCP},
 			ManagedFiles: []install.ManagedFileRecord{
 				{Path: "/home/user/.codex/agents.md", Component: install.ComponentCorePack, MergeMode: install.MergeModeReplace, ContentHash: "abc"},
+				{Path: "/home/user/.codex/config.toml", Component: install.ComponentLoreServerMCP, MergeMode: install.MergeModeReplace, ContentHash: "def"},
 			},
 		},
 		Summary: install.InstallSummary{
-			Created:   []string{"/home/user/.codex/agents.md"},
-			Updated:   nil,
-			Deleted:   nil,
-			Unchanged: nil,
-			BackedUp:  nil,
+			Created:    []string{"/home/user/.codex/agents.md", "/home/user/.codex/config.toml"},
+			Updated:    nil,
+			Deleted:    nil,
+			Unchanged:  nil,
+			BackedUp:   nil,
 			Conflicted: nil,
-			Failed:    nil,
+			Failed:     nil,
 		},
 	}
 
@@ -459,14 +461,14 @@ func TestCodexInstallSummaryNoAntigravityRuntime(t *testing.T) {
 	if !strings.Contains(summary, "install_target=codex") {
 		t.Errorf("summary should contain install_target=codex: %s", summary)
 	}
-	if !strings.Contains(summary, "scope=config-only") {
-		t.Errorf("summary should contain scope=config-only: %s", summary)
+	if !strings.Contains(summary, "runtime=codex-remote-mcp") {
+		t.Errorf("summary should contain runtime=codex-remote-mcp: %s", summary)
 	}
 	if !strings.Contains(summary, "auth_mode=config-only") {
 		t.Errorf("summary should contain auth_mode=config-only: %s", summary)
 	}
-	if !strings.Contains(summary, "mcp=none") {
-		t.Errorf("summary should contain mcp=none: %s", summary)
+	if !strings.Contains(summary, "mcp=remote") {
+		t.Errorf("summary should contain mcp=remote: %s", summary)
 	}
 	if !strings.Contains(summary, "runner=none") {
 		t.Errorf("summary should contain runner=none: %s", summary)
@@ -486,9 +488,10 @@ func TestCodexInstallPlanSummaryIncludesManagedActions(t *testing.T) {
 			ManifestPath: "/home/user/.codex/lore-install.json",
 			Paths:        map[string]string{"agents_md": "/home/user/.codex/agents.md"},
 		},
-		Components: []install.ComponentID{install.ComponentCorePack},
+		Components: []install.ComponentID{install.ComponentCorePack, install.ComponentLoreServerMCP},
 		Files: []install.PlanFileAction{
 			{RelativePath: "agents.md", Action: "create"},
+			{RelativePath: "config.toml", Action: "create"},
 			{RelativePath: "skills/sdd-apply/SKILL.md", Action: "create"},
 			{RelativePath: "lore-install.json", Action: "create"},
 		},
@@ -497,6 +500,9 @@ func TestCodexInstallPlanSummaryIncludesManagedActions(t *testing.T) {
 	summary := formatCodexInstallPlanSummary(plan, false)
 	if !strings.Contains(summary, "managed_action=create:agents.md") {
 		t.Errorf("summary should contain create:agents.md action: %s", summary)
+	}
+	if !strings.Contains(summary, "managed_action=create:config.toml") {
+		t.Errorf("summary should contain create:config.toml action: %s", summary)
 	}
 	if !strings.Contains(summary, "managed_action=create:skills/sdd-apply/SKILL.md") {
 		t.Errorf("summary should contain create action for skill file: %s", summary)
