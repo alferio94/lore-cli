@@ -18,10 +18,11 @@ const (
 	CapabilityPrompt         CapabilityID = "prompt"
 	CapabilitySkills         CapabilityID = "skills"
 	CapabilityLoreServerMCP  CapabilityID = "lore-server-mcp"
-	CapabilityExtendedSkills  CapabilityID = "extended-skills"
+	CapabilityExtendedSkills CapabilityID = "extended-skills"
 
 	MergeModeReplace      MergeMode = "replace"
 	MergeModeAdditiveJSON MergeMode = "additive-json"
+	MergeModeMarkerMerge  MergeMode = "marker-merge"
 )
 
 type Capability struct {
@@ -150,7 +151,7 @@ func (r RenderRequest) effectiveExtendedSkills(resolver agentpack.SkillPathResol
 }
 
 func defaultInstallRegistry() (*Registry, error) {
-	return NewRegistry(defaultPiAdapter(), defaultAntigravityAdapter(), defaultCodexAdapter())
+	return NewRegistry(defaultPiAdapter(), defaultAntigravityAdapter(), defaultOpenCodeAdapter(), defaultCodexAdapter())
 }
 
 func containsComponent(components []ComponentID, target ComponentID) bool {

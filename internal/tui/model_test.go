@@ -66,7 +66,7 @@ func TestNavigationAndInstallTargetSelectionMessage(t *testing.T) {
 	if got := m.statusTitle; got != "Install Lore" {
 		t.Fatalf("statusTitle = %q, want Install Lore", got)
 	}
-	for _, want := range []string{"Pi", "Recommended", "Claude Code", "OpenCode", "Codex", "Antigravity", "Coming soon", "optional"} {
+	for _, want := range []string{"Pi", "Recommended", "Claude Code", "OpenCode", "Codex", "Antigravity", "Coming soon", "opencode.json"} {
 		if !strings.Contains(m.statusBody, want) {
 			t.Fatalf("statusBody missing %q:\n%s", want, m.statusBody)
 		}
@@ -136,7 +136,7 @@ func TestInstallTargetSelectionSurfacesPiDefaultAndAntigravityMVPGuidance(t *tes
 	}
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(model)
-	for _, want := range []string{"Pi remains the default recommended path.", "Antigravity", "prompt + skills", "optional", "Choose an install target:", "Selected target: Pi"} {
+	for _, want := range []string{"Pi remains the default recommended path.", "OpenCode", "opencode.json", "Antigravity", "prompt + skills", "Choose an install target:", "Selected target: Pi"} {
 		if !strings.Contains(m.statusBody, want) {
 			t.Fatalf("statusBody = %q, want updated install guidance containing %q", m.statusBody, want)
 		}
@@ -176,14 +176,19 @@ func TestInstallTargetSelectionAllowsAntigravityExecutionWithoutPiBackupPrompt(t
 	m = updated.(model)
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	m = updated.(model)
-	// First down from Pi goes to Codex (now supported), not Antigravity.
+	// First down from Pi goes to OpenCode, then Codex, then Antigravity.
+	if got := m.selectedInstallTarget().ID; got != install.TargetOpenCode {
+		t.Fatalf("selected target = %q, want opencode (first down from Pi)", got)
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = updated.(model)
 	if got := m.selectedInstallTarget().ID; got != install.TargetCodex {
-		t.Fatalf("selected target = %q, want codex (first down from Pi)", got)
+		t.Fatalf("selected target = %q, want codex (second down from Pi)", got)
 	}
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	m = updated.(model)
 	if got := m.selectedInstallTarget().ID; got != install.TargetAntigravity {
-		t.Fatalf("selected target = %q, want antigravity (second down from Pi)", got)
+		t.Fatalf("selected target = %q, want antigravity (third down from Pi)", got)
 	}
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(model)
@@ -215,15 +220,19 @@ func TestInstallTargetSelectionMovesBetweenSupportedTargetsOnly(t *testing.T) {
 	}
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	m = updated.(model)
-	// First down from Pi goes to Codex (now supported).
-	if got := m.selectedInstallTarget().ID; got != install.TargetCodex {
-		t.Fatalf("selected target after down = %q, want codex (first down from Pi)", got)
+	// First down from Pi goes to OpenCode, then Codex, then Antigravity.
+	if got := m.selectedInstallTarget().ID; got != install.TargetOpenCode {
+		t.Fatalf("selected target after down = %q, want opencode (first down from Pi)", got)
 	}
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	m = updated.(model)
-	// Second down goes to Antigravity.
+	if got := m.selectedInstallTarget().ID; got != install.TargetCodex {
+		t.Fatalf("selected target after down = %q, want codex (second down from Pi)", got)
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = updated.(model)
 	if got := m.selectedInstallTarget().ID; got != install.TargetAntigravity {
-		t.Fatalf("selected target after down = %q, want antigravity", got)
+		t.Fatalf("selected target after down = %q, want antigravity (third down from Pi)", got)
 	}
 	if strings.Contains(m.statusBody, "Selected target: Claude Code") {
 		t.Fatalf("statusBody = %q, want roadmap targets visible but not selected", m.statusBody)

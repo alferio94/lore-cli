@@ -44,10 +44,10 @@ type AuthLoader interface {
 }
 
 type Service struct {
-	Store             ConfigStore
-	Auth              AuthLoader
-	ClientFactory     ClientFactory
-	AgentConfigStore  AgentConfigStore
+	Store            ConfigStore
+	Auth             AuthLoader
+	ClientFactory    ClientFactory
+	AgentConfigStore AgentConfigStore
 }
 
 // AgentConfigStore abstracts the agent-config store so it can be injected in tests.
@@ -96,8 +96,10 @@ func supportedTarget(adapter HarnessAdapter) Target {
 		target.Description = "Recommended today; uses hosted Lore MCP via pi-mcp-adapter as the default backend, with optional explicit pi-extensions (lore-memory) via --component pi-extensions."
 	case TargetAntigravity:
 		target.Description = "prompt + skills MVP target with managed Gemini lore agent profile and optional direct MCP config; Pi remains the default recommended path while Antigravity keeps harness-owned prompt, skills, and manifest semantics."
+	case TargetOpenCode:
+		target.Description = "Bounded OpenCode support manages ~/.config/opencode/AGENTS.md, skills/*.md, a Lore-owned opencode.json block, and manifest/backups. Commands stay omitted unless a later approved slice adds them."
 	case TargetCodex:
-		target.Description = "Config-only Lore projection into ~/.codex: managed agents.md, skills/*.md, and manifest. No MCP, runner, or bootstrap behavior. Use this to keep Codex aligned with your Lore configuration without enabling Lore MCP runtime."
+		target.Description = "Managed Codex projection into ~/.codex with remote Lore MCP config, managed agents.md, skills/*.md, and manifest. No codex exec runner or bootstrap behavior is installed."
 	default:
 		target.Description = "Supported target."
 	}
@@ -152,7 +154,7 @@ func FormatTargetSelection(targets []Target) string {
 		}
 		fmt.Fprintf(&b, "- %s: %s (%s)\n", label, target.Description, target.Availability)
 	}
-	b.WriteString("\nPi remains the default recommended path and uses hosted Lore MCP by default. Antigravity can write ~/.gemini/config/agents/lore.json and optionally write direct MCP config.")
+	b.WriteString("\nPi remains the default recommended path and uses hosted Lore MCP by default. OpenCode provides bounded config-only support for ~/.config/opencode/AGENTS.md, skills/*.md, a Lore-owned opencode.json block, and manifest/backups without plugins, profiles, or MCP token persistence. Antigravity can write ~/.gemini/config/agents/lore.json and optionally write direct MCP config.")
 	return b.String()
 }
 

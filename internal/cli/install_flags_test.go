@@ -62,6 +62,69 @@ func TestInstallCommandRejectsUnsupportedInstallTarget(t *testing.T) {
 	assertNoTokenLeak(t, out, stderr.String(), "secret-token=unsupported-target")
 }
 
+func TestOpenCodeInstallDryRunAndApply(t *testing.T) {
+	homeDir := t.TempDir()
+	configDir := t.TempDir()
+	store := &fakeStore{path: filepath.Join(configDir, "config.json"), loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token=opencode"}}
+	client := &fakeClient{subject: httpclient.Subject{UserID: "user-1", Kind: "user"}}
+	app, stdout, stderr := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
+	app.UserHomeDir = func() (string, error) { return homeDir, nil }
+	app.BuildInfo = version.Info{Version: "v1.2.3"}
+
+	t.Run("dry-run stays non-mutating", func(t *testing.T) {
+		if exitCode := app.Run([]string{"install", "--dry-run", "--target", "opencode"}); exitCode != 0 {
+			t.Fatalf("install --dry-run --target opencode exitCode = %d, want 0, stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+		}
+		out := stdout.String()
+		for _, want := range []string{"install_target=opencode", "scope=config-only", "settings_merge=lore-top-level-only", "commands=omitted", "managed_action=create:AGENTS.md", "managed_action=create:opencode.json"} {
+			if !strings.Contains(out, want) {
+				t.Fatalf("stdout = %q, want substring %q", out, want)
+			}
+		}
+		if _, err := os.Stat(filepath.Join(homeDir, ".config", "opencode", "lore-install.json")); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("manifest stat err = %v, want no writes after dry-run", err)
+		}
+		assertNoTokenLeak(t, out, stderr.String(), "secret-token=opencode")
+		stdout.Reset()
+		stderr.Reset()
+	})
+
+	t.Run("apply writes bounded managed surface only", func(t *testing.T) {
+		if exitCode := app.Run([]string{"install", "--target", "opencode"}); exitCode != 0 {
+			t.Fatalf("install --target opencode exitCode = %d, want 0, stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+		}
+		out := stdout.String()
+		for _, want := range []string{"install_target=opencode", "scope=config-only", "commands=omitted", "opencode-config", "lore_block=top-level-only"} {
+			if !strings.Contains(out, want) {
+				t.Fatalf("stdout = %q, want substring %q", out, want)
+			}
+		}
+		for _, path := range []string{
+			filepath.Join(homeDir, ".config", "opencode", "AGENTS.md"),
+			filepath.Join(homeDir, ".config", "opencode", "opencode.json"),
+			filepath.Join(homeDir, ".config", "opencode", "lore-install.json"),
+			filepath.Join(homeDir, ".config", "opencode", "skills", "sdd-apply", "SKILL.md"),
+		} {
+			if _, err := os.Stat(path); err != nil {
+				t.Fatalf("stat %s error = %v, want installed OpenCode artifact", path, err)
+			}
+		}
+		if _, err := os.Stat(filepath.Join(homeDir, ".config", "opencode", "commands")); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("commands dir stat err = %v, want commands omitted in this slice", err)
+		}
+		configBody, err := os.ReadFile(filepath.Join(homeDir, ".config", "opencode", "opencode.json"))
+		if err != nil {
+			t.Fatalf("ReadFile(opencode.json) error = %v", err)
+		}
+		for _, want := range []string{`"lore": {`, `"managed_by": "lore-cli"`, `"skills_dir": "~/.config/opencode/skills"`} {
+			if !strings.Contains(string(configBody), want) {
+				t.Fatalf("opencode.json = %q, want substring %q", string(configBody), want)
+			}
+		}
+		assertNoTokenLeak(t, out, stderr.String(), "secret-token=opencode")
+	})
+}
+
 func TestInstallCommandSupportsAntigravityDryRunAndApply(t *testing.T) {
 	homeDir := t.TempDir()
 	configDir := t.TempDir()
@@ -206,7 +269,7 @@ func TestInstallUsageIncludesTargetAndComponentFlags(t *testing.T) {
 	if exitCode := app.Run([]string{"install", "--help"}); exitCode != 1 {
 		t.Fatalf("install --help exitCode = %d, want 1 with usage output", exitCode)
 	}
-	for _, want := range []string{"--target", "--component", "Pi-first managed runtime", "portable Lore agent pack", "core-pack", "pi-extensions", "Antigravity", "prompt + skills MVP", "plaintext Authorization bearer token", "~/.gemini/config/mcp_config.json", "~/.gemini/config/agents/lore.json", "codex", "config-only"} {
+	for _, want := range []string{"--target", "--component", "Pi-first managed runtime", "portable Lore agent pack", "core-pack", "pi-extensions", "OpenCode", "~/.config/opencode/opencode.json", "commands stay omitted", "Antigravity", "prompt + skills MVP", "plaintext Authorization bearer token", "~/.gemini/config/mcp_config.json", "~/.gemini/config/agents/lore.json", "codex", "~/.codex/config.toml", "/v1/mcp"} {
 		if !strings.Contains(stderr.String(), want) {
 			t.Fatalf("stderr = %q, want substring %q", stderr.String(), want)
 		}

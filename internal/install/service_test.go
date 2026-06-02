@@ -33,14 +33,19 @@ func TestDefaultTargetsPreferPiAndMarkOthersComingSoon(t *testing.T) {
 	if got := findTarget(targets, TargetAntigravity); !got.Available || got.Recommended || !containsAll(got.Description, "prompt", "skills", "agent profile", "optional direct MCP config") {
 		t.Fatalf("antigravity target = %+v, want supported prompt/skills target with managed Gemini agent profile and optional direct MCP config", got)
 	}
-	for _, want := range []TargetID{TargetClaudeCode, TargetOpenCode} {
-		target := findTarget(targets, want)
-		if target.Available {
-			t.Fatalf("target %s unexpectedly available", want)
-		}
-		if got := target.Availability; got != "Coming soon" {
-			t.Fatalf("target %s availability = %q, want Coming soon", want, got)
-		}
+	target := findTarget(targets, TargetOpenCode)
+	if !target.Available || !containsAll(target.Description, "Bounded OpenCode support", "opencode.json", "Commands stay omitted") {
+		t.Fatalf("target opencode = %+v, want available bounded OpenCode target", target)
+	}
+	if target.Availability != "" {
+		t.Fatalf("target opencode availability = %q, want empty availability for registered groundwork target", target.Availability)
+	}
+	claudeCode := findTarget(targets, TargetClaudeCode)
+	if claudeCode.Available {
+		t.Fatalf("target %s unexpectedly available", TargetClaudeCode)
+	}
+	if got := claudeCode.Availability; got != "Coming soon" {
+		t.Fatalf("target %s availability = %q, want Coming soon", TargetClaudeCode, got)
 	}
 	// Codex is now a supported target (config-only projection).
 	if got := findTarget(targets, TargetCodex); !got.Available {
@@ -73,6 +78,14 @@ func TestResolveInstallTargetKeepsPiDefaultAndRejectsRoadmapTargets(t *testing.T
 		t.Fatalf("ResolveInstallTarget(antigravity) = %+v, want supported Antigravity target", selected)
 	}
 
+	selected, err = ResolveInstallTarget(TargetOpenCode)
+	if err != nil {
+		t.Fatalf("ResolveInstallTarget(opencode) error = %v, want nil", err)
+	}
+	if selected.ID != TargetOpenCode || !selected.Available {
+		t.Fatalf("ResolveInstallTarget(opencode) = %+v, want registered bounded target", selected)
+	}
+
 	if _, err := ResolveInstallTarget(TargetClaudeCode); err == nil || !containsAll(err.Error(), string(TargetClaudeCode), "Coming soon", "supported targets") {
 		t.Fatalf("ResolveInstallTarget(claude-code) error = %v, want roadmap guardrail", err)
 	}
@@ -83,7 +96,7 @@ func TestResolveInstallTargetKeepsPiDefaultAndRejectsRoadmapTargets(t *testing.T
 
 func TestFormatTargetSelectionExplainsPiNativePathAndMCPDeferral(t *testing.T) {
 	formatted := FormatTargetSelection(DefaultTargets())
-	for _, want := range []string{"Choose an install target:", "Pi — Recommended", "uses hosted Lore MCP", "Antigravity:", "prompt + skills", "Coming soon", "Pi remains the default recommended path", "uses hosted Lore MCP by default", "~/.gemini/config/agents/lore.json", "optionally write direct MCP config"} {
+	for _, want := range []string{"Choose an install target:", "Pi — Recommended", "uses hosted Lore MCP", "Antigravity:", "prompt + skills", "OpenCode:", "opencode.json", "Commands stay omitted", "Coming soon", "Pi remains the default recommended path", "uses hosted Lore MCP by default", "~/.gemini/config/agents/lore.json", "optionally write direct MCP config"} {
 		if !strings.Contains(formatted, want) {
 			t.Fatalf("FormatTargetSelection() = %q, want substring %q", formatted, want)
 		}

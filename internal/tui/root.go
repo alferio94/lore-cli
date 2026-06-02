@@ -128,7 +128,7 @@ func newModel(actions cli.InteractiveActions) model {
 			{key: "login", title: "Login", description: "Use email + password to mint a reusable token, store only that token in secure credential storage, and keep --token as CLI compatibility mode."},
 			{key: "logout", title: "Logout", description: "Remove the local session only. Safe to repeat."},
 			{key: "doctor", title: "Doctor", description: "Run actionable diagnostics, including Pi availability."},
-			{key: "install", title: "Install", description: "Pi is recommended today; Codex is supported as config-only projection, Antigravity is the prompt + skills MVP target, and Claude Code/OpenCode remain Coming soon."},
+			{key: "install", title: "Install", description: "Pi is recommended today; OpenCode has bounded config-only support, Codex writes managed remote MCP + skills config, Antigravity is the prompt + skills MVP target, and Claude Code remains Coming soon."},
 			{key: "update", title: "Update", description: "Check or apply a binary-only Lore CLI update; Pi runtime and ~/.pi stay untouched."},
 			{key: "quit", title: "Quit", description: "Leave the interactive shell."},
 		},
@@ -610,7 +610,7 @@ func (m model) renderInstallTargetSelection() string {
 		}
 		fmt.Fprintf(&b, "%s%s: %s (%s)\n", prefix, label, target.Description, target.Availability)
 	}
-	fmt.Fprintf(&b, "\nSelected target: %s. Use ↑/↓ to switch between supported targets and Enter to continue. Pi remains the default recommended path. Pi MCP stays disabled by default while Antigravity can write ~/.gemini/config/agents/lore.json and optionally write direct MCP config.", selected.Title)
+	fmt.Fprintf(&b, "\nSelected target: %s. Use ↑/↓ to switch between supported targets and Enter to continue. Pi remains the default recommended path. OpenCode manages ~/.config/opencode/AGENTS.md, skills/*.md, a Lore-owned opencode.json block, and backup/manifest files only. Antigravity can write ~/.gemini/config/agents/lore.json and optionally write direct MCP config.", selected.Title)
 	return b.String()
 }
 

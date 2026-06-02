@@ -546,6 +546,9 @@ func (a *App) updateActionWithOptions(ctx context.Context, opts updateCommandOpt
 
 func (a *App) installActionWithOptions(ctx context.Context, opts installCommandOptions) ActionReport {
 	selectedTarget, err := install.ResolveInstallTarget(opts.Target)
+	if err == nil && selectedTarget.ID == install.TargetOpenCode {
+		return a.installOpenCodeActionWithOptions(ctx, opts)
+	}
 	if err == nil && selectedTarget.ID == install.TargetCodex {
 		return a.installCodexActionWithOptions(ctx, opts)
 	}
@@ -648,6 +651,68 @@ func (a *App) installAntigravityActionWithOptions(ctx context.Context, opts inst
 	}
 	report.Checks = append(report.Checks,
 		output.Check{Name: "manifest", Status: output.StatusOK, Detail: fmt.Sprintf("verified %s auth_mode=%s managed_files=%d managed_overlays=%d", result.Layout.ManifestPath, result.Manifest.AuthMode, len(result.Manifest.ManagedFiles), len(result.Manifest.ManagedAgentOverlays))},
+	)
+	return report
+}
+
+func (a *App) installOpenCodeActionWithOptions(ctx context.Context, opts installCommandOptions) ActionReport {
+	service := install.Service{Store: a.Store, Auth: a.authManager(), ClientFactory: install.ClientFactory(a.ClientFactory), AgentConfigStore: a.AgentConfigStore}
+	report := ActionReport{Title: "Lore install"}
+	preflight := service.Preflight(ctx)
+	report.Checks = append(report.Checks, preflight.Checks...)
+	if !preflight.CanContinue {
+		report.ExitCode = 1
+		return report
+	}
+
+	homeDir, err := a.resolveUserHomeDir()
+	if err != nil {
+		report.Checks = append(report.Checks, output.Check{Name: "install", Status: output.StatusFail, Detail: err.Error(), Action: "Retry after HOME can be resolved for the current user."})
+		report.ExitCode = 1
+		return report
+	}
+	configPath, err := a.Store.Path()
+	if err != nil {
+		report.Checks = append(report.Checks, output.Check{Name: "install", Status: output.StatusFail, Detail: err.Error(), Action: "Fix the local config directory permissions or override LORE_CONFIG_DIR."})
+		report.ExitCode = 1
+		return report
+	}
+
+	plan, err := service.PlanOpenCodeInstall(install.InstallRequest{
+		HomeDir:        homeDir,
+		LoreConfigDir:  filepath.Dir(configPath),
+		LoreCLIVersion: a.BuildInfo.Normalized().Version,
+		Target:         install.TargetOpenCode,
+		Components:     append([]install.ComponentID(nil), opts.Components...),
+	})
+	if err != nil {
+		report.Checks = append(report.Checks, output.Check{Name: "install", Status: output.StatusFail, Detail: err.Error(), Action: "Inspect the requested OpenCode components and rerun lore install after fixing the reported issue."})
+		report.ExitCode = 1
+		return report
+	}
+	if opts.DryRun {
+		report.Checks = append(report.Checks, output.Check{Name: "install", Status: output.StatusOK, Detail: formatSharedInstallPlanSummary(plan, true)})
+		return report
+	}
+	result, err := service.ExecuteOpenCodeInstall(plan, install.InstallCommandOptions{})
+	if err != nil {
+		report.Checks = append(report.Checks, output.Check{Name: "install", Status: output.StatusFail, Detail: err.Error(), Action: "Inspect the OpenCode config directory and rerun lore install after fixing the reported issue."})
+		report.ExitCode = 1
+		return report
+	}
+	status := output.StatusOK
+	if len(result.Summary.Failed) > 0 {
+		status = output.StatusFail
+		report.ExitCode = 1
+	}
+	report.Checks = append(report.Checks,
+		output.Check{Name: "install", Status: status, Detail: formatSharedInstallSummary(result)},
+	)
+	report.Checks = append(report.Checks,
+		output.Check{Name: "manifest", Status: output.StatusOK, Detail: fmt.Sprintf("verified %s auth_mode=%s managed_files=%d", result.Layout.ManifestPath, result.Manifest.AuthMode, len(result.Manifest.ManagedFiles))},
+	)
+	report.Checks = append(report.Checks,
+		output.Check{Name: "opencode-config", Status: output.StatusWarn, Detail: fmt.Sprintf("managed surface root=%s settings=%s lore_block=top-level-only commands=omitted backups=before-overwrite", result.Layout.RootDir, result.Layout.Paths["opencode_json"]), Action: "Rerun lore install after agent-config or managed skill changes; plugins, profiles, bootstrap, and MCP token persistence remain out of scope."},
 	)
 	return report
 }
@@ -922,6 +987,9 @@ func formatSharedInstallSummary(result install.InstallResult) string {
 	if result.Target == install.TargetPi {
 		return fmt.Sprintf("install_target=%s runtime=pi-remote-package", result.Target)
 	}
+	if result.Target == install.TargetOpenCode {
+		return formatOpenCodeInstallSummary(result)
+	}
 	if result.Target == install.TargetCodex {
 		return formatCodexInstallSummary(result)
 	}
@@ -964,6 +1032,9 @@ func formatSharedInstallPlanSummary(plan install.InstallPlan, dryRun bool) strin
 	if plan.Layout.Target == install.TargetPi {
 		return fmt.Sprintf("install_target=%s runtime=pi-remote-package", plan.Layout.Target)
 	}
+	if plan.Layout.Target == install.TargetOpenCode {
+		return formatOpenCodeInstallPlanSummary(plan, dryRun)
+	}
 	if plan.Layout.Target == install.TargetCodex {
 		return formatCodexInstallPlanSummary(plan, dryRun)
 	}
@@ -977,6 +1048,23 @@ func antigravityMCPInstalled(components []install.ComponentID) bool {
 		}
 	}
 	return false
+}
+
+// formatOpenCodeInstallSummary produces the OpenCode-specific apply summary.
+func formatOpenCodeInstallSummary(result install.InstallResult) string {
+	summary := fmt.Sprintf("install_target=%s scope=config-only settings_merge=lore-top-level-only components=%s managed_files=%d created=%d updated=%d unchanged=%d backed_up=%d failed=%d",
+		result.Target, formatComponentIDs(result.Manifest.Components), len(result.Manifest.ManagedFiles),
+		len(result.Summary.Created), len(result.Summary.Updated), len(result.Summary.Unchanged),
+		len(result.Summary.BackedUp), len(result.Summary.Failed))
+	parts := []string{summary}
+	parts = append(parts, formatManagedFileSummaryParts(result.Summary.Created, "create")...)
+	parts = append(parts, formatManagedFileSummaryParts(result.Summary.Updated, "update")...)
+	parts = append(parts, formatManagedFileSummaryParts(result.Summary.Unchanged, "unchanged")...)
+	parts = append(parts, "commands=omitted", "plugins=none", "profiles=none", "mcp=none")
+	if len(result.Summary.Failed) > 0 {
+		parts = append(parts, fmt.Sprintf("findings=%s", strings.Join(result.Summary.Failed, "; ")))
+	}
+	return strings.Join(parts, " ")
 }
 
 // formatCodexInstallSummary produces the Codex-specific dry-run/apply summary.
@@ -1008,6 +1096,29 @@ func formatAntigravityInstallSummary(result install.InstallResult) string {
 	parts = append(parts, formatManagedFileSummaryParts(result.Summary.Unchanged, "unchanged")...)
 	if len(result.Summary.Failed) > 0 {
 		parts = append(parts, fmt.Sprintf("findings=%s", strings.Join(result.Summary.Failed, "; ")))
+	}
+	return strings.Join(parts, " ")
+}
+
+// formatOpenCodeInstallPlanSummary produces the OpenCode-specific plan summary.
+func formatOpenCodeInstallPlanSummary(plan install.InstallPlan, dryRun bool) string {
+	parts := []string{
+		fmt.Sprintf("install_target=%s", plan.Layout.Target),
+		"scope=config-only",
+		"settings_merge=lore-top-level-only",
+		fmt.Sprintf("components=%s", formatComponentIDs(plan.Components)),
+		fmt.Sprintf("target=%s", plan.Layout.RootDir),
+		fmt.Sprintf("manifest=%s", plan.Layout.ManifestPath),
+		"commands=omitted",
+		"plugins=none",
+		"profiles=none",
+		"mcp=none",
+	}
+	if dryRun {
+		parts = append(parts, "mode=dry-run")
+	}
+	for _, action := range plan.Files {
+		parts = append(parts, fmt.Sprintf("managed_action=%s:%s", action.Action, action.RelativePath))
 	}
 	return strings.Join(parts, " ")
 }

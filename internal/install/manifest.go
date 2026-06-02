@@ -133,6 +133,44 @@ func (m Manifest) Validate(layout PiLayout) error {
 	return nil
 }
 
+func validateManifestManagedFileRecords(records []ManagedFileRecord, expectedPaths []string) error {
+	if len(records) == 0 {
+		return fmt.Errorf("managed_files are required")
+	}
+	if len(expectedPaths) > 0 && len(records) != len(expectedPaths) {
+		return fmt.Errorf("managed_files length = %d, want %d", len(records), len(expectedPaths))
+	}
+	seen := make(map[string]int, len(records))
+	for i, mf := range records {
+		if strings.TrimSpace(mf.Path) == "" {
+			return fmt.Errorf("managed_files[%d].path is required", i)
+		}
+		cleanPath := filepath.Clean(mf.Path)
+		if prev, ok := seen[cleanPath]; ok {
+			return fmt.Errorf("managed_files[%d].path duplicates managed_files[%d]: %q", i, prev, mf.Path)
+		}
+		seen[cleanPath] = i
+		if len(expectedPaths) > 0 && cleanPath != filepath.Clean(expectedPaths[i]) {
+			return fmt.Errorf("managed_files[%d].path = %q, want %q", i, mf.Path, expectedPaths[i])
+		}
+		if mf.Component == "" {
+			return fmt.Errorf("managed_files[%d].component is required", i)
+		}
+		switch mf.MergeMode {
+		case MergeModeReplace, MergeModeAdditiveJSON, MergeModeMarkerMerge:
+			// valid
+		case "":
+			return fmt.Errorf("managed_files[%d].merge_mode is required", i)
+		default:
+			return fmt.Errorf("managed_files[%d].merge_mode = %q is not supported", i, mf.MergeMode)
+		}
+		if strings.TrimSpace(mf.ContentHash) == "" {
+			return fmt.Errorf("managed_files[%d].content_hash is required", i)
+		}
+	}
+	return nil
+}
+
 func (m Manifest) ValidateForLayout(layout HarnessLayout, managedFiles []string, backupRootDir string) error {
 	if m.SchemaVersion != PortableManifestSchemaVersion {
 		return fmt.Errorf("schema_version = %q, want %q", m.SchemaVersion, PortableManifestSchemaVersion)
@@ -146,23 +184,10 @@ func (m Manifest) ValidateForLayout(layout HarnessLayout, managedFiles []string,
 	default:
 		return fmt.Errorf("auth_mode = %q, want %q or %q", m.AuthMode, "cli-request", "config-only")
 	}
+	if err := validateManifestManagedFileRecords(m.ManagedFiles, managedFiles); err != nil {
+		return err
+	}
 	if m.AuthMode == "config-only" {
-		// config-only targets validate ManagedFiles, BackupRoot, and InstalledAt.
-		// These checks are the fail-closed guard for the Codex/config-only layout.
-		if len(m.ManagedFiles) == 0 {
-			return fmt.Errorf("managed_files are required")
-		}
-		for i, mf := range m.ManagedFiles {
-			if strings.TrimSpace(mf.Path) == "" {
-				return fmt.Errorf("managed_files[%d].path is required", i)
-			}
-			if mf.Component == "" {
-				return fmt.Errorf("managed_files[%d].component is required", i)
-			}
-			if mf.MergeMode == "" {
-				return fmt.Errorf("managed_files[%d].merge_mode is required", i)
-			}
-		}
 		backupPrefix := filepath.Clean(backupRootDir) + string(os.PathSeparator)
 		if !strings.HasPrefix(filepath.Clean(m.BackupRoot), backupPrefix) {
 			return fmt.Errorf("backup_root = %q, want path under %q", m.BackupRoot, backupRootDir)
@@ -184,24 +209,6 @@ func (m Manifest) ValidateForLayout(layout HarnessLayout, managedFiles []string,
 	}
 	if len(m.Components) == 0 {
 		return fmt.Errorf("components are required")
-	}
-	if len(m.ManagedFiles) != len(managedFiles) {
-		return fmt.Errorf("managed_files length = %d, want %d", len(m.ManagedFiles), len(managedFiles))
-	}
-	for i, want := range managedFiles {
-		got := m.ManagedFiles[i]
-		if filepath.Clean(got.Path) != filepath.Clean(want) {
-			return fmt.Errorf("managed_files[%d].path = %q, want %q", i, got.Path, want)
-		}
-		if got.Component == "" {
-			return fmt.Errorf("managed_files[%d].component is required", i)
-		}
-		if got.MergeMode == "" {
-			return fmt.Errorf("managed_files[%d].merge_mode is required", i)
-		}
-		if strings.TrimSpace(got.ContentHash) == "" && m.SchemaVersion == PortableManifestSchemaVersion {
-			return fmt.Errorf("managed_files[%d].content_hash is required", i)
-		}
 	}
 	backupPrefix := filepath.Clean(backupRootDir) + string(os.PathSeparator)
 	if !strings.HasPrefix(filepath.Clean(m.BackupRoot), backupPrefix) {

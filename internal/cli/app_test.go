@@ -872,7 +872,7 @@ func TestInstallUsageIncludesPiFirstGuidance(t *testing.T) {
 		"Rerun lore install to refresh the extended-skills bundle",
 		"lore update does not touch skill files",
 		"Antigravity is the prompt + skills MVP target",
-		"Claude Code and OpenCode are Coming soon",
+		"Claude Code remains Coming soon",
 	} {
 		if !strings.Contains(stderr.String(), want) {
 			t.Fatalf("stderr = %q, want substring %q", stderr.String(), want)
@@ -1280,12 +1280,6 @@ func TestAPIRequestCommandReturnsMachineReadableExitCodes(t *testing.T) {
 	}
 }
 
-
-
-
-
-
-
 func TestNewConfiguresProductionDefaults(t *testing.T) {
 	stdout := &strings.Builder{}
 	stderr := &strings.Builder{}
@@ -1328,26 +1322,6 @@ func TestComponentFlagParsesRepeatedCommaSeparatedValues(t *testing.T) {
 		t.Fatalf("Set empty error = %v, want empty component rejection", err)
 	}
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 func testMCPFrame(payload string) string {
 	return fmt.Sprintf("Content-Length: %d\r\n\r\n%s", len(payload), payload)
@@ -1670,12 +1644,6 @@ func (c *fakeClient) RequestJSON(_ context.Context, method, path, token string, 
 	}
 	return c.requestJSONResult, nil
 }
-
-
-
-
-
-
 
 func assertNoTokenLeak(t *testing.T, stdout, stderr, token string) {
 	t.Helper()

@@ -126,7 +126,7 @@ func (a antigravityAdapter) Render(_ context.Context, req RenderRequest) ([]Rend
 	rendered := []RenderedFile{{
 		Component:    ComponentCorePack,
 		RelativePath: filepath.ToSlash(filepath.Join("..", "GEMINI.md")),
-		MergeMode:    MergeMode("marker-merge"),
+		MergeMode:    MergeModeMarkerMerge,
 		Content:      renderAntigravityPrompt(definition),
 	}}
 	rendered = append(rendered, renderAntigravitySkills(req)...)

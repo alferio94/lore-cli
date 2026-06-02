@@ -313,19 +313,22 @@ func (a *App) runInstall(_ InteractiveActions, args []string) int {
 	fs := newFlagSet("install", a.Stderr)
 	dryRun := fs.Bool("dry-run", false, "Show the selected install plan without mutating managed runtime files")
 	yes := fs.Bool("yes", false, "Accept the safe default full-backup behavior without prompting")
-	target := fs.String("target", string(install.DefaultInstallTarget()), "Install target (Pi stays the default recommended target; Antigravity is the prompt + skills MVP target)")
+	target := fs.String("target", string(install.DefaultInstallTarget()), "Install target (Pi stays the default recommended target; OpenCode, Codex, and Antigravity are supported managed targets)")
 	var components componentFlag
-	fs.Var(&components, "component", "Optional component override; repeat or use a comma-separated list (Pi supports core-pack, lore-server-mcp, and extended-skills; Antigravity supports core-pack, lore-server-mcp, and extended-skills)")
+	fs.Var(&components, "component", "Optional component override; repeat or use a comma-separated list (Pi, OpenCode, Codex, and Antigravity support core-pack; OpenCode also supports extended-skills, while Pi/Codex/Antigravity also support lore-server-mcp)")
 	fs.Usage = func() {
-		fmt.Fprintln(a.Stderr, "Usage: lore install [--dry-run] [--yes] [--target pi|codex|antigravity] [--component <id>]")
+		fmt.Fprintln(a.Stderr, "Usage: lore install [--dry-run] [--yes] [--target pi|opencode|codex|antigravity] [--component <id>]")
 		fmt.Fprintln(a.Stderr, "Install the Pi-first managed runtime using saved Lore login state.")
 		fmt.Fprintln(a.Stderr, "Pi is the default and installs the portable Lore agent pack, hosted Lore MCP via pi-mcp-adapter, and an extended-skills bundle (skill-creator, skill-registry, judgment-day).")
+		fmt.Fprintln(a.Stderr, "OpenCode writes bounded config-only Lore files into ~/.config/opencode: AGENTS.md, skills/*.md, ~/.config/opencode/opencode.json with a Lore-owned top-level block, and manifest/backups. commands stay omitted unless a later approved slice adds them.")
 		fmt.Fprintln(a.Stderr, "Antigravity is the prompt + skills MVP target with the portable pack, lore-server-mcp, and extended-skills bundle.")
-		fmt.Fprintln(a.Stderr, "Codex is the config-only Lore projection into ~/.codex: managed agents.md, skills/*.md, and manifest. No MCP, runner, or bootstrap behavior.")
-		fmt.Fprintln(a.Stderr, "Use --component to override defaults. Without flags, a complete default install is selected. Rerun lore install to refresh the extended-skills bundle; lore update does not touch skill files or managed runtime content.")
-		fmt.Fprintln(a.Stderr, "Healthy saved OS keychain-backed login metadata is reused automatically; Claude Code and OpenCode are Coming soon.")
+		fmt.Fprintln(a.Stderr, "Codex writes managed agents.md, config.toml remote MCP config, skills/*.md, and manifest into ~/.codex. No codex exec runner or bootstrap behavior is installed.")
+		fmt.Fprintln(a.Stderr, "Use --component to override defaults. Without flags, a complete target-specific default install is selected. Rerun lore install to refresh the extended-skills bundle; lore update does not touch skill files or managed runtime content.")
+		fmt.Fprintln(a.Stderr, "Healthy saved OS keychain-backed login metadata is reused automatically; Claude Code remains Coming soon.")
 		fmt.Fprintln(a.Stderr, "Pi uses hosted Lore MCP via pi-mcp-adapter by default; legacy pi-extensions (lore-memory.ts) are available as an optional explicit override via --component pi-extensions but are not installed by default.")
+		fmt.Fprintln(a.Stderr, "OpenCode install does not write plugins, profiles, bootstrap/package-manager files, MCP token config, or native/runtime subagent wiring in this slice.")
 		fmt.Fprintln(a.Stderr, "Antigravity install writes ~/.gemini/config/agents/lore.json for the managed Lore profile and, when MCP is selected, writes ~/.gemini/config/mcp_config.json with the Lore /v1/mcp server URL plus a plaintext Authorization bearer token.")
+		fmt.Fprintln(a.Stderr, "Codex install writes ~/.codex/config.toml with a managed Lore remote MCP entry pointing at /v1/mcp and a plaintext Authorization bearer token under [mcp_servers.lore.http_headers].")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {

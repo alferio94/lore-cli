@@ -224,7 +224,7 @@ func TestManifestValidateForLayoutConfigOnlyFailsClosed(t *testing.T) {
 	backupRoot := filepath.Join(layout.RootDir, "backups", "20260529T120000Z")
 
 	tests := []struct {
-		name    string
+		name     string
 		manifest Manifest
 		wantErr  string
 	}{
@@ -382,5 +382,34 @@ func TestManifestValidateForLayoutUsesSharedHarnessLayoutGroundwork(t *testing.T
 	broken.Target = TargetAntigravity
 	if err := broken.ValidateForLayout(layout.HarnessLayout(), layout.ManagedFiles, filepath.Join(layout.AgentDir, "backups")); err == nil || !strings.Contains(err.Error(), "target") {
 		t.Fatalf("ValidateForLayout() err = %v, want shared target mismatch rejection", err)
+	}
+}
+
+func TestManifestValidateAllowsAntigravityMarkerMerge(t *testing.T) {
+	layout := ResolveAntigravityLayout(t.TempDir())
+	backupRoot := filepath.Join(layout.RootDir, "backups", "20260602T123000Z")
+	managedPaths := []string{
+		layout.Paths["shared_prompt"],
+		layout.Paths["agent_profile"],
+		layout.Paths["mcp_config"],
+	}
+	manifest := Manifest{
+		SchemaVersion: PortableManifestSchemaVersion,
+		Target:        TargetAntigravity,
+		AuthMode:      "cli-request",
+		ServerURL:     "https://example.test",
+		LoreBinary:    "/usr/local/bin/lore",
+		LoreConfigDir: filepath.Join(t.TempDir(), ".lore"),
+		Components:    []ComponentID{ComponentCorePack, ComponentLoreServerMCP},
+		ManagedFiles: []ManagedFileRecord{
+			{Path: managedPaths[0], Component: ComponentCorePack, MergeMode: MergeModeMarkerMerge, ContentHash: contentHash([]byte("prompt"))},
+			{Path: managedPaths[1], Component: ComponentCorePack, MergeMode: MergeModeReplace, ContentHash: contentHash([]byte("agent-profile"))},
+			{Path: managedPaths[2], Component: ComponentLoreServerMCP, MergeMode: MergeModeAdditiveJSON, ContentHash: contentHash([]byte("mcp"))},
+		},
+		BackupRoot:  backupRoot,
+		InstalledAt: "2026-06-02T12:30:00Z",
+	}
+	if err := manifest.ValidateForLayout(layout, managedPaths, filepath.Join(layout.RootDir, "backups")); err != nil {
+		t.Fatalf("ValidateForLayout() error = %v, want nil for marker-merge prompt entry", err)
 	}
 }

@@ -9,7 +9,7 @@ import (
 	"github.com/alferio94/lore-cli/internal/agentpack"
 )
 
-func TestDefaultComponentSelectionUsesHostedMCPForPiAndMCPForAntigravity(t *testing.T) {
+func TestDefaultComponentSelectionUsesHostedMCPForPiCodexAndAntigravity(t *testing.T) {
 	// Pi default: hosted Lore MCP via pi-mcp-adapter (lore-server-mcp), not lore-memory extensions.
 	if got := DefaultComponentSelection(TargetPi); !equalComponentIDs(got, []ComponentID{ComponentCorePack, ComponentLoreServerMCP, ComponentExtendedSkills}) {
 		t.Fatalf("DefaultComponentSelection(pi) = %v, want core-pack + lore-server-mcp + extended-skills (hosted MCP default)", got)
@@ -18,9 +18,14 @@ func TestDefaultComponentSelectionUsesHostedMCPForPiAndMCPForAntigravity(t *test
 	if got := DefaultComponentSelection(TargetAntigravity); !equalComponentIDs(got, []ComponentID{ComponentCorePack, ComponentLoreServerMCP, ComponentExtendedSkills}) {
 		t.Fatalf("DefaultComponentSelection(antigravity) = %v, want core-pack + lore-server-mcp + extended-skills", got)
 	}
-	// Other targets: core-pack only.
-	if got := DefaultComponentSelection(TargetClaudeCode); !equalComponentIDs(got, []ComponentID{ComponentCorePack}) {
-		t.Fatalf("DefaultComponentSelection(claude-code) = %v, want core-pack only", got)
+	if got := DefaultComponentSelection(TargetCodex); !equalComponentIDs(got, []ComponentID{ComponentCorePack, ComponentLoreServerMCP, ComponentExtendedSkills}) {
+		t.Fatalf("DefaultComponentSelection(codex) = %v, want core-pack + lore-server-mcp + extended-skills", got)
+	}
+	// Other bounded targets: core-pack only.
+	for _, target := range []TargetID{TargetClaudeCode, TargetOpenCode} {
+		if got := DefaultComponentSelection(target); !equalComponentIDs(got, []ComponentID{ComponentCorePack}) {
+			t.Fatalf("DefaultComponentSelection(%s) = %v, want core-pack only", target, got)
+		}
 	}
 
 	// NormalizeComponentSelection with lore-server-mcp for Pi should now succeed (was previously rejected).
@@ -131,8 +136,26 @@ func TestRegistryResolveReturnsTargetAdapterAndCapabilities(t *testing.T) {
 		t.Fatal("Supports(lore-server-mcp) = false, want true for optional Antigravity MCP groundwork")
 	}
 
-	if _, err := registry.Resolve(TargetOpenCode); err == nil {
-		t.Fatal("Resolve(opencode) error = nil, want unavailable target error")
+	adapter, err = registry.Resolve(TargetCodex)
+	if err != nil {
+		t.Fatalf("Resolve(codex) error = %v, want nil", err)
+	}
+	if !adapter.Supports(ComponentLoreServerMCP) {
+		t.Fatal("Supports(lore-server-mcp) = false, want true for Codex remote MCP")
+	}
+
+	adapter, err = registry.Resolve(TargetOpenCode)
+	if err != nil {
+		t.Fatalf("Resolve(opencode) error = %v, want nil", err)
+	}
+	if adapter.Title() != "OpenCode" {
+		t.Fatalf("adapter.Title() = %q, want OpenCode", adapter.Title())
+	}
+	if !adapter.Supports(ComponentCorePack) {
+		t.Fatal("Supports(core-pack) = false, want true for OpenCode groundwork")
+	}
+	if adapter.Supports(ComponentLoreServerMCP) {
+		t.Fatal("Supports(lore-server-mcp) = true, want false for bounded OpenCode groundwork")
 	}
 }
 

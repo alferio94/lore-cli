@@ -365,6 +365,65 @@ func TestUpdateServiceWiresProductionCandidateProbe(t *testing.T) {
 	}
 }
 
+func TestOpenCodeInstallPlanSummaryUsesBoundedTargetSpecificCopy(t *testing.T) {
+	plan := install.InstallPlan{
+		Layout: install.HarnessLayout{
+			Target:       install.TargetOpenCode,
+			RootDir:      "/home/user/.config/opencode",
+			ManifestPath: "/home/user/.config/opencode/lore-install.json",
+		},
+		Components: []install.ComponentID{install.ComponentCorePack, install.ComponentExtendedSkills},
+		Files: []install.PlanFileAction{
+			{RelativePath: "AGENTS.md", Action: "create"},
+			{RelativePath: "opencode.json", Action: "create"},
+			{RelativePath: "skills/sdd-apply/SKILL.md", Action: "create"},
+			{RelativePath: "lore-install.json", Action: "create"},
+		},
+	}
+
+	summary := formatOpenCodeInstallPlanSummary(plan, true)
+	for _, forbidden := range []string{"runtime=antigravity", "prompt=", "mcp_optional", "runtime=codex", "config.toml"} {
+		if strings.Contains(summary, forbidden) {
+			t.Fatalf("OpenCode plan summary should omit %q: %s", forbidden, summary)
+		}
+	}
+	for _, want := range []string{"install_target=opencode", "scope=config-only", "settings_merge=lore-top-level-only", "commands=omitted", "managed_action=create:AGENTS.md", "managed_action=create:opencode.json", "mode=dry-run"} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("OpenCode plan summary = %q, want substring %q", summary, want)
+		}
+	}
+}
+
+func TestOpenCodeInstallSummaryUsesBoundedTargetSpecificCopy(t *testing.T) {
+	result := install.InstallResult{
+		Target: install.TargetOpenCode,
+		Layout: install.HarnessLayout{Target: install.TargetOpenCode, RootDir: "/home/user/.config/opencode", ManifestPath: "/home/user/.config/opencode/lore-install.json"},
+		Manifest: install.Manifest{
+			SchemaVersion: "1.0",
+			Target:        install.TargetOpenCode,
+			AuthMode:      "config-only",
+			Components:    []install.ComponentID{install.ComponentCorePack},
+			ManagedFiles: []install.ManagedFileRecord{
+				{Path: "/home/user/.config/opencode/AGENTS.md", Component: install.ComponentCorePack, MergeMode: install.MergeModeReplace, ContentHash: "abc"},
+				{Path: "/home/user/.config/opencode/opencode.json", Component: install.ComponentCorePack, MergeMode: install.MergeModeAdditiveJSON, ContentHash: "def"},
+			},
+		},
+		Summary: install.InstallSummary{Created: []string{"/home/user/.config/opencode/AGENTS.md", "/home/user/.config/opencode/opencode.json"}},
+	}
+
+	summary := formatOpenCodeInstallSummary(result)
+	for _, forbidden := range []string{"runtime=antigravity", "mcp_optional", "runtime=codex", "config.toml"} {
+		if strings.Contains(summary, forbidden) {
+			t.Fatalf("OpenCode apply summary should omit %q: %s", forbidden, summary)
+		}
+	}
+	for _, want := range []string{"install_target=opencode", "scope=config-only", "settings_merge=lore-top-level-only", "commands=omitted", "plugins=none", "profiles=none", "mcp=none"} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("OpenCode apply summary = %q, want substring %q", summary, want)
+		}
+	}
+}
+
 // TestCodexInstallPlanSummaryNoAntigravityRuntime verifies that Codex dry-run/apply
 // summaries do NOT mention Antigravity runtime, prompt, or MCP false claims.
 func TestCodexInstallPlanSummaryNoAntigravityRuntime(t *testing.T) {
