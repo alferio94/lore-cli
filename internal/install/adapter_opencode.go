@@ -2,6 +2,7 @@ package install
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -20,6 +21,10 @@ const (
 	opencodeCommandsDirName   = "commands"
 	opencodeManifestFileName  = "lore-install.json"
 )
+
+// opencodeMCPBlockKey is the top-level key for the OpenCode remote MCP config.
+// OpenCode uses `mcp` (not `mcpServers`) as the canonical top-level key.
+const opencodeMCPBlockKey = "mcp"
 
 type opencodeAdapter struct {
 	target       TargetID
@@ -42,6 +47,12 @@ func defaultOpenCodeAdapter() HarnessAdapter {
 				ID:          CapabilityExtendedSkills,
 				Component:   ComponentExtendedSkills,
 				Description: "Portable extended skill bundle for CLI-managed non-agent skills.",
+				Optional:    true,
+			},
+			CapabilityLoreServerMCP: {
+				ID:          CapabilityLoreServerMCP,
+				Component:   ComponentLoreServerMCP,
+				Description: "Optional Lore MCP configuration support for OpenCode.",
 				Optional:    true,
 			},
 		},
@@ -121,6 +132,12 @@ func (a opencodeAdapter) Render(_ context.Context, req RenderRequest) ([]Rendere
 	if containsComponent(components, ComponentExtendedSkills) {
 		rendered = append(rendered, renderOpenCodeExtendedSkills(req)...)
 	}
+	if containsComponent(components, ComponentLoreServerMCP) {
+		// Skip opencode.json rendering here; renderOpenCodeFiles in opencode_install.go
+		// will produce the complete opencode.json (lore + mcp.lore) when lore-server-mcp
+		// is selected and auth is available. Do not error—the non-MCP files (AGENTS.md,
+		// skills, etc.) still need to be returned.
+	}
 	commands, err := renderOpenCodeCommandFiles(req, false)
 	if err != nil {
 		return nil, err
@@ -156,10 +173,11 @@ func renderOpenCodeAgentsMD(req RenderRequest) ([]byte, error) {
 		"",
 		"## OpenCode managed surface",
 		"- Managed skills directory: `~/.config/opencode/skills`",
-		"- Managed settings merge target: `~/.config/opencode/opencode.json` (Lore owns only the top-level `lore` block)",
+		"- Managed settings merge target: `~/.config/opencode/opencode.json` (Lore owns the top-level `lore` block and, when lore-server-mcp is selected, the `mcp.lore` remote entry)",
 		"- Managed manifest: `~/.config/opencode/lore-install.json`",
 		"- Optional managed commands directory: `~/.config/opencode/commands` (omitted until an approved explicit command boundary exists)",
-		"- Scope boundary: config-only Lore projection; no plugins, profiles, bootstrap/package-manager behavior, native/runtime subagents, or token persistence.",
+		"- Scope boundary: config-only Lore projection; no plugins, profiles, bootstrap/package-manager behavior, or native/runtime subagents.",
+		"- Lore server MCP token: when lore-server-mcp is selected, the bearer token is persisted in opencode.json under `mcp.lore.headers.Authorization` and a plaintext-token warning appears at install time.",
 		"",
 		"## Managed SDD model declarations",
 		strings.Join(modelLines, "\n"),
@@ -234,4 +252,50 @@ func openCodeAgentModels(cfg agentconfig.Config) map[string]string {
 		}
 	}
 	return models
+}
+
+// renderOpenCodeMCPConfig produces the opencode.json config file with both the top-level
+// `lore` block and the `mcp.lore` remote entry. It combines the lore block from the
+// agent config with the MCP remote config. This produces a complete opencode.json
+// that can be used directly without additional merging in planOpenCodeManagedFileActions.
+func renderOpenCodeMCPConfig(cfg agentconfig.Config, serverURL, token string) ([]byte, error) {
+	if strings.TrimSpace(serverURL) == "" {
+		return nil, fmt.Errorf("server-url is required for OpenCode MCP config")
+	}
+	if strings.TrimSpace(token) == "" {
+		return nil, fmt.Errorf("token is required for OpenCode MCP config")
+	}
+
+	models := openCodeAgentModels(cfg)
+	agents := make(map[string]map[string]string, len(models))
+	for _, name := range agentpack.SDDPhaseAgentNames() {
+		agents[name] = map[string]string{"model": models[name]}
+	}
+
+	lore := map[string]any{
+		opencodeManagedByKey:     opencodeManagedByValue,
+		opencodeSchemaVersionKey: 1,
+		opencodeAgentsKey:        agents,
+		opencodeSkillsDirKey:     "~/.config/opencode/skills",
+	}
+
+	mcpPayload := map[string]any{
+		"type":    "remote",
+		"url":     strings.TrimSpace(serverURL),
+		"enabled": true,
+		"headers": map[string]any{
+			"Authorization": "Bearer " + strings.TrimSpace(token),
+		},
+	}
+
+	payload := map[string]any{
+		opencodeLoreBlockKey: lore,
+		opencodeMCPBlockKey:  map[string]any{"lore": mcpPayload},
+	}
+
+	data, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("encode OpenCode MCP config: %w", err)
+	}
+	return append(data, '\n'), nil
 }

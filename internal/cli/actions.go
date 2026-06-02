@@ -680,6 +680,8 @@ func (a *App) installOpenCodeActionWithOptions(ctx context.Context, opts install
 
 	plan, err := service.PlanOpenCodeInstall(install.InstallRequest{
 		HomeDir:        homeDir,
+		ServerURL:      preflight.ServerURL,
+		SavedToken:     preflight.Token,
 		LoreConfigDir:  filepath.Dir(configPath),
 		LoreCLIVersion: a.BuildInfo.Normalized().Version,
 		Target:         install.TargetOpenCode,
@@ -712,7 +714,7 @@ func (a *App) installOpenCodeActionWithOptions(ctx context.Context, opts install
 		output.Check{Name: "manifest", Status: output.StatusOK, Detail: fmt.Sprintf("verified %s auth_mode=%s managed_files=%d", result.Layout.ManifestPath, result.Manifest.AuthMode, len(result.Manifest.ManagedFiles))},
 	)
 	report.Checks = append(report.Checks,
-		output.Check{Name: "opencode-config", Status: output.StatusWarn, Detail: fmt.Sprintf("managed surface root=%s settings=%s lore_block=top-level-only commands=omitted backups=before-overwrite", result.Layout.RootDir, result.Layout.Paths["opencode_json"]), Action: "Rerun lore install after agent-config or managed skill changes; plugins, profiles, bootstrap, and MCP token persistence remain out of scope."},
+		output.Check{Name: "opencode-config", Status: output.StatusWarn, Detail: formatOpenCodeInstallWarning(result), Action: "Rerun lore install after agent-config or managed skill changes; plugins, profiles, bootstrap, and commands remain out of scope in this slice."},
 	)
 	return report
 }
@@ -1050,8 +1052,37 @@ func antigravityMCPInstalled(components []install.ComponentID) bool {
 	return false
 }
 
+// formatOpenCodeInstallWarning produces the OpenCode post-install warning.
+// When lore-server-mcp is selected, it warns about plaintext bearer-token
+// persistence in ~/.config/opencode/opencode.json without printing the token value.
+func formatOpenCodeInstallWarning(result install.InstallResult) string {
+	hasMCP := false
+	for _, c := range result.Manifest.Components {
+		if c == install.ComponentLoreServerMCP {
+			hasMCP = true
+			break
+		}
+	}
+	mcpNote := "mcp=none"
+	if hasMCP {
+		mcpNote = "mcp=remote"
+	}
+	return fmt.Sprintf("managed surface root=%s lore_block=top-level-only commands=omitted backups=before-overwrite %s auth=plaintext-bearer-token-in-opencode.json", result.Layout.RootDir, mcpNote)
+}
+
 // formatOpenCodeInstallSummary produces the OpenCode-specific apply summary.
 func formatOpenCodeInstallSummary(result install.InstallResult) string {
+	hasMCP := false
+	for _, c := range result.Manifest.Components {
+		if c == install.ComponentLoreServerMCP {
+			hasMCP = true
+			break
+		}
+	}
+	mcpLine := "mcp=none"
+	if hasMCP {
+		mcpLine = "mcp=remote"
+	}
 	summary := fmt.Sprintf("install_target=%s scope=config-only settings_merge=lore-top-level-only components=%s managed_files=%d created=%d updated=%d unchanged=%d backed_up=%d failed=%d",
 		result.Target, formatComponentIDs(result.Manifest.Components), len(result.Manifest.ManagedFiles),
 		len(result.Summary.Created), len(result.Summary.Updated), len(result.Summary.Unchanged),
@@ -1060,7 +1091,7 @@ func formatOpenCodeInstallSummary(result install.InstallResult) string {
 	parts = append(parts, formatManagedFileSummaryParts(result.Summary.Created, "create")...)
 	parts = append(parts, formatManagedFileSummaryParts(result.Summary.Updated, "update")...)
 	parts = append(parts, formatManagedFileSummaryParts(result.Summary.Unchanged, "unchanged")...)
-	parts = append(parts, "commands=omitted", "plugins=none", "profiles=none", "mcp=none")
+	parts = append(parts, "commands=omitted", "plugins=none", "profiles=none", mcpLine)
 	if len(result.Summary.Failed) > 0 {
 		parts = append(parts, fmt.Sprintf("findings=%s", strings.Join(result.Summary.Failed, "; ")))
 	}
@@ -1101,7 +1132,19 @@ func formatAntigravityInstallSummary(result install.InstallResult) string {
 }
 
 // formatOpenCodeInstallPlanSummary produces the OpenCode-specific plan summary.
+// When lore-server-mcp is in the plan components, it reflects mcp=remote; otherwise mcp=none.
 func formatOpenCodeInstallPlanSummary(plan install.InstallPlan, dryRun bool) string {
+	hasMCP := false
+	for _, c := range plan.Components {
+		if c == install.ComponentLoreServerMCP {
+			hasMCP = true
+			break
+		}
+	}
+	mcpLine := "mcp=none"
+	if hasMCP {
+		mcpLine = "mcp=remote"
+	}
 	parts := []string{
 		fmt.Sprintf("install_target=%s", plan.Layout.Target),
 		"scope=config-only",
@@ -1112,7 +1155,7 @@ func formatOpenCodeInstallPlanSummary(plan install.InstallPlan, dryRun bool) str
 		"commands=omitted",
 		"plugins=none",
 		"profiles=none",
-		"mcp=none",
+		mcpLine,
 	}
 	if dryRun {
 		parts = append(parts, "mode=dry-run")

@@ -1,6 +1,7 @@
 package install
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -237,5 +238,209 @@ func TestOpenCodeManifestValidationRejectsDuplicatePaths(t *testing.T) {
 	}
 	if err := manifest.ValidateForLayout(layout, nil, filepath.Join(layout.RootDir, "backups")); err == nil || !strings.Contains(err.Error(), "duplicates") {
 		t.Fatalf("ValidateForLayout error = %v, want duplicate-path rejection", err)
+	}
+}
+
+// --- Repair tests: MCP-selected OpenCode install path ---
+
+func TestOpenCodePlanWithMCPSelectsLoreAndMCPLoreBlocks(t *testing.T) {
+	// When lore-server-mcp is selected and ServerURL/SavedToken are provided,
+	// the rendered opencode.json must contain BOTH the top-level `lore` block
+	// and the top-level `mcp` block with `mcp.lore` remote entry.
+	homeDir := t.TempDir()
+	now := time.Date(2026, 6, 2, 14, 0, 0, 0, time.UTC)
+	service := Service{AgentConfigStore: &fakeAgentConfigStore{path: filepath.Join(homeDir, ".lore", "agent-config.json"), cfg: agentconfig.DefaultConfig()}}
+
+	plan, err := service.PlanOpenCodeInstall(InstallRequest{
+		HomeDir:        homeDir,
+		Target:         TargetOpenCode,
+		Components:     []ComponentID{ComponentCorePack, ComponentLoreServerMCP},
+		ServerURL:      "https://lore.example/v1/mcp",
+		SavedToken:     "secret-test-token",
+		LoreCLIVersion: "v0.4.2",
+		Now:            now,
+	})
+	if err != nil {
+		t.Fatalf("PlanOpenCodeInstall with MCP error: %v", err)
+	}
+
+	result, err := service.ExecuteOpenCodeInstall(plan, InstallCommandOptions{})
+	if err != nil {
+		t.Fatalf("ExecuteOpenCodeInstall error: %v", err)
+	}
+	if len(result.Summary.Failed) > 0 {
+		t.Fatalf("Summary.Failed = %v, want none", result.Summary.Failed)
+	}
+
+	configPath := filepath.Join(homeDir, ".config", "opencode", opencodeConfigFileName)
+	configContent, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.json) error: %v", err)
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(configContent, &parsed); err != nil {
+		t.Fatalf("opencode.json is not valid JSON: %v", err)
+	}
+
+	// Top-level `lore` block must be present.
+	if _, ok := parsed["lore"]; !ok {
+		t.Fatalf("opencode.json top-level keys = %v, want `lore` block", mapKeys(parsed))
+	}
+	loreObj, ok := parsed["lore"].(map[string]any)
+	if !ok {
+		t.Fatalf("lore value = %T, want map", parsed["lore"])
+	}
+	if got, want := loreObj["managed_by"], "lore-cli"; got != want {
+		t.Fatalf("lore.managed_by = %v, want %q", got, want)
+	}
+
+	// Top-level `mcp` block must be present with `lore` sub-entry.
+	if _, ok := parsed["mcp"]; !ok {
+		t.Fatalf("opencode.json top-level keys = %v, want `mcp` block", mapKeys(parsed))
+	}
+	mcpObj, ok := parsed["mcp"].(map[string]any)
+	if !ok {
+		t.Fatalf("mcp value = %T, want map", parsed["mcp"])
+	}
+	if _, ok := mcpObj["lore"]; !ok {
+		t.Fatalf("mcp sub-keys = %v, want `lore` entry", mapKeys(mcpObj))
+	}
+	loreEntry, ok := mcpObj["lore"].(map[string]any)
+	if !ok {
+		t.Fatalf("mcp.lore = %T, want map", mcpObj["lore"])
+	}
+	if got, want := loreEntry["type"], "remote"; got != want {
+		t.Fatalf("mcp.lore.type = %v, want %q", got, want)
+	}
+	if got, want := loreEntry["url"], "https://lore.example/v1/mcp"; got != want {
+		t.Fatalf("mcp.lore.url = %v, want %q", got, want)
+	}
+	// Token must be in config (MCP server needs it) but must not leak in test failure messages.
+	headers, ok := loreEntry["headers"].(map[string]any)
+	if !ok {
+		t.Fatalf("mcp.lore.headers = %T, want map", loreEntry["headers"])
+	}
+	auth, ok := headers["Authorization"].(string)
+	if !ok {
+		t.Fatalf("mcp.lore.headers.Authorization = %T, want string", headers["Authorization"])
+	}
+	if !strings.HasPrefix(auth, "Bearer ") {
+		t.Fatalf("mcp.lore.headers.Authorization = %q, want Bearer prefix", auth)
+	}
+	// Token value present in config (for MCP server) but not echoed in test assertion.
+	_ = strings.TrimPrefix(auth, "Bearer ")
+}
+
+func TestOpenCodePlanWithoutMCPDoesNotRenderMCPLore(t *testing.T) {
+	// When lore-server-mcp is NOT selected, the rendered opencode.json
+	// must NOT contain the `mcp` block.
+	homeDir := t.TempDir()
+	now := time.Date(2026, 6, 2, 14, 30, 0, 0, time.UTC)
+	service := Service{AgentConfigStore: &fakeAgentConfigStore{path: filepath.Join(homeDir, ".lore", "agent-config.json"), cfg: agentconfig.DefaultConfig()}}
+
+	plan, err := service.PlanOpenCodeInstall(InstallRequest{
+		HomeDir:        homeDir,
+		Target:         TargetOpenCode,
+		Components:     []ComponentID{ComponentCorePack, ComponentExtendedSkills},
+		ServerURL:      "https://lore.example",
+		SavedToken:     "some-token",
+		LoreCLIVersion: "v0.4.2",
+		Now:            now,
+	})
+	if err != nil {
+		t.Fatalf("PlanOpenCodeInstall without MCP error: %v", err)
+	}
+
+	_, err = service.ExecuteOpenCodeInstall(plan, InstallCommandOptions{})
+	if err != nil {
+		t.Fatalf("ExecuteOpenCodeInstall error: %v", err)
+	}
+
+	configContent, err := os.ReadFile(filepath.Join(homeDir, ".config", "opencode", opencodeConfigFileName))
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.json) error: %v", err)
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(configContent, &parsed); err != nil {
+		t.Fatalf("opencode.json is not valid JSON: %v", err)
+	}
+
+	// `lore` block must be present (always; lore block is added for all OpenCode installs).
+	if _, ok := parsed["lore"]; !ok {
+		t.Fatalf("opencode.json top-level keys = %v, want `lore` block (always added for OpenCode config)", mapKeys(parsed))
+	}
+	// `mcp` block must NOT be present when lore-server-mcp is not selected.
+	if _, ok := parsed["mcp"]; ok {
+		t.Fatalf("opencode.json top-level keys = %v, want NO `mcp` block when lore-server-mcp is not selected", mapKeys(parsed))
+	}
+}
+
+func TestOpenCodeMCPMergePreservesExistingLoreBlock(t *testing.T) {
+	// When opencode.json already has a managed lore block, merging with
+	// MCP selected must preserve the lore block and add mcp.lore.
+	homeDir := t.TempDir()
+	rootDir := filepath.Join(homeDir, ".config", "opencode")
+	if err := os.MkdirAll(rootDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll error: %v", err)
+	}
+	existingContent := `{"theme":"midnight","lore":{"managed_by":"lore-cli","agents":{"sdd-apply":{"model":"gpt-4.1"}},"skills_dir":"~/.config/opencode/skills"}}`
+	if err := os.WriteFile(filepath.Join(rootDir, opencodeConfigFileName), []byte(existingContent), 0o600); err != nil {
+		t.Fatalf("WriteFile error: %v", err)
+	}
+
+	now := time.Date(2026, 6, 2, 14, 45, 0, 0, time.UTC)
+	service := Service{AgentConfigStore: &fakeAgentConfigStore{path: filepath.Join(homeDir, ".lore", "agent-config.json"), cfg: agentconfig.DefaultConfig()}}
+
+	plan, err := service.PlanOpenCodeInstall(InstallRequest{
+		HomeDir:        homeDir,
+		Target:         TargetOpenCode,
+		Components:     []ComponentID{ComponentCorePack, ComponentLoreServerMCP},
+		ServerURL:      "https://lore.example/v1/mcp",
+		SavedToken:     "secret-token",
+		LoreCLIVersion: "v0.4.2",
+		Now:            now,
+	})
+	if err != nil {
+		t.Fatalf("PlanOpenCodeInstall error: %v", err)
+	}
+
+	result, err := service.ExecuteOpenCodeInstall(plan, InstallCommandOptions{})
+	if err != nil {
+		t.Fatalf("ExecuteOpenCodeInstall error: %v", err)
+	}
+	if len(result.Summary.Failed) > 0 {
+		t.Fatalf("Summary.Failed = %v, want none", result.Summary.Failed)
+	}
+
+	configPath := filepath.Join(rootDir, opencodeConfigFileName)
+	configContent, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.json) error: %v", err)
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(configContent, &parsed); err != nil {
+		t.Fatalf("opencode.json is not valid JSON: %v", err)
+	}
+
+	// lore block must be managed by lore-cli.
+	loreObj := parsed["lore"].(map[string]any)
+	if got, want := loreObj["managed_by"], "lore-cli"; got != want {
+		t.Fatalf("lore.managed_by = %v, want %q", got, want)
+	}
+
+	// mcp block must be added (lore-server-mcp selected).
+	mcpObj, ok := parsed["mcp"].(map[string]any)
+	if !ok {
+		t.Fatalf("merged keys = %v, want mcp block", mapKeys(parsed))
+	}
+	if mcpObj["lore"] == nil {
+		t.Fatalf("mcp sub-keys = %v, want lore entry after merge", mapKeys(mcpObj))
+	}
+	loreEntry := mcpObj["lore"].(map[string]any)
+	if got, want := loreEntry["type"], "remote"; got != want {
+		t.Fatalf("mcp.lore.type = %v, want %q", got, want)
 	}
 }

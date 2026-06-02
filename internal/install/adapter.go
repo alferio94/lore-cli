@@ -108,7 +108,7 @@ func (r RenderRequest) Validate() error {
 	if err != nil {
 		return err
 	}
-	if (r.Target == TargetAntigravity || r.Target == TargetCodex) && containsComponent(components, ComponentLoreServerMCP) {
+	if (r.Target == TargetAntigravity || r.Target == TargetCodex || r.Target == TargetOpenCode) && containsComponent(components, ComponentLoreServerMCP) {
 		if stringsTrimSpace(r.ServerURL) == "" {
 			return fmt.Errorf("server url is required for target %q component %q", r.Target, ComponentLoreServerMCP)
 		}

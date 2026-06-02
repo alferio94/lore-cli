@@ -154,7 +154,7 @@ func FormatTargetSelection(targets []Target) string {
 		}
 		fmt.Fprintf(&b, "- %s: %s (%s)\n", label, target.Description, target.Availability)
 	}
-	b.WriteString("\nPi remains the default recommended path and uses hosted Lore MCP by default. OpenCode provides bounded config-only support for ~/.config/opencode/AGENTS.md, skills/*.md, a Lore-owned opencode.json block, and manifest/backups without plugins, profiles, or MCP token persistence. Antigravity can write ~/.gemini/config/agents/lore.json and optionally write direct MCP config.")
+	b.WriteString("\nPi remains the default recommended path and uses hosted Lore MCP by default. OpenCode provides bounded config-only support for ~/.config/opencode/AGENTS.md, skills/*.md, a Lore-owned opencode.json block with optional lore-server-mcp (plaintext bearer token in config), and manifest/backups without plugins, profiles, or bootstrap. Antigravity can write ~/.gemini/config/agents/lore.json and optionally write direct MCP config.")
 	return b.String()
 }
 

@@ -568,6 +568,108 @@ func TestCodexInstallPlanSummaryIncludesManagedActions(t *testing.T) {
 	}
 }
 
+// --- OpenCode install path tests ---
+
+func TestOpenCodeInstallDryRunPassesServerURLAndTokenToPlan(t *testing.T) {
+	// Verifies installOpenCodeActionWithOptions threads preflight.ServerURL
+	// and preflight.Token into PlanOpenCodeInstall (Fix 1).
+	homeDir := t.TempDir()
+	store := &fakeStore{
+		path: filepath.Join(t.TempDir(), "config.json"),
+		loaded: config.Config{ServerURL: "https://lore.example/v1/mcp", APIToken: "secret-token"},
+	}
+	client := &fakeClient{
+		subject: httpclient.Subject{UserID: "user-1", Kind: "user", TokenSource: "api_token"},
+	}
+	app, _, _ := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
+	app.UserHomeDir = func() (string, error) { return homeDir, nil }
+	app.ExecutablePath = func() (string, error) { return "/usr/local/bin/lore", nil }
+	app.BuildInfo = version.Info{Version: "v1.2.3"}
+
+	report := app.installActionWithOptions(context.Background(), installCommandOptions{
+		DryRun:     true,
+		Target:     install.TargetOpenCode,
+		Components: []install.ComponentID{install.ComponentCorePack, install.ComponentLoreServerMCP},
+	})
+
+	// Must not fail with "server url is required".
+	if report.ExitCode != 0 {
+		t.Fatalf("installActionWithOptions dry-run exit code = %d, want 0; checks = %+v", report.ExitCode, report.Checks)
+	}
+
+	// Summary must mention OpenCode target.
+	var foundOpenCodeCheck bool
+	var mcpCheck output.Check
+	for _, check := range report.Checks {
+		if strings.Contains(check.Detail, "install_target=opencode") {
+			foundOpenCodeCheck = true
+		}
+		if check.Name == "opencode-config" {
+			mcpCheck = check
+		}
+	}
+	if !foundOpenCodeCheck {
+		t.Fatalf("report.Checks = %+v, want opencode install check", report.Checks)
+	}
+
+	// If mcp was selected, the warning check must mention mcp=remote.
+	if mcpCheck.Detail != "" && !strings.Contains(mcpCheck.Detail, "mcp=") {
+		t.Fatalf("opencode-config check = %q, want mcp status indicated", mcpCheck.Detail)
+	}
+}
+
+func TestOpenCodeInstallPlanSummaryReportsMCPRemote(t *testing.T) {
+	// Verifies formatOpenCodeInstallPlanSummary reflects mcp=remote when
+	// lore-server-mcp is in the plan components.
+	plan := install.InstallPlan{
+		Layout: install.HarnessLayout{
+			Target:       install.TargetOpenCode,
+			RootDir:      "/home/user/.config/opencode",
+			ManifestPath: "/home/user/.config/opencode/lore-install.json",
+			Paths:        map[string]string{"config_root": "/home/user/.config"},
+		},
+		Components: []install.ComponentID{install.ComponentCorePack, install.ComponentLoreServerMCP},
+		Files: []install.PlanFileAction{
+			{RelativePath: "AGENTS.md", Action: "create"},
+			{RelativePath: "opencode.json", Action: "create"},
+		},
+	}
+
+	summary := formatOpenCodeInstallPlanSummary(plan, false)
+	if !strings.Contains(summary, "mcp=remote") {
+		t.Fatalf("summary = %q, want mcp=remote indicated", summary)
+	}
+	if !strings.Contains(summary, "install_target=opencode") {
+		t.Fatalf("summary = %q, want opencode target", summary)
+	}
+	if strings.Contains(summary, "mcp=none") {
+		t.Fatalf("summary = %q, want NOT mcp=none when lore-server-mcp selected", summary)
+	}
+}
+
+func TestOpenCodeInstallPlanSummaryReportsMCPNone(t *testing.T) {
+	// Verifies formatOpenCodeInstallPlanSummary reports mcp=none when
+	// lore-server-mcp is NOT selected.
+	plan := install.InstallPlan{
+		Layout: install.HarnessLayout{
+			Target:       install.TargetOpenCode,
+			RootDir:      "/home/user/.config/opencode",
+			ManifestPath: "/home/user/.config/opencode/lore-install.json",
+			Paths:        map[string]string{"config_root": "/home/user/.config"},
+		},
+		Components: []install.ComponentID{install.ComponentCorePack},
+		Files: []install.PlanFileAction{
+			{RelativePath: "AGENTS.md", Action: "create"},
+			{RelativePath: "opencode.json", Action: "create"},
+		},
+	}
+
+	summary := formatOpenCodeInstallPlanSummary(plan, false)
+	if !strings.Contains(summary, "mcp=none") {
+		t.Fatalf("summary = %q, want mcp=none when lore-server-mcp not selected", summary)
+	}
+}
+
 func assertCheckNames(t *testing.T, checks []output.Check, want ...string) {
 	t.Helper()
 	if len(checks) != len(want) {

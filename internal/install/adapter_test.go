@@ -154,8 +154,9 @@ func TestRegistryResolveReturnsTargetAdapterAndCapabilities(t *testing.T) {
 	if !adapter.Supports(ComponentCorePack) {
 		t.Fatal("Supports(core-pack) = false, want true for OpenCode groundwork")
 	}
-	if adapter.Supports(ComponentLoreServerMCP) {
-		t.Fatal("Supports(lore-server-mcp) = true, want false for bounded OpenCode groundwork")
+	// OpenCode supports ComponentLoreServerMCP via CapabilityLoreServerMCP.
+	if !adapter.Supports(ComponentLoreServerMCP) {
+		t.Fatal("Supports(lore-server-mcp) = false, want true (MCP support added)")
 	}
 }
 
