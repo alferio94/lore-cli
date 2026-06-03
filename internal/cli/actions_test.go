@@ -309,7 +309,7 @@ func TestStatusAndDoctorActionsPreserveDiagnosticSemantics(t *testing.T) {
 	if doctor.Title != "Lore doctor" || doctor.ExitCode != 1 {
 		t.Fatalf("doctorAction() = %+v, want failing Lore doctor report", doctor)
 	}
-	assertCheckNames(t, doctor.Checks, "config", "healthz", "readyz", "auth", "pi", "agent-config")
+	assertCheckNames(t, doctor.Checks, "config", "healthz", "readyz", "auth", "pi", "agent-config", "opencode-readiness")
 	assertNoTokenLeak(t, output.RenderChecks(doctor.Title, doctor.Checks), "", "secret-token")
 }
 

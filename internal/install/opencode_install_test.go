@@ -444,3 +444,269 @@ func TestOpenCodeMCPMergePreservesExistingLoreBlock(t *testing.T) {
 		t.Fatalf("mcp.lore.type = %v, want %q", got, want)
 	}
 }
+
+// --- Phase 3: SDD assets lifecycle with opencode-sdd-assets component selected ---
+
+func TestOpenCodeSDDAssetsPlanApplyBackupManifest(t *testing.T) {
+	// When ComponentOpenCodeSDDAssets is explicitly selected, the install plan
+	// must include command and prompt files as managed actions, execute must
+	// write them, manifest must track them with hashes, and backups must be created
+	// on overwrite.
+	homeDir := t.TempDir()
+	now := time.Date(2026, 6, 3, 10, 0, 0, 0, time.UTC)
+	service := Service{AgentConfigStore: &fakeAgentConfigStore{
+		path: filepath.Join(homeDir, ".lore", "agent-config.json"),
+		cfg:  agentconfig.DefaultConfig(),
+	}}
+
+	plan, err := service.PlanOpenCodeInstall(InstallRequest{
+		HomeDir:        homeDir,
+		Target:         TargetOpenCode,
+		Components:     []ComponentID{ComponentCorePack, ComponentOpenCodeSDDAssets},
+		LoreCLIVersion: "v0.4.2",
+		Now:            now,
+	})
+	if err != nil {
+		t.Fatalf("PlanOpenCodeInstall with SDD assets error: %v", err)
+	}
+
+	// The plan must include sdd-propose (not sdd-proposal) command file.
+	hasProposeCommand := false
+	hasPromptFile := false
+	hasCommandFiles := 0
+	hasPromptFiles := 0
+	for _, action := range plan.Files {
+		if strings.Contains(action.RelativePath, "commands/sdd-propose.md") {
+			hasProposeCommand = true
+		}
+		if strings.Contains(action.RelativePath, "commands/sdd-proposal") {
+			t.Fatalf("plan includes sdd-proposal.md (wrong name), want sdd-propose.md")
+		}
+		if strings.Contains(action.RelativePath, "commands/") {
+			hasCommandFiles++
+		}
+		if strings.Contains(action.RelativePath, "prompts/sdd/") {
+			hasPromptFiles++
+			hasPromptFile = true
+		}
+	}
+	if !hasProposeCommand {
+		t.Fatalf("plan.Files = %v, want sdd-propose.md in managed actions", plan.Files)
+	}
+	if hasCommandFiles == 0 {
+		t.Fatalf("plan.Files = %v, want command files (commands/sdd-*.md)", plan.Files)
+	}
+	if !hasPromptFile {
+		t.Fatalf("plan.Files = %v, want prompt files (prompts/sdd/sdd-*.md)", plan.Files)
+	}
+
+	// Execute the install.
+	result, err := service.ExecuteOpenCodeInstall(plan, InstallCommandOptions{})
+	if err != nil {
+		t.Fatalf("ExecuteOpenCodeInstall error: %v", err)
+	}
+	if len(result.Summary.Failed) > 0 {
+		t.Fatalf("Summary.Failed = %v, want none", result.Summary.Failed)
+	}
+
+	// Verify files exist on disk.
+	rootDir := filepath.Join(homeDir, ".config", "opencode")
+	proposePath := filepath.Join(rootDir, "commands", "sdd-propose.md")
+	proposeContent, err := os.ReadFile(proposePath)
+	if err != nil {
+		t.Fatalf("ReadFile(sdd-propose.md) error: %v", err)
+	}
+	if !strings.Contains(string(proposeContent), "name: sdd-propose") {
+		t.Fatalf("sdd-propose.md = %q, want frontmatter name: sdd-propose", string(proposeContent)[:200])
+	}
+
+	// Verify no sdd-proposal.md file exists (wrong name must not be created).
+	proposalPath := filepath.Join(rootDir, "commands", "sdd-proposal.md")
+	if _, err := os.ReadFile(proposalPath); !os.IsNotExist(err) {
+		t.Fatalf("sdd-proposal.md should not exist at %s, but read succeeded", proposalPath)
+	}
+
+	// Verify per-phase prompt files exist.
+	promptDir := filepath.Join(rootDir, "prompts", "sdd")
+	promptFiles, err := os.ReadDir(promptDir)
+	if err != nil {
+		t.Fatalf("ReadDir prompts/sdd error: %v", err)
+	}
+	if len(promptFiles) == 0 {
+		t.Fatalf("prompts/sdd/ directory is empty, want per-phase prompt files (sdd-init.md through sdd-archive.md)")
+	}
+	// sdd-propose prompt must exist (canonical name).
+	proposePromptPath := filepath.Join(promptDir, "sdd-propose.md")
+	if _, err := os.ReadFile(proposePromptPath); err != nil {
+		t.Fatalf("ReadFile(sdd-propose.md) error: %v", err)
+	}
+	// sdd-proposal prompt must NOT exist (wrong name).
+	proposalPromptPath := filepath.Join(promptDir, "sdd-proposal.md")
+	if _, err := os.ReadFile(proposalPromptPath); !os.IsNotExist(err) {
+		t.Fatalf("sdd-proposal.md should not exist at %s, but read succeeded", proposalPromptPath)
+	}
+
+	// Manifest must track command and prompt files.
+	foundCommandManifest := false
+	foundPromptManifest := false
+	for _, record := range result.Manifest.ManagedFiles {
+		if strings.Contains(record.Path, "commands/sdd-propose.md") {
+			foundCommandManifest = true
+			if record.ContentHash == "" {
+				t.Fatalf("command file manifest record has empty ContentHash")
+			}
+		}
+		if strings.Contains(record.Path, "prompts/sdd/") {
+			foundPromptManifest = true
+			if record.ContentHash == "" {
+				t.Fatalf("prompt file manifest record has empty ContentHash")
+			}
+		}
+	}
+	if !foundCommandManifest {
+		t.Fatalf("manifest.ManagedFiles = %v, want sdd-propose.md entry", result.Manifest.ManagedFiles)
+	}
+	if !foundPromptManifest {
+		t.Fatalf("manifest.ManagedFiles = %v, want prompt file entry", result.Manifest.ManagedFiles)
+	}
+}
+
+func TestOpenCodeSDDAssetsIdempotentRerun(t *testing.T) {
+	// A second install with the same SDD assets component must produce no changes
+	// (idempotent rerun).
+	homeDir := t.TempDir()
+	now := time.Date(2026, 6, 3, 10, 30, 0, 0, time.UTC)
+	service := Service{AgentConfigStore: &fakeAgentConfigStore{
+		path: filepath.Join(homeDir, ".lore", "agent-config.json"),
+		cfg:  agentconfig.DefaultConfig(),
+	}}
+
+	// First install with SDD assets.
+	plan1, err := service.PlanOpenCodeInstall(InstallRequest{
+		HomeDir:        homeDir,
+		Target:         TargetOpenCode,
+		Components:     []ComponentID{ComponentCorePack, ComponentOpenCodeSDDAssets},
+		LoreCLIVersion: "v0.4.2",
+		Now:            now,
+	})
+	if err != nil {
+		t.Fatalf("PlanOpenCodeInstall first error: %v", err)
+	}
+	_, err = service.ExecuteOpenCodeInstall(plan1, InstallCommandOptions{})
+	if err != nil {
+		t.Fatalf("ExecuteOpenCodeInstall first error: %v", err)
+	}
+
+	// Second install (rerun with same inputs).
+	plan2, err := service.PlanOpenCodeInstall(InstallRequest{
+		HomeDir:        homeDir,
+		Target:         TargetOpenCode,
+		Components:     []ComponentID{ComponentCorePack, ComponentOpenCodeSDDAssets},
+		LoreCLIVersion: "v0.4.2",
+		Now:            now,
+	})
+	if err != nil {
+		t.Fatalf("PlanOpenCodeInstall second error: %v", err)
+	}
+	_, err = service.ExecuteOpenCodeInstall(plan2, InstallCommandOptions{})
+	if err != nil {
+		t.Fatalf("ExecuteOpenCodeInstall second error: %v", err)
+	}
+
+	// Second plan must classify SDD asset files as unchanged.
+	unchangedCount := 0
+	for _, action := range plan2.Files {
+		if strings.Contains(action.RelativePath, "commands/sdd-") || strings.Contains(action.RelativePath, "prompts/sdd/") {
+			if action.Action != "unchanged" {
+				t.Fatalf("sdd asset action = %q, want unchanged; full action: %+v", action.Action, action)
+			}
+			unchangedCount++
+		}
+	}
+	if unchangedCount == 0 {
+		t.Fatalf("plan2.Files = %v, want some unchanged sdd-asset actions", plan2.Files)
+	}
+}
+
+func TestOpenCodeSDDAssetsBackupBeforeOverwrite(t *testing.T) {
+	// When sdd-propose.md already exists with different content and is updated,
+	// a backup must be created.
+	homeDir := t.TempDir()
+	rootDir := filepath.Join(homeDir, ".config", "opencode")
+	commandsDir := filepath.Join(rootDir, "commands")
+	promptsDir := filepath.Join(rootDir, "prompts", "sdd")
+	if err := os.MkdirAll(commandsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll commands error: %v", err)
+	}
+	if err := os.MkdirAll(promptsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll prompts error: %v", err)
+	}
+
+	// Write stale content to sdd-propose.md.
+	staleContent := "# stale\nDo not use."
+	if err := os.WriteFile(filepath.Join(commandsDir, "sdd-propose.md"), []byte(staleContent), 0o600); err != nil {
+		t.Fatalf("WriteFile stale command error: %v", err)
+	}
+	// Write stale prompt content.
+	if err := os.WriteFile(filepath.Join(promptsDir, "sdd-propose.md"), []byte("# stale prompt"), 0o600); err != nil {
+		t.Fatalf("WriteFile stale prompt error: %v", err)
+	}
+
+	now := time.Date(2026, 6, 3, 11, 0, 0, 0, time.UTC)
+	service := Service{AgentConfigStore: &fakeAgentConfigStore{
+		path: filepath.Join(homeDir, ".lore", "agent-config.json"),
+		cfg:  agentconfig.DefaultConfig(),
+	}}
+
+	plan, err := service.PlanOpenCodeInstall(InstallRequest{
+		HomeDir:        homeDir,
+		Target:         TargetOpenCode,
+		Components:     []ComponentID{ComponentCorePack, ComponentOpenCodeSDDAssets},
+		LoreCLIVersion: "v0.4.2",
+		Now:            now,
+	})
+	if err != nil {
+		t.Fatalf("PlanOpenCodeInstall error: %v", err)
+	}
+
+	// Verify plan classifies sdd-propose.md as update (not create).
+	proposeUpdate := false
+	for _, action := range plan.Files {
+		if strings.Contains(action.RelativePath, "commands/sdd-propose.md") {
+			if action.Action == "update" {
+				proposeUpdate = true
+				if action.BackupPath == "" {
+					t.Fatalf("sdd-propose.md update action has no BackupPath")
+				}
+			}
+		}
+	}
+	if !proposeUpdate {
+		t.Fatalf("plan.Files = %v, want sdd-propose.md update with backup", plan.Files)
+	}
+
+	result, err := service.ExecuteOpenCodeInstall(plan, InstallCommandOptions{})
+	if err != nil {
+		t.Fatalf("ExecuteOpenCodeInstall error: %v", err)
+	}
+
+	// Verify backup was created for the command file.
+	backupRoot := result.Manifest.BackupRoot
+	proposeBackupPath := filepath.Join(backupRoot, "commands", "sdd-propose.md")
+	backupContent, err := os.ReadFile(proposeBackupPath)
+	if err != nil {
+		t.Fatalf("ReadFile(sdd-propose.md backup) error: %v", err)
+	}
+	if string(backupContent) != staleContent {
+		t.Fatalf("sdd-propose.md backup = %q, want stale content %q", string(backupContent), staleContent)
+	}
+
+	// Verify the new content is on disk (not stale).
+	newContent, err := os.ReadFile(filepath.Join(commandsDir, "sdd-propose.md"))
+	if err != nil {
+		t.Fatalf("ReadFile(sdd-propose.md) error: %v", err)
+	}
+	if string(newContent) == staleContent {
+		t.Fatalf("sdd-propose.md = stale content after update, want new content")
+	}
+}

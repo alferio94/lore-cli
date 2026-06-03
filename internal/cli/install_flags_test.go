@@ -269,7 +269,7 @@ func TestInstallUsageIncludesTargetAndComponentFlags(t *testing.T) {
 	if exitCode := app.Run([]string{"install", "--help"}); exitCode != 1 {
 		t.Fatalf("install --help exitCode = %d, want 1 with usage output", exitCode)
 	}
-	for _, want := range []string{"--target", "--component", "Pi-first managed runtime", "portable Lore agent pack", "core-pack", "pi-extensions", "OpenCode", "~/.config/opencode/opencode.json", "commands stay omitted", "Antigravity", "prompt + skills MVP", "plaintext Authorization bearer token", "~/.gemini/config/mcp_config.json", "~/.gemini/config/agents/lore.json", "codex", "~/.codex/config.toml", "/v1/mcp"} {
+	for _, want := range []string{"--target", "--component", "Pi-first managed runtime", "portable Lore agent pack", "core-pack", "pi-extensions", "OpenCode", "~/.config/opencode/opencode.json", "Commands/prompts are omitted", "Antigravity", "prompt + skills MVP", "plaintext Authorization bearer token", "~/.gemini/config/mcp_config.json", "~/.gemini/config/agents/lore.json", "codex", "~/.codex/config.toml", "/v1/mcp"} {
 		if !strings.Contains(stderr.String(), want) {
 			t.Fatalf("stderr = %q, want substring %q", stderr.String(), want)
 		}

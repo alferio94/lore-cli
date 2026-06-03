@@ -610,7 +610,7 @@ func (m model) renderInstallTargetSelection() string {
 		}
 		fmt.Fprintf(&b, "%s%s: %s (%s)\n", prefix, label, target.Description, target.Availability)
 	}
-	fmt.Fprintf(&b, "\nSelected target: %s. Use ↑/↓ to switch between supported targets and Enter to continue. Pi remains the default recommended path. OpenCode manages bounded config files (AGENTS.md, skills, lore top-level block in opencode.json) and optional lore-server-mcp (plaintext bearer token in mcp block). Commands, plugins, profiles, and bootstrap remain out of scope. Antigravity can write ~/.gemini/config/agents/lore.json and optionally write direct MCP config.", selected.Title)
+	fmt.Fprintf(&b, "\nSelected target: %s. Use ↑/↓ to switch between supported targets and Enter to continue. Pi remains the default recommended path. OpenCode manages bounded config files (AGENTS.md, skills, lore top-level block in opencode.json) and optional lore-server-mcp (plaintext bearer token in mcp block). Optional SDD command/prompt assets can be installed via the opencode-sdd-assets component; they are install-time assets only, not runtime-wired or subagent claims. Commands and prompts are omitted unless explicitly selected via --component opencode-sdd-assets. Antigravity can write ~/.gemini/config/agents/lore.json and optionally write direct MCP config.", selected.Title)
 	return b.String()
 }
 

@@ -7,11 +7,12 @@ import (
 type ComponentID string
 
 const (
-	ComponentCorePack         ComponentID = "core-pack"
-	ComponentLoreServerMCP    ComponentID = "lore-server-mcp"
-	ComponentPiExtensions     ComponentID = "pi-extensions"
-	ComponentExtendedSkills   ComponentID = "extended-skills"
-	ComponentCodexAgentConfig ComponentID = "codex-agent-config"
+	ComponentCorePack           ComponentID = "core-pack"
+	ComponentLoreServerMCP     ComponentID = "lore-server-mcp"
+	ComponentPiExtensions      ComponentID = "pi-extensions"
+	ComponentExtendedSkills     ComponentID = "extended-skills"
+	ComponentCodexAgentConfig  ComponentID = "codex-agent-config"
+	ComponentOpenCodeSDDAssets  ComponentID = "opencode-sdd-assets"
 
 	// PiHostedMCPPackageRepo is the canonical git source for the hosted Lore MCP adapter.
 	PiHostedMCPPackageRepo = "github.com/nicobailon/pi-mcp-adapter"
@@ -87,6 +88,13 @@ func ComponentCatalog() map[ComponentID]Component {
 			DefaultForTarget: map[TargetID]bool{
 				TargetCodex: true,
 			},
+		},
+		ComponentOpenCodeSDDAssets: {
+			ID:          ComponentOpenCodeSDDAssets,
+			Title:       "OpenCode SDD Assets",
+			Description: "Optional SDD command and prompt asset support for OpenCode. Explicit selection required; not installed by default.",
+			Optional:    true,
+			DefaultForTarget: map[TargetID]bool{},
 		},
 	}
 }

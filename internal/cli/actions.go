@@ -19,6 +19,7 @@ import (
 	"github.com/alferio94/lore-cli/internal/config"
 	"github.com/alferio94/lore-cli/internal/httpclient"
 	"github.com/alferio94/lore-cli/internal/install"
+	"github.com/alferio94/lore-cli/internal/opencodeready"
 	"github.com/alferio94/lore-cli/internal/output"
 	cliupdate "github.com/alferio94/lore-cli/internal/update"
 	"github.com/alferio94/lore-cli/internal/version"
@@ -665,6 +666,17 @@ func (a *App) installOpenCodeActionWithOptions(ctx context.Context, opts install
 		return report
 	}
 
+	// OpenCode readiness preflight (informational only — does NOT block install).
+	// Reports readiness-only state; does NOT claim plugin installation, runtime/native
+	// subagent support, or command routing. The check exists so users can see the
+	// readiness state before install, but it is never a precondition.
+	opencodecCheck := a.openCodeReadinessCheck(ctx)
+	// Keep status OK even if readiness is not ready — informational only
+	if opencodecCheck.Status == output.StatusFail {
+		opencodecCheck.Status = output.StatusWarn
+	}
+	report.Checks = append(report.Checks, opencodecCheck)
+
 	homeDir, err := a.resolveUserHomeDir()
 	if err != nil {
 		report.Checks = append(report.Checks, output.Check{Name: "install", Status: output.StatusFail, Detail: err.Error(), Action: "Retry after HOME can be resolved for the current user."})
@@ -957,6 +969,14 @@ func (a *App) collectChecks(ctx context.Context, includePi bool) ([]output.Check
 
 	// Read-only agent-config check in status and doctor; does not imply Codex execution support.
 	checks = append(checks, a.agentConfigCheck())
+
+	// OpenCode readiness preflight check (doctor only, not blocking install).
+	// States readiness-only; does NOT claim plugin installation, runtime/native subagent
+	// support, or command routing. Plugin/runtime checks return "unknown" conservatively
+	// when not safely verifiable.
+	if includePi {
+		checks = append(checks, a.openCodeReadinessCheck(ctx))
+	}
 
 	return checks, exitCode
 }
@@ -1348,6 +1368,104 @@ func (a *App) piCheck() output.Check {
 		return output.Check{Name: "pi", Status: output.StatusWarn, Detail: "pi binary not found on PATH", Action: "Install Pi or add it to PATH if Pi automation is expected on this machine."}
 	}
 	return output.Check{Name: "pi", Status: output.StatusOK, Detail: "pi binary available on PATH"}
+}
+
+// openCodeReadinessCheck performs a read-only OpenCode readiness preflight check
+// for future plugin-backed subagent support. It does NOT install plugins, configure
+// agents, or write to user config. Output explicitly states "preflight" and "readiness"
+// to avoid implying plugin installation, runtime subagent support, or command routing.
+func (a *App) openCodeReadinessCheck(ctx context.Context) output.Check {
+	homeDir, err := a.resolveUserHomeDir()
+	if err != nil {
+		return output.Check{Name: "opencode-readiness", Status: output.StatusWarn, Detail: fmt.Sprintf("preflight skipped: could not resolve HOME: %v", err)}
+	}
+
+	opts := opencodeready.Options{
+		HomeDir:       homeDir,
+		AllowTempProbe: true,
+		LookupEnv:      func(key string) (string, bool) { return os.LookupEnv(key) },
+	}
+
+	report, err := opencodeready.Probe(ctx, nil, nil, opts)
+	if err != nil {
+		return output.Check{Name: "opencode-readiness", Status: output.StatusWarn, Detail: fmt.Sprintf("preflight error: %v", err)}
+	}
+
+	// Format a compact readiness summary without claiming plugin installation,
+	// runtime/native subagent support, or command routing.
+	detail := formatOpenCodeReadinessDetail(report)
+	status := output.StatusOK
+	if report.Overall == opencodeready.StatusBlocking {
+		status = output.StatusFail
+	} else if report.Overall == opencodeready.StatusUnknown {
+		status = output.StatusWarn
+	} else if report.Overall == opencodeready.StatusWarn {
+		status = output.StatusWarn
+	}
+
+	action := ""
+	if status != output.StatusOK {
+		// Collect non-ok findings for remediation guidance
+		var reasons []string
+		for _, f := range report.Findings {
+			if f.Status == opencodeready.StatusBlocking || f.Status == opencodeready.StatusWarn {
+				if f.Remediation != "" {
+					reasons = append(reasons, f.Remediation)
+				}
+			}
+		}
+		if len(reasons) > 0 {
+			action = "Readiness preflight failed. " + strings.Join(reasons, " ")
+		}
+	}
+
+	return output.Check{Name: "opencode-readiness", Status: status, Detail: detail, Action: action}
+}
+
+// formatOpenCodeReadinessDetail produces a compact readiness-only detail string
+// that does NOT imply plugin installation, runtime/native subagent support, or
+// command routing. It uses OpenCode CLI terminology for clarity.
+func formatOpenCodeReadinessDetail(report opencodeready.Report) string {
+	var parts []string
+	parts = append(parts, "opencode-preflight=readiness-only")
+
+	// Overall status
+	switch report.Overall {
+	case opencodeready.StatusReady:
+		parts = append(parts, "overall=ready")
+	case opencodeready.StatusWarn:
+		parts = append(parts, "overall=warn")
+	case opencodeready.StatusBlocking:
+		parts = append(parts, "overall=blocking")
+	default:
+		parts = append(parts, "overall=unknown")
+	}
+
+	// Version if available
+	if report.Version != "" {
+		parts = append(parts, "version="+report.Version)
+	}
+
+	// Summary of findings: count by status
+	var readyCount, warnCount, blockingCount, unknownCount int
+	for _, f := range report.Findings {
+		switch f.Status {
+		case opencodeready.StatusReady:
+			readyCount++
+		case opencodeready.StatusWarn:
+			warnCount++
+		case opencodeready.StatusBlocking:
+			blockingCount++
+		default:
+			unknownCount++
+		}
+	}
+	parts = append(parts, fmt.Sprintf("findings=ready:%d warn:%d blocking:%d unknown:%d", readyCount, warnCount, blockingCount, unknownCount))
+
+	// Explicit non-claims
+	parts = append(parts, "plugins=none", "runtime-subagents=none", "command-routing=none")
+
+	return strings.Join(parts, " ")
 }
 
 func localUpdateSafetyReason(currentVersion, execPath, pathPath string) (string, bool) {

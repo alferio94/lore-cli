@@ -19,6 +19,7 @@ const (
 	CapabilitySkills         CapabilityID = "skills"
 	CapabilityLoreServerMCP  CapabilityID = "lore-server-mcp"
 	CapabilityExtendedSkills CapabilityID = "extended-skills"
+	CapabilityOpenCodeSDDAssets CapabilityID = "opencode-sdd-assets"
 
 	MergeModeReplace      MergeMode = "replace"
 	MergeModeAdditiveJSON MergeMode = "additive-json"

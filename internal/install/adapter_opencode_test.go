@@ -576,3 +576,367 @@ func TestOpenCodeMergePreservesExistingLoreBlock(t *testing.T) {
 		t.Fatalf("mcp sub-keys = %v, want lore entry", mapKeys(mcpObj))
 	}
 }
+
+// --- Phase 1: opencode-sdd-assets component wiring tests ---
+
+func TestOpenCodeSDDAssetsComponentOmittedByDefault(t *testing.T) {
+	// opencode-sdd-assets is optional and must NOT appear in default OpenCode selection.
+	homeDir := t.TempDir()
+	service := Service{AgentConfigStore: &fakeAgentConfigStore{
+		path: filepath.Join(homeDir, ".lore", "agent-config.json"),
+		cfg:  agentconfig.DefaultConfig(),
+	}}
+
+	plan, err := service.PlanOpenCodeInstall(InstallRequest{
+		HomeDir:        homeDir,
+		Target:         TargetOpenCode,
+		Components:     nil, // default selection
+		LoreCLIVersion: "v0.4.2",
+	})
+	if err != nil {
+		t.Fatalf("PlanOpenCodeInstall error: %v", err)
+	}
+
+	// Default selection must NOT include opencode-sdd-assets.
+	for _, comp := range plan.Components {
+		if comp == ComponentOpenCodeSDDAssets {
+			t.Fatalf("plan.Components = %v, want NO opencode-sdd-assets in default selection", plan.Components)
+		}
+	}
+
+	// Verify the component still renders without error (fail-closed paths).
+	adapter := defaultOpenCodeAdapter()
+	files, err := adapter.Render(context.Background(), RenderRequest{
+		Target:    TargetOpenCode,
+		Assets:    agentpack.DefaultOperationalAssets(),
+		Components: []ComponentID{ComponentCorePack, ComponentOpenCodeSDDAssets},
+	})
+	if err != nil {
+		t.Fatalf("Render with opencode-sdd-assets error = %v, want nil (fail-closed but no panic)", err)
+	}
+	if len(files) == 0 {
+		t.Fatalf("Render with opencode-sdd-assets produced no files, want empty list (fail-closed)")
+	}
+}
+
+func TestOpenCodeSDDAssetsComponentExplicitlySelectable(t *testing.T) {
+	// opencode-sdd-assets can be explicitly selected and is recognized by the adapter.
+	adapter := defaultOpenCodeAdapter()
+
+	// Adapter must support the component.
+	if !adapter.Supports(ComponentOpenCodeSDDAssets) {
+		t.Fatalf("adapter.Supports(ComponentOpenCodeSDDAssets) = false, want true")
+	}
+
+	// Verify the capability is registered.
+	caps := adapter.Capabilities()
+	cap, ok := caps[CapabilityOpenCodeSDDAssets]
+	if !ok {
+		t.Fatalf("adapter.Capabilities() missing CapabilityOpenCodeSDDAssets, got %v", caps)
+	}
+	if cap.Component != ComponentOpenCodeSDDAssets {
+		t.Fatalf("cap.Component = %q, want %q", cap.Component, ComponentOpenCodeSDDAssets)
+	}
+	if !cap.Optional {
+		t.Fatalf("cap.Optional = %v, want true", cap.Optional)
+	}
+
+	// Render with explicit component selection must produce command and prompt files.
+	files, err := adapter.Render(context.Background(), RenderRequest{
+		Target:     TargetOpenCode,
+		Assets:     agentpack.DefaultOperationalAssets(),
+		Components: []ComponentID{ComponentCorePack, ComponentOpenCodeSDDAssets},
+	})
+	if err != nil {
+		t.Fatalf("Render with ComponentOpenCodeSDDAssets error = %v, want nil", err)
+	}
+
+	// Phase 2 implemented: must produce command files.
+	commandCount := 0
+	promptCount := 0
+	for _, f := range files {
+		if strings.Contains(f.RelativePath, "commands/sdd-") {
+			commandCount++
+		}
+		if strings.Contains(f.RelativePath, "prompts/sdd") {
+			promptCount++
+		}
+	}
+	if commandCount == 0 {
+		t.Fatalf("Render with ComponentOpenCodeSDDAssets: no command files, want 9 sdd-*.md; got %v", sortedRenderedPaths(files))
+	}
+	if commandCount != 9 {
+		t.Fatalf("Render command count = %d, want 9", commandCount)
+	}
+	if promptCount == 0 {
+		t.Fatalf("Render with ComponentOpenCodeSDDAssets: no prompt files, want prompts/sdd/ content; got %v", sortedRenderedPaths(files))
+	}
+}
+
+// --- Phase 2: SDD assets content rendering tests ---
+
+func TestOpenCodeSDDAssetsRendersAllNineCommandFiles(t *testing.T) {
+	// Phase 2: when ComponentOpenCodeSDDAssets is selected, all 9 canonical SDD
+	// command files must be rendered at commands/sdd-{phase}.md.
+	adapter := defaultOpenCodeAdapter()
+	files, err := adapter.Render(context.Background(), RenderRequest{
+		Target:     TargetOpenCode,
+		Assets:     agentpack.DefaultOperationalAssets(),
+		Components: []ComponentID{ComponentCorePack, ComponentOpenCodeSDDAssets},
+	})
+	if err != nil {
+		t.Fatalf("Render with ComponentOpenCodeSDDAssets error = %v, want nil", err)
+	}
+
+	// Collect command file paths.
+	commandFiles := make(map[string]bool)
+	for _, f := range files {
+		if strings.Contains(f.RelativePath, "commands/") {
+			commandFiles[f.RelativePath] = true
+		}
+	}
+
+	// All 9 canonical SDD phases must be present.
+	// Phase IDs from agentpack: init, explore, proposal, spec, design, tasks, apply, verify, archive
+	// The approved canonical name for the proposal phase is "sdd-propose", not "sdd-proposal".
+	wantPhases := []string{"sdd-init", "sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive"}
+	for _, phase := range wantPhases {
+		wantPath := "commands/" + phase + ".md"
+		if !commandFiles[wantPath] {
+			t.Fatalf("rendered command files missing %q, got %v", wantPath, sortedRenderedPaths(files))
+		}
+	}
+
+	// sdd-proposal.md must NOT exist (wrong name).
+	if commandFiles["commands/sdd-proposal.md"] {
+		t.Fatalf("rendered command files contain sdd-proposal.md (wrong name), want sdd-propose.md only")
+	}
+}
+
+func TestOpenCodeSDDAssetsCommandFilesHavePhaseFrontmatter(t *testing.T) {
+	// Each command file must have valid frontmatter with name, description, and trigger.
+	// The canonical name for the proposal phase is "sdd-propose", not "sdd-proposal".
+	adapter := defaultOpenCodeAdapter()
+	files, err := adapter.Render(context.Background(), RenderRequest{
+		Target:     TargetOpenCode,
+		Assets:     agentpack.DefaultOperationalAssets(),
+		Components: []ComponentID{ComponentCorePack, ComponentOpenCodeSDDAssets},
+	})
+	if err != nil {
+		t.Fatalf("Render error = %v, want nil", err)
+	}
+
+	for _, f := range files {
+		if !strings.Contains(f.RelativePath, "commands/sdd-") {
+			continue
+		}
+		content := string(f.Content)
+
+		// Frontmatter must start with ---
+		if !strings.HasPrefix(strings.TrimSpace(content), "---") {
+			t.Fatalf("command file %q: content must start with frontmatter ---, got %q", f.RelativePath, content[:min(50, len(content))])
+		}
+
+		// Must have name field (canonical sdd-propose, not sdd-proposal)
+		if !strings.Contains(content, "name: sdd-") {
+			t.Fatalf("command file %q: missing 'name: sdd-*' frontmatter field", f.RelativePath)
+		}
+
+		// sdd-propose.md must have correct frontmatter name
+		if strings.Contains(f.RelativePath, "sdd-propose.md") {
+			if !strings.Contains(content, "name: sdd-propose") {
+				t.Fatalf("command file %q: must have 'name: sdd-propose' frontmatter (canonical name)", f.RelativePath)
+			}
+		}
+
+		// Must have description field
+		if !strings.Contains(content, "description:") {
+			t.Fatalf("command file %q: missing 'description:' frontmatter field", f.RelativePath)
+		}
+
+		// Must have trigger phrase in description
+		if !strings.Contains(content, "Trigger:") {
+			t.Fatalf("command file %q: missing 'Trigger:' phrase in description", f.RelativePath)
+		}
+
+		// Must reference SDD in the content (the command is for SDD)
+		if !strings.Contains(content, "SDD") && !strings.Contains(content, "sdd-") {
+			t.Fatalf("command file %q: content must reference SDD phase context", f.RelativePath)
+		}
+	}
+}
+
+func TestOpenCodeSDDAssetsCommandFilesNoBannedPhrases(t *testing.T) {
+	// Command content must not contain banned phrases: gentle-orchestrator,
+	// runtime claims, TUI, plugins, profiles, bootstrap, package-manager.
+	adapter := defaultOpenCodeAdapter()
+	files, err := adapter.Render(context.Background(), RenderRequest{
+		Target:     TargetOpenCode,
+		Assets:     agentpack.DefaultOperationalAssets(),
+		Components: []ComponentID{ComponentCorePack, ComponentOpenCodeSDDAssets},
+	})
+	if err != nil {
+		t.Fatalf("Render error = %v, want nil", err)
+	}
+
+	bannedPhrases := []string{
+		"gentle-orchestrator",
+		"runtime subagent",
+		"native subagent",
+		"tui plugin",
+		"profile variant",
+		"bootstrap package-manager",
+		"package manager behavior",
+	}
+
+	for _, f := range files {
+		if !strings.Contains(f.RelativePath, "commands/sdd-") {
+			continue
+		}
+		content := strings.ToLower(string(f.Content))
+		for _, phrase := range bannedPhrases {
+			if strings.Contains(content, phrase) {
+				t.Fatalf("command file %q: banned phrase %q found in content", f.RelativePath, phrase)
+			}
+		}
+	}
+}
+
+func TestOpenCodeSDDAssetsRendersPerPhasePromptFiles(t *testing.T) {
+	// Phase 2 repair: SDD prompt assets must be rendered as per-phase files under
+	// prompts/sdd/sdd-*.md, not a single system-prompt-guidance.md file.
+	adapter := defaultOpenCodeAdapter()
+	files, err := adapter.Render(context.Background(), RenderRequest{
+		Target:     TargetOpenCode,
+		Assets:     agentpack.DefaultOperationalAssets(),
+		Components: []ComponentID{ComponentCorePack, ComponentOpenCodeSDDAssets},
+	})
+	if err != nil {
+		t.Fatalf("Render error = %v, want nil", err)
+	}
+
+	// Collect prompt file paths.
+	promptFiles := make(map[string]bool)
+	for _, f := range files {
+		if strings.Contains(f.RelativePath, "prompts/sdd/") {
+			promptFiles[f.RelativePath] = true
+		}
+	}
+
+	// Must have 9 per-phase prompt files (sdd-init through sdd-archive).
+	// The canonical name for the proposal phase is "sdd-propose", not "sdd-proposal".
+	wantPromptPhases := []string{"sdd-init", "sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive"}
+	foundCount := 0
+	for _, phase := range wantPromptPhases {
+		wantPath := "prompts/sdd/" + phase + ".md"
+		if promptFiles[wantPath] {
+			foundCount++
+		}
+	}
+	if foundCount == 0 {
+		t.Fatalf("rendered files = %v, want per-phase prompt files under prompts/sdd/", sortedRenderedPaths(files))
+	}
+	if foundCount != 9 {
+		t.Fatalf("per-phase prompt files found = %d, want 9 (sdd-init through sdd-archive); got %v", foundCount, sortedRenderedPaths(files))
+	}
+
+	// sdd-propose.md prompt must exist (canonical name).
+	if !promptFiles["prompts/sdd/sdd-propose.md"] {
+		t.Fatalf("rendered files = %v, want prompts/sdd/sdd-propose.md (canonical name)", sortedRenderedPaths(files))
+	}
+
+	// system-prompt-guidance.md must NOT exist (single file approach replaced by per-phase)
+	if promptFiles["prompts/sdd/system-prompt-guidance.md"] {
+		t.Fatalf("rendered files contain prompts/sdd/system-prompt-guidance.md (old single-file approach), want per-phase files only")
+	}
+
+	// Each per-phase prompt must have frontmatter and bounded content.
+	for _, f := range files {
+		if !strings.Contains(f.RelativePath, "prompts/sdd/sdd-") {
+			continue
+		}
+		content := string(f.Content)
+
+		// Must have frontmatter
+		if !strings.HasPrefix(strings.TrimSpace(content), "---") {
+			t.Fatalf("prompt file %q: content must start with frontmatter ---", f.RelativePath)
+		}
+
+		// Must have name field
+		if !strings.Contains(content, "name: ") {
+			t.Fatalf("prompt file %q: missing 'name:' frontmatter field", f.RelativePath)
+		}
+
+		// Must contain Key Boundaries section (bounded content check)
+		if !strings.Contains(content, "Key Boundaries") {
+			t.Fatalf("prompt file %q: missing 'Key Boundaries' section", f.RelativePath)
+		}
+
+		// Must reference OpenCode or Lore context
+		if !strings.Contains(content, "OpenCode") && !strings.Contains(content, "Lore") {
+			t.Fatalf("prompt file %q: content must reference OpenCode or Lore context", f.RelativePath)
+		}
+
+		// No banned phrases — "gentle-orchestrator" is the exact forbidden substring.
+		// "orchestrator" alone is allowed; it appears in legitimate SDD phase references.
+		// "gentle-orchestrator" is the specific banned phrase combining Gentle with orchestrator.
+		safeContent := strings.ToLower(content)
+		for _, phrase := range []string{"gentle-orchestrator", "runtime subagent", "native subagent"} {
+			if strings.Contains(safeContent, phrase) {
+				t.Fatalf("prompt file %q: banned phrase %q found", f.RelativePath, phrase)
+			}
+		}
+	}
+}
+
+func TestOpenCodeSDDAssetsPromptsInertNoOpencodeJSONWiring(t *testing.T) {
+	// Prompt assets are inert install-time content; no opencode.json wiring.
+	adapter := defaultOpenCodeAdapter()
+	files, err := adapter.Render(context.Background(), RenderRequest{
+		Target:     TargetOpenCode,
+		Assets:     agentpack.DefaultOperationalAssets(),
+		Components: []ComponentID{ComponentCorePack, ComponentOpenCodeSDDAssets},
+	})
+	if err != nil {
+		t.Fatalf("Render error = %v, want nil", err)
+	}
+
+	// Prompt files must NOT modify opencode.json (no opencode.json in paths).
+	for _, f := range files {
+		if strings.Contains(f.RelativePath, "prompts/") {
+			if f.RelativePath == "opencode.json" || strings.Contains(f.RelativePath, "opencode.json") {
+				t.Fatalf("prompt file %q: prompts must not produce opencode.json", f.RelativePath)
+			}
+		}
+	}
+}
+
+func TestOpenCodeSDDAssetsPromptsBoundedToOpenCodeLoreContext(t *testing.T) {
+	// Prompt content must be bounded to OpenCode/Lore context, not generic.
+	adapter := defaultOpenCodeAdapter()
+	files, err := adapter.Render(context.Background(), RenderRequest{
+		Target:     TargetOpenCode,
+		Assets:     agentpack.DefaultOperationalAssets(),
+		Components: []ComponentID{ComponentCorePack, ComponentOpenCodeSDDAssets},
+	})
+	if err != nil {
+		t.Fatalf("Render error = %v, want nil", err)
+	}
+
+	for _, f := range files {
+		if !strings.Contains(f.RelativePath, "prompts/sdd") {
+			continue
+		}
+		content := string(f.Content)
+
+		// Prompt must mention OpenCode/Lore bounded context
+		if !strings.Contains(content, "OpenCode") && !strings.Contains(content, "Lore") {
+			t.Fatalf("prompt file %q: content must reference OpenCode or Lore context", f.RelativePath)
+		}
+
+		// Prompt must mention orchestrator
+		if !strings.Contains(content, "orchestrator") && !strings.Contains(content, "Orchestrator") {
+			t.Fatalf("prompt file %q: content must reference orchestrator behavior", f.RelativePath)
+		}
+	}
+}
