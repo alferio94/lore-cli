@@ -33,23 +33,26 @@ func TestRenderOrchestratorSystemInstructionFallsBackToDefaults(t *testing.T) {
 }
 
 // TestRenderOrchestratorSystemInstructionTeachesCanonicalMemoryToolSelection
-// verifies the harness-neutral canonical memory-tool guidance is present in the
-// generated orchestrator instruction. The guidance teaches the contract preferred
-// by the lore-server MCP surface (`lore_memory_*` tools) and explicitly prefers
-// it over the deprecated Pi-native `lore-memory.ts` extension, which has been
-// removed and is not available in any install path.
+// verifies the harness-neutral canonical context/memory-tool guidance is present in
+// the generated orchestrator instruction. The guidance teaches the contract preferred
+// by the Lore Server MCP surface (`lore_project_activity`, `lore_project_context`,
+// `lore_memory_search`, and `lore_memory_get`) and explicitly prefers it over the
+// deprecated Pi-native `lore-memory.ts` extension, which has been removed and is not
+// available in any install path.
 func TestRenderOrchestratorSystemInstructionTeachesCanonicalMemoryToolSelection(t *testing.T) {
 	instruction := RenderOrchestratorSystemInstruction(DefaultDefinition())
 
 	for _, want := range []string{
-		"Lore memory tool selection (harness-neutral canonical guidance):",
-		"Prefer the MCP Lore Server tools (`lore_memory_*`) over any deprecated harness-local memory extension",
-		"Use `lore_memory_search` for memory discovery.",
-		"`lore_memory_search` accepts exactly one of `project_id` or `project_key` per call.",
+		"Lore MCP context and memory tool selection (harness-neutral canonical guidance):",
+		"Prefer MCP Lore Server tools over any deprecated harness-local memory extension",
+		"Tool names may be exposed with harness-specific namespace prefixes",
+		"use `lore_project_activity` first when available",
+		"Use `lore_project_context` when broader recent project context is needed.",
+		"Use `lore_memory_search` for targeted memory discovery.",
+		"`lore_project_activity`, `lore_project_context`, and `lore_memory_search` accept exactly one of `project_id` or `project_key` per call.",
 		"Prefer `project_key` when a stable key is known",
-		"`lore_memory_search` returns compact `content_preview` results and omits the full memory content.",
-		"call `lore_memory_get` with `project_id` (UUID) plus the memory `id`",
-		"`lore_memory_get` requires a `project_id`; passing a `project_key` is not a supported substitute.",
+		"omit full memory content. Do not assume `content` is present",
+		"call `lore_memory_get` with the memory `id` plus exactly one project identity: `project_id` (UUID) or `project_key`",
 		"Harness-local or harness-native fallback tools",
 		"MUST only be used when MCP Lore Server tools are unavailable.",
 		// The deprecated Pi-native extension must be named explicitly so future

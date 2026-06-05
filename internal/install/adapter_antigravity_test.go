@@ -41,8 +41,8 @@ func TestAntigravityAdapterRenderProducesPromptSkillsAndOptionalMCPWithoutPiArti
 	if !ok {
 		t.Fatalf("Render(core-pack) paths = %v, want ../GEMINI.md", sortedRenderedPaths(files))
 	}
-	if !containsAll(string(prompt.Content), "<!-- lore-cli:antigravity:start -->", "append", "~/.gemini/antigravity-cli/skills") {
-		t.Fatalf("prompt content = %q, want managed Antigravity markers and skills guidance", string(prompt.Content))
+	if !containsAll(string(prompt.Content), "<!-- lore-cli:antigravity:start -->", "append", "~/.gemini/antigravity-cli/skills", "prefer `lore_project_activity` first", "targeted `lore_memory_search`", "`lore_memory_get` for full memory content") {
+		t.Fatalf("prompt content = %q, want managed Antigravity markers, skills guidance, and Lore MCP context guidance", string(prompt.Content))
 	}
 	if strings.Contains(string(prompt.Content), "~/.pi/agent") || strings.Contains(string(prompt.Content), "agents/lore-managed") {
 		t.Fatalf("prompt content = %q, want Antigravity-owned prompt semantics without Pi path leakage", string(prompt.Content))

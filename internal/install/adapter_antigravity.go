@@ -185,6 +185,7 @@ func renderAntigravityPrompt(definition agentpack.Definition) []byte {
 		fmt.Sprintf("- Managed SDD phases: `%s`", strings.Join(phases, "`, `")),
 		"",
 		"Load the Lore-managed skill files from the Antigravity skills directory when a task explicitly requires them.",
+		"Use Lore MCP for persistent project context: prefer `lore_project_activity` first, then `lore_project_context`, targeted `lore_memory_search`, and `lore_memory_get` for full memory content.",
 		"For SDD, the orchestrator delegates each phase to the matching managed sdd-* phase worker when available; phase workers persist full artifacts and return compact envelopes.",
 		"Do not manually author SDD phase artifacts from the orchestrator as a shortcut unless inline execution was explicitly requested or delegation is unavailable.",
 		antigravityPromptEndMarker,

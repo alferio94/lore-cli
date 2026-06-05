@@ -1124,8 +1124,8 @@ func TestExecuteAntigravityInstallWritesPromptSkillsAndManifest(t *testing.T) {
 		t.Fatalf("ReadFile(prompt) error: %v", err)
 	}
 	promptText := string(promptContent)
-	if !containsAll(promptText, antigravityPromptStartMarker, antigravityPromptEndMarker, "Lore Runtime") {
-		t.Fatalf("prompt content = %q, want managed Antigravity prompt block", promptText)
+	if !containsAll(promptText, antigravityPromptStartMarker, antigravityPromptEndMarker, "Lore Runtime", "prefer `lore_project_activity` first", "targeted `lore_memory_search`", "`lore_memory_get` for full memory content") {
+		t.Fatalf("prompt content = %q, want managed Antigravity prompt block with Lore MCP context guidance", promptText)
 	}
 	if strings.Contains(promptText, "agents/lore-managed") || strings.Contains(promptText, ".pi/agent") {
 		t.Fatalf("prompt content leaked Pi semantics: %q", promptText)
@@ -1998,7 +1998,6 @@ func TestPlanPiInstallOmitsLoreMemoryCleanupActionWhenAbsent(t *testing.T) {
 		}
 	}
 }
-
 
 func TestInstallPiManagedOverlayConflictsAndContractCompatibility(t *testing.T) {
 	homeDir := t.TempDir()
