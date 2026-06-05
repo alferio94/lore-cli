@@ -1,10 +1,13 @@
 package install
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/alferio94/lore-cli/internal/agentpack"
 )
 
 // TestNoActiveSourceTeachesStalePiEnvelopeContract is a focused static guard for the
@@ -112,4 +115,62 @@ func TestNoActiveSourceTeachesLegacyDelegationOwnership(t *testing.T) {
 		}
 		return nil
 	})
+}
+
+// TestDeprecatedLoreMemoryAssetNotEmbedded is a focused guard for the spec
+// invariant: the deprecated `internal/install/assets/pi/lore-memory.ts` file MUST
+// NOT be present in the install asset directory, and the embed.FS in `pi.go` MUST
+// NOT be able to read it. This enforces the "not available at any moment" contract
+// for the deprecated Pi-native memory extension.
+func TestDeprecatedLoreMemoryAssetNotEmbedded(t *testing.T) {
+	assetPath := filepath.Join("assets", "pi", "lore-memory.ts")
+	if _, err := installAssets.ReadFile(assetPath); err == nil {
+		t.Fatalf("installAssets.ReadFile(%q) succeeded; want deprecated asset to be removed from the embed.FS", assetPath)
+	} else if !strings.Contains(err.Error(), "file does not exist") && !os.IsNotExist(err) {
+		// Embed.FS ReadFile returns a *PathError wrapping fs.ErrNotExist; accept any
+		// not-exist form, but reject any other failure mode.
+		t.Fatalf("installAssets.ReadFile(%q) error = %v, want not-exist error", assetPath, err)
+	}
+}
+
+// TestDefaultPiLayoutDoesNotIncludeLoreMemory is a focused guard for the spec
+// invariant: the default Pi layout's ManagedFiles list MUST NOT include the
+// deprecated `extensions/lore-memory.ts` path. The path is reserved for
+// historical manifest upgrade filtering only.
+func TestDefaultPiLayoutDoesNotIncludeLoreMemory(t *testing.T) {
+	layout := ResolvePiLayout(t.TempDir())
+	for _, managed := range layout.ManagedFiles {
+		if strings.HasSuffix(managed, managedDeprecatedLoreMemoryRelativePath) || strings.Contains(managed, "lore-memory.ts") {
+			t.Fatalf("layout.ManagedFiles includes deprecated lore-memory.ts: %v", layout.ManagedFiles)
+		}
+	}
+}
+
+// TestDefaultPiAdapterRenderDoesNotEmitLoreMemory is a focused guard for the
+// spec invariant: the default Pi adapter's default-component render MUST NOT
+// include any file at the deprecated `extensions/lore-memory.ts` path, even
+// when the optional `pi-extensions` component is explicitly selected.
+func TestDefaultPiAdapterRenderDoesNotEmitLoreMemory(t *testing.T) {
+	adapter := defaultPiAdapter()
+	definition := agentpack.DefaultDefinition()
+
+	for _, components := range [][]ComponentID{
+		{ComponentCorePack, ComponentLoreServerMCP, ComponentExtendedSkills},
+		{ComponentCorePack, ComponentLoreServerMCP, ComponentExtendedSkills, ComponentPiExtensions},
+		{ComponentCorePack, ComponentPiExtensions},
+	} {
+		rendered, err := adapter.Render(context.Background(), RenderRequest{
+			Target:     TargetPi,
+			Definition: definition,
+			Components: components,
+		})
+		if err != nil {
+			t.Fatalf("Render(%v) error = %v, want nil", components, err)
+		}
+		for _, file := range rendered {
+			if strings.HasSuffix(file.RelativePath, "lore-memory.ts") {
+				t.Fatalf("Render(%v) emitted deprecated %s; lore-memory.ts must not be rendered in any install path", components, file.RelativePath)
+			}
+		}
+	}
 }

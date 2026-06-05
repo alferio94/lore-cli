@@ -89,12 +89,21 @@ func upgradeLegacyManifest(legacy legacyManifest) Manifest {
 	components := []ComponentID{ComponentCorePack, ComponentPiExtensions}
 	records := make([]ManagedFileRecord, 0, len(legacy.ManagedFiles))
 	for _, path := range legacy.ManagedFiles {
-		if filepath.Base(path) == filepath.Base(legacyPiDelegationRelativePath) {
+		base := filepath.Base(path)
+		// Drop legacy entries that no longer correspond to a current managed path:
+		//   - lore-delegation.ts was the pre-`lore-pi-runtime` owner and is no
+		//     longer a runtime source (cleanup-only migration artifact).
+		//   - lore-memory.ts was deprecated and removed; the asset no longer
+		//     exists in the installer bundle, so it cannot be re-rendered.
+		if base == filepath.Base(legacyPiDelegationRelativePath) {
+			continue
+		}
+		if base == filepath.Base(managedDeprecatedLoreMemoryRelativePath) {
 			continue
 		}
 		component := ComponentPiExtensions
 		mergeMode := MergeModeReplace
-		if filepath.Base(path) == "settings.json" {
+		if base == "settings.json" {
 			component = ComponentCorePack
 			mergeMode = MergeModeAdditiveJSON
 		}

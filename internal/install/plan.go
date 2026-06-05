@@ -138,6 +138,19 @@ func (s Service) PlanPiInstall(req PiInstallRequest) (PiInstallPlan, error) {
 	if cleanupAction != nil {
 		actions = append(actions, *cleanupAction)
 	}
+	// Backup-first idempotent cleanup for any pre-existing `lore-memory.ts`. The
+	// asset is deprecated and removed from the install bundle; remaining copies
+	// would autoload inside the Pi runtime if left untouched, so the dry-run plan
+	// surfaces a `managed_action=delete:extensions/lore-memory.ts` entry. When the
+	// file is absent (fresh install or after a prior cleanup) the planner returns
+	// nil and the action is omitted, keeping reruns idempotent and silent.
+	deprecatedMemoryAction, err := planDeprecatedLoreMemoryCleanup(layout, managedBackupRoot)
+	if err != nil {
+		return PiInstallPlan{}, err
+	}
+	if deprecatedMemoryAction != nil {
+		actions = append(actions, *deprecatedMemoryAction)
+	}
 	plan.ManagedFileActions = actions
 
 	snapshot, err := snapshotTree(layout.PiDir)

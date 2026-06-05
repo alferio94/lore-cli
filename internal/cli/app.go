@@ -324,7 +324,7 @@ func (a *App) runInstall(_ InteractiveActions, args []string) int {
 		fmt.Fprintln(a.Stderr, "Codex writes managed agents.md, config.toml remote MCP config, skills/*.md, and manifest into ~/.codex. No codex exec runner or bootstrap behavior is installed.")
 		fmt.Fprintln(a.Stderr, "Use --component to override defaults. Without flags, a complete target-specific default install is selected. Rerun lore install to refresh the extended-skills bundle; lore update does not touch skill files or managed runtime content.")
 		fmt.Fprintln(a.Stderr, "Healthy saved OS keychain-backed login metadata is reused automatically; Claude Code remains Coming soon.")
-		fmt.Fprintln(a.Stderr, "Pi uses hosted Lore MCP via pi-mcp-adapter by default; legacy pi-extensions (lore-memory.ts) are available as an optional explicit override via --component pi-extensions but are not installed by default.")
+		fmt.Fprintln(a.Stderr, "Pi uses hosted Lore MCP via pi-mcp-adapter by default; the deprecated lore-memory.ts extension has been removed and is not available. The optional pi-extensions bundle (lore-footer.ts only) is available via --component pi-extensions but is not installed by default.")
 		fmt.Fprintln(a.Stderr, "Antigravity install writes ~/.gemini/config/agents/lore.json for the managed Lore profile and, when MCP is selected, writes ~/.gemini/config/mcp_config.json with the Lore /v1/mcp server URL plus a plaintext Authorization bearer token.")
 		fmt.Fprintln(a.Stderr, "Codex install writes ~/.codex/config.toml with a managed Lore remote MCP entry pointing at /v1/mcp and a plaintext Authorization bearer token under [mcp_servers.lore.http_headers].")
 		fs.PrintDefaults()

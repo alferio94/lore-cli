@@ -64,7 +64,7 @@ func ComponentCatalog() map[ComponentID]Component {
 		ComponentPiExtensions: {
 			ID:               ComponentPiExtensions,
 			Title:            "Pi Extensions",
-			Description:      "Dormant Pi-native Lore extensions path (lore-memory). Available for rollback/testing only; not installed by default.",
+			Description:      "Optional Pi-native Lore extension bundle (lore-footer UI status only). The deprecated lore-memory extension was removed and is not available in any install path.",
 			Optional:         true,
 			DefaultForTarget: map[TargetID]bool{},
 		},

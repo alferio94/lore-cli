@@ -27,7 +27,7 @@ func TestDefaultTargetsPreferPiAndMarkOthersComingSoon(t *testing.T) {
 	if got := targets[0]; got.ID != TargetPi || !got.Available || !got.Recommended {
 		t.Fatalf("targets[0] = %+v, want available recommended Pi", got)
 	}
-	if got := targets[0].Description; !containsAll(got, "uses hosted Lore MCP via pi-mcp-adapter", "optional explicit pi-extensions (lore-memory)") {
+	if got := targets[0].Description; !containsAll(got, "uses hosted Lore MCP via pi-mcp-adapter", "optional explicit pi-extensions (lore-footer.ts only)") {
 		t.Fatalf("targets[0].Description = %q, want hosted MCP default with optional explicit pi-extensions", got)
 	}
 	if got := findTarget(targets, TargetAntigravity); !got.Available || got.Recommended || !containsAll(got.Description, "prompt", "skills", "agent profile", "optional direct MCP config") {
@@ -467,7 +467,10 @@ func TestInstallPiWritesManagedFilesBackupsAndManifest(t *testing.T) {
 	if err := os.MkdirAll(layout.ExtensionsDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll extensions: %v", err)
 	}
-	// Write existing lore-memory.ts for legacy migration test (dormant after default change).
+	// Write existing lore-memory.ts for legacy migration test. The default install
+	// must back it up and remove it because the asset is deprecated and removed
+	// from the install bundle; remaining copies would autoload inside the Pi
+	// runtime if left untouched.
 	if err := os.WriteFile(filepath.Join(layout.ExtensionsDir, "lore-memory.ts"), []byte("legacy token=secret-token"), 0o644); err != nil {
 		t.Fatalf("WriteFile lore-memory.ts: %v", err)
 	}
@@ -498,15 +501,31 @@ func TestInstallPiWritesManagedFilesBackupsAndManifest(t *testing.T) {
 	if len(result.Summary.Created) < 9 {
 		t.Fatalf("Created = %v, want at least 9 files (mcp.json + settings.json + 7 agent overlays)", result.Summary.Created)
 	}
-	// settings.json and mcp.json should be updated, lore-memory is not touched by default.
+	// settings.json and mcp.json should be updated.
 	if len(result.Summary.Updated) < 1 {
 		t.Fatalf("Updated = %v, want at least settings.json update", result.Summary.Updated)
 	}
-	if len(result.Summary.Deleted) != 1 || result.Summary.Deleted[0] != filepath.Join("extensions", "lore-delegation.ts") {
-		t.Fatalf("Deleted = %v, want legacy delegation cleanup", result.Summary.Deleted)
+	// Both legacy cleanup paths are applied: lore-delegation.ts (pre-`lore-pi-runtime`
+	// delegation) and lore-memory.ts (deprecated Pi-native memory extension). The
+	// order is delegation first, then deprecated memory; the manifest refresh must
+	// reflect both cleanups.
+	wantDeleted := []string{filepath.Join("extensions", "lore-delegation.ts"), managedDeprecatedLoreMemoryRelativePath}
+	if len(result.Summary.Deleted) != len(wantDeleted) {
+		t.Fatalf("Deleted = %v, want %v (legacy delegation + deprecated lore-memory cleanup)", result.Summary.Deleted, wantDeleted)
 	}
-	if len(result.Summary.BackedUp) < 2 {
-		t.Fatalf("BackedUp = %v, want at least 2 backups (legacy delegation + settings.json)", result.Summary.BackedUp)
+	for _, path := range wantDeleted {
+		if !containsSummaryEntry(result.Summary.Deleted, path) {
+			t.Fatalf("Deleted = %v, want entry %q present", result.Summary.Deleted, path)
+		}
+	}
+	// BackedUp must include both cleanup paths plus the updated settings.json.
+	if len(result.Summary.BackedUp) < 3 {
+		t.Fatalf("BackedUp = %v, want at least 3 backups (legacy delegation + deprecated lore-memory + settings.json)", result.Summary.BackedUp)
+	}
+	for _, path := range wantDeleted {
+		if !containsSummaryEntry(result.Summary.BackedUp, path) {
+			t.Fatalf("BackedUp = %v, want entry %q present", result.Summary.BackedUp, path)
+		}
 	}
 	if result.Manifest.AuthMode != "cli-request" || result.Manifest.ServerURL != "https://lore.example" {
 		t.Fatalf("Manifest = %+v, want cli-request manifest with server URL", result.Manifest)
@@ -539,14 +558,27 @@ func TestInstallPiWritesManagedFilesBackupsAndManifest(t *testing.T) {
 	}
 
 	// Default install does NOT re-render lore-memory.ts or lore-footer.ts (dormant for Pi default).
-	// The legacy lore-memory.ts from the pre-existing setup should remain untouched.
-	// Only settings.json and mcp.json are managed by default install.
+	// Pre-existing lore-memory.ts and lore-delegation.ts are both removed by the
+	// backup-first cleanup paths and a copy of each is preserved under the managed
+	// backup root so the user can roll back if needed. Only settings.json and
+	// mcp.json are managed by default install.
 
 	if _, err := os.Stat(filepath.Join(layout.ExtensionsDir, "lore-delegation.ts")); !os.IsNotExist(err) {
 		t.Fatalf("lore-delegation.ts stat error = %v, want file removed after cleanup", err)
 	}
 	if _, err := os.ReadFile(filepath.Join(result.Manifest.BackupRoot, "extensions", "lore-delegation.ts")); err != nil {
 		t.Fatalf("ReadFile backup lore-delegation.ts: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(layout.ExtensionsDir, "lore-memory.ts")); !os.IsNotExist(err) {
+		t.Fatalf("lore-memory.ts stat error = %v, want deprecated file removed after cleanup", err)
+	}
+	if _, err := os.ReadFile(filepath.Join(result.Manifest.BackupRoot, managedDeprecatedLoreMemoryRelativePath)); err != nil {
+		t.Fatalf("ReadFile backup lore-memory.ts: %v", err)
+	}
+	// The preserved backup must still contain the original bytes the test wrote,
+	// not an empty file or a placeholder, so rollback can restore the prior state.
+	if got, err := os.ReadFile(filepath.Join(result.Manifest.BackupRoot, managedDeprecatedLoreMemoryRelativePath)); err != nil || string(got) != "legacy token=secret-token" {
+		t.Fatalf("backup lore-memory.ts content = %q err=%v, want original bytes preserved", string(got), err)
 	}
 
 	manifestContent, err := os.ReadFile(layout.ManifestPath)
@@ -560,10 +592,12 @@ func TestInstallPiWritesManagedFilesBackupsAndManifest(t *testing.T) {
 	if manifest.InstalledAt != now.Format(time.RFC3339) {
 		t.Fatalf("manifest installed_at = %q, want %q", manifest.InstalledAt, now.Format(time.RFC3339))
 	}
-	// lore-memory.ts is dormant for default Pi install — no backup should be created.
-	// The legacy lore-memory.ts remains untouched in the extensions dir.
-	if _, err := os.Stat(filepath.Join(layout.ExtensionsDir, "lore-memory.ts")); err != nil {
-		t.Fatalf("lore-memory.ts stat error = %v, want dormant file preserved", err)
+	// The manifest refresh must not record the deprecated lore-memory.ts as a
+	// managed file (the cleanup is a delete, not a create/update).
+	for _, managed := range manifest.ManagedFiles {
+		if strings.Contains(managed.Path, "lore-memory.ts") {
+			t.Fatalf("manifest managed_files includes deprecated lore-memory.ts: %+v", managed)
+		}
 	}
 }
 
@@ -713,78 +747,73 @@ func TestInstallPiBootstrapsAlferioThemeOnFreshInstallAndPreservesUserThemeOnRer
 	}
 }
 
-func TestValidateManagedContentsRejectsRawToken(t *testing.T) {
+func TestValidateManagedContentsRejectsDeprecatedLoreMemoryAndTokenLeak(t *testing.T) {
 	hostedPackage := PiHostedMCPPackageSource()
-	// lore-memory content contains the saved token "secret-token".
-	// The footer content is valid and does not contain the token.
+	// lore-memory.ts was deprecated and removed. Even if a caller hands it in, the
+	// validator must (1) reject the file as deprecated, and (2) flag any saved-token
+	// leak without echoing the raw token back into the finding message.
 	findings := validateManagedContents(map[string][]byte{
 		"extensions/lore-memory.ts": []byte(`
 const loreServerURL = "https://lore.example";
-// broker args include "api", "request"
-// Project context now uses the REST broker route
-import { Text } from "@earendil-works/pi-tui";
 export default function (pi: ExtensionAPI) {
-  pi.registerTool({ name: "lore_search", renderCall() {}, renderResult() {} });
-  pi.registerTool({ name: "lore_save", renderCall() {}, renderResult() {} });
-  pi.registerTool({ name: "lore_get_observation", renderCall() {}, renderResult() {} });
-  pi.registerTool({ name: "lore_context", renderCall() {}, renderResult() {} });
-  pi.registerTool({ name: "lore_project_list", renderCall() {}, renderResult() {} });
-  pi.registerTool({ name: "lore_project_create", renderCall() {}, renderResult() {} });
-  pi.registerTool({ name: "lore_project_get", renderCall() {}, renderResult() {} });
-  pi.registerTool({ name: "lore_skill_save", renderCall() {}, renderResult() {} });
-  pi.registerTool({ name: "lore_skill_list", renderCall() {}, renderResult() {} });
-  pi.registerTool({ name: "lore_skill_get", renderCall() {}, renderResult() {} });
+  pi.registerTool({ name: "lore_search" });
 }
-text: formatContent(payload.data)
-/v1/memories /v1/projects /v1/skills
 secret-token
 `),
 		"extensions/lore-footer.ts": []byte("export default function (pi: ExtensionAPI) { ctx.ui.setFooter(() => ({ render() { return []; } })); } getContextUsage getExtensionStatuses"),
 		"settings.json":             []byte(`{"packages":["` + hostedPackage + `"],"lore":{"server_url":"https://lore.example"}}`),
 	}, PiInstallRequest{ServerURL: "https://lore.example", SavedToken: "secret-token"})
-	if len(findings) != 1 {
-		t.Fatalf("len(findings) = %d, want 1", len(findings))
+	if len(findings) != 2 {
+		t.Fatalf("len(findings) = %d, want 2 (deprecated + saved auth material)", len(findings))
 	}
-	if got := findings[0]; !containsAll(got, "saved auth material", "extensions/lore-memory.ts") || strings.Contains(got, "secret-token") {
-		t.Fatalf("finding = %q, want secret-safe token validation detail", got)
-	}
-}
-
-func TestValidateManagedContentsRejectsLegacyMemoryRoutesWithoutRequiringDelegationSessions(t *testing.T) {
-	hostedPackage := PiHostedMCPPackageSource()
-	validMemory := []byte(`
-const loreServerURL = "https://lore.example";
-// broker args include "api", "request"
-// Project context now uses the REST broker route
-import { Text } from "@earendil-works/pi-tui";
-export default function (pi: ExtensionAPI) {
-  pi.registerTool({ name: "lore_search", renderCall() {}, renderResult() {} });
-  pi.registerTool({ name: "lore_save", renderCall() {}, renderResult() {} });
-  pi.registerTool({ name: "lore_get_observation", renderCall() {}, renderResult() {} });
-  pi.registerTool({ name: "lore_context", renderCall() {}, renderResult() {} });
-  pi.registerTool({ name: "lore_project_list", renderCall() {}, renderResult() {} });
-  pi.registerTool({ name: "lore_project_create", renderCall() {}, renderResult() {} });
-  pi.registerTool({ name: "lore_project_get", renderCall() {}, renderResult() {} });
-  pi.registerTool({ name: "lore_skill_save", renderCall() {}, renderResult() {} });
-  pi.registerTool({ name: "lore_skill_list", renderCall() {}, renderResult() {} });
-  pi.registerTool({ name: "lore_skill_get", renderCall() {}, renderResult() {} });
-}
-text: formatContent(payload.data)
-/v1/memories /v1/projects /v1/skills /v1/search /v1/observations /v1/context /v1/timeline /v1/stats /v1/sessions
-`)
-	findings := validateManagedContents(map[string][]byte{
-		"extensions/lore-memory.ts": validMemory,
-		"extensions/lore-footer.ts": []byte("export default function (pi: ExtensionAPI) { ctx.ui.setFooter(() => ({ render() { return []; } })); } getContextUsage getExtensionStatuses"),
-		"settings.json":             []byte(`{"packages":["` + hostedPackage + `"],"lore":{"server_url":"https://lore.example"}}`),
-	}, PiInstallRequest{ServerURL: "https://lore.example", SavedToken: "secret-token"})
-
-	if len(findings) != 6 {
-		t.Fatalf("findings = %#v, want one finding for each legacy lore-memory.ts route", findings)
-	}
-	for _, legacy := range []string{"/v1/search", "/v1/observations", "/v1/context", "/v1/timeline", "/v1/stats", "/v1/sessions"} {
-		if !containsAny(findings, "extensions/lore-memory.ts", legacy, "forbidden legacy memory contract snippet") {
-			t.Fatalf("findings = %#v, want scoped rejection for %s", findings, legacy)
+	var sawDeprecated, sawAuthMaterial bool
+	for _, got := range findings {
+		if containsAll(got, "extensions/lore-memory.ts", "deprecated") {
+			sawDeprecated = true
 		}
+		if containsAll(got, "saved auth material", "extensions/lore-memory.ts") && !strings.Contains(got, "secret-token") {
+			sawAuthMaterial = true
+		}
+	}
+	if !sawDeprecated {
+		t.Fatalf("findings = %#v, want deprecated finding for extensions/lore-memory.ts", findings)
+	}
+	if !sawAuthMaterial {
+		t.Fatalf("findings = %#v, want saved-auth-material finding for extensions/lore-memory.ts without leaking the raw token", findings)
+	}
+}
+
+func TestValidateManagedContentsAllowsCleanDefaultInstall(t *testing.T) {
+	hostedPackage := PiHostedMCPPackageSource()
+	// The default hosted-MCP install renders only settings.json + mcp.json (and any
+	// extended skills). The deprecated lore-memory.ts must not appear, and the
+	// validator must report zero findings for a clean default install.
+	findings := validateManagedContents(map[string][]byte{
+		"settings.json": []byte(`{"packages":["` + hostedPackage + `"],"lore":{"server_url":"https://lore.example"}}`),
+		"mcp.json":      []byte(`{"mcpServers":{"lore":{"url":"https://lore.example/v1/mcp","headers":{"Authorization":"Bearer secret-token"}}}}`),
+	}, PiInstallRequest{ServerURL: "https://lore.example", SavedToken: "secret-token"})
+	if len(findings) != 0 {
+		t.Fatalf("len(findings) = %d, want 0; findings = %#v", len(findings), findings)
+	}
+}
+
+func TestValidateRenderedPiFilesRejectsDeprecatedLoreMemoryBeforeWrites(t *testing.T) {
+	layout := ResolvePiLayout(t.TempDir())
+	hostedPackage := PiHostedMCPPackageSource()
+	files := []renderedPiFile{
+		// Even with valid content, rendering the deprecated lore-memory.ts must fail
+		// validation before any filesystem write.
+		{relativePath: managedDeprecatedLoreMemoryRelativePath, absolutePath: filepath.Join(layout.ExtensionsDir, "lore-memory.ts"), content: []byte("export default function (pi: ExtensionAPI) { /* deprecated */ }")},
+		{relativePath: managedPiExtensionRelativePaths[0], absolutePath: filepath.Join(layout.ExtensionsDir, "lore-footer.ts"), content: []byte("export default function (pi: ExtensionAPI) { ctx.ui.setFooter(() => ({ render() { return []; } })); } getContextUsage getExtensionStatuses")},
+		{relativePath: "settings.json", absolutePath: layout.SettingsPath, content: []byte(`{"packages":["` + hostedPackage + `"]}`), mergeMode: MergeModeAdditiveJSON},
+	}
+
+	err := validateRenderedPiFiles(files)
+	if err == nil || !containsAll(err.Error(), "extensions/lore-memory.ts", "deprecated") {
+		t.Fatalf("validateRenderedPiFiles error = %v, want deprecated lore-memory.ts rejection", err)
+	}
+	if _, statErr := os.Stat(layout.AgentDir); !os.IsNotExist(statErr) {
+		t.Fatalf("agent dir stat error = %v, want no writes before validation failure", statErr)
 	}
 }
 
@@ -792,13 +821,15 @@ func TestValidateRenderedPiFilesRejectsMissingDefaultFactoryBeforeWrites(t *test
 	layout := ResolvePiLayout(t.TempDir())
 	hostedPackage := PiHostedMCPPackageSource()
 	files := []renderedPiFile{
-		{relativePath: managedPiExtensionRelativePaths[0], absolutePath: filepath.Join(layout.ExtensionsDir, "lore-memory.ts"), content: []byte("lore api request without factory")},
-		{relativePath: managedPiExtensionRelativePaths[1], absolutePath: filepath.Join(layout.ExtensionsDir, "lore-footer.ts"), content: []byte("export default function (pi: ExtensionAPI) { ctx.ui.setFooter(() => ({ render() { return []; } })); } getContextUsage getExtensionStatuses")},
+		// lore-footer.ts is the only remaining optional Pi-native extension; if it
+		// is rendered without the documented `export default function` factory,
+		// validation must fail before any write.
+		{relativePath: managedPiExtensionRelativePaths[0], absolutePath: filepath.Join(layout.ExtensionsDir, "lore-footer.ts"), content: []byte("lore footer without factory")},
 		{relativePath: "settings.json", absolutePath: layout.SettingsPath, content: []byte(`{"packages":["` + hostedPackage + `"]}`), mergeMode: MergeModeAdditiveJSON},
 	}
 
 	err := validateRenderedPiFiles(files)
-	if err == nil || !containsAll(err.Error(), "extensions/lore-memory.ts", "export default function") {
+	if err == nil || !containsAll(err.Error(), "extensions/lore-footer.ts", "export default function") {
 		t.Fatalf("validateRenderedPiFiles error = %v, want default factory rejection", err)
 	}
 	if _, statErr := os.Stat(layout.AgentDir); !os.IsNotExist(statErr) {
@@ -810,13 +841,11 @@ func TestInstallPiRejectsInvalidRenderedExtensionShapeBeforeAnyWrite(t *testing.
 	homeDir := t.TempDir()
 
 	// The test's original intent was to check that an "unexpected-extra.ts" file causes
-	// validation to fail before writes. With the hosted MCP default, lore-memory is optional,
-	// so the validation check for extension factory presence only applies when pi-extensions
-	// is selected. The manifest validation happens after file writes, so we test that
-	// the layout's managed files count matches the manifest's managed files count.
-	//
-	// To test the manifest validation with an unexpected extra path, we mutate the
-	// package-level variable AND select pi-extensions so lore-memory files ARE rendered.
+	// validation to fail before writes. With the hosted MCP default, the only optional
+	// Pi-native extension is lore-footer.ts (lore-memory.ts was deprecated and removed).
+	// To exercise the manifest validation path, mutate the package-level extension list
+	// to add an unexpected extra path that the adapter never renders, then explicitly
+	// select pi-extensions so the footer rendering path runs.
 	original := append([]string(nil), managedPiExtensionRelativePaths...)
 	managedPiExtensionRelativePaths = append(managedPiExtensionRelativePaths, filepath.Join("extensions", "unexpected-extra.ts"))
 	defer func() {
@@ -934,12 +963,17 @@ func TestLoadManifestUpgradesLegacyPiManifest(t *testing.T) {
 		t.Fatalf("Components = %v, want default Pi components", got)
 	}
 	// Legacy manifests predate extended-skills; upgrade preserves base files only.
-	if len(manifest.ManagedFiles) != 3 {
-		t.Fatalf("len(ManagedFiles) = %d, want 3 (legacy base files, extended skills not part of old install)", len(manifest.ManagedFiles))
+	// The deprecated lore-memory.ts is filtered out by the upgrade path so the
+	// resulting manifest matches the current install contract.
+	if len(manifest.ManagedFiles) != 2 {
+		t.Fatalf("len(ManagedFiles) = %d, want 2 (lore-footer + settings; lore-delegation and deprecated lore-memory must be filtered out)", len(manifest.ManagedFiles))
 	}
 	for _, managed := range manifest.ManagedFiles {
 		if strings.Contains(managed.Path, "lore-delegation.ts") {
 			t.Fatalf("legacy delegation path unexpectedly preserved in upgraded manifest: %+v", managed)
+		}
+		if strings.Contains(managed.Path, "lore-memory.ts") {
+			t.Fatalf("deprecated lore-memory path unexpectedly preserved in upgraded manifest: %+v", managed)
 		}
 	}
 }
@@ -1725,6 +1759,246 @@ func TestInstallPiReinstallDeletesRestoredLegacyDelegationAgain(t *testing.T) {
 		t.Fatalf("lore-delegation.ts stat error = %v, want absent after reinstall cleanup", err)
 	}
 }
+
+// TestPlanDeprecatedLoreMemoryCleanupReturnsNilWhenAbsent verifies the cleanup
+// planner is idempotent on a fresh install: a missing deprecated `lore-memory.ts`
+// must produce a nil action so apply and dry-run do nothing.
+func TestPlanDeprecatedLoreMemoryCleanupReturnsNilWhenAbsent(t *testing.T) {
+	homeDir := t.TempDir()
+	layout := ResolvePiLayout(homeDir)
+	backupRoot := filepath.Join(layout.AgentDir, "backups", "20260519T050000Z")
+	action, err := planDeprecatedLoreMemoryCleanup(layout, backupRoot)
+	if err != nil {
+		t.Fatalf("planDeprecatedLoreMemoryCleanup error: %v, want nil for absent file", err)
+	}
+	if action != nil {
+		t.Fatalf("planDeprecatedLoreMemoryCleanup action = %+v, want nil for absent file", action)
+	}
+}
+
+// TestPlanDeprecatedLoreMemoryCleanupReturnsDeleteActionForExistingFile verifies
+// the cleanup planner produces a `delete` action with the documented relative
+// path and a backup path rooted at the supplied backup root.
+func TestPlanDeprecatedLoreMemoryCleanupReturnsDeleteActionForExistingFile(t *testing.T) {
+	homeDir := t.TempDir()
+	layout := ResolvePiLayout(homeDir)
+	if err := os.MkdirAll(layout.ExtensionsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll extensions: %v", err)
+	}
+	absolutePath := filepath.Join(layout.AgentDir, filepath.FromSlash(managedDeprecatedLoreMemoryRelativePath))
+	if err := os.WriteFile(absolutePath, []byte("legacy memory leftover"), 0o600); err != nil {
+		t.Fatalf("WriteFile lore-memory.ts: %v", err)
+	}
+	backupRoot := filepath.Join(layout.AgentDir, "backups", "20260519T050000Z")
+	action, err := planDeprecatedLoreMemoryCleanup(layout, backupRoot)
+	if err != nil {
+		t.Fatalf("planDeprecatedLoreMemoryCleanup error: %v, want nil", err)
+	}
+	if action == nil {
+		t.Fatalf("planDeprecatedLoreMemoryCleanup action = nil, want delete action for existing file")
+	}
+	if action.RelativePath != managedDeprecatedLoreMemoryRelativePath {
+		t.Fatalf("action.RelativePath = %q, want %q", action.RelativePath, managedDeprecatedLoreMemoryRelativePath)
+	}
+	if action.Action != "delete" {
+		t.Fatalf("action.Action = %q, want delete", action.Action)
+	}
+	wantBackup := filepath.Join(backupRoot, managedDeprecatedLoreMemoryRelativePath)
+	if action.BackupPath != wantBackup {
+		t.Fatalf("action.BackupPath = %q, want %q", action.BackupPath, wantBackup)
+	}
+}
+
+// TestPlanDeprecatedLoreMemoryCleanupRejectsNonRegularFile verifies the cleanup
+// planner refuses to follow a symlink or operate on a directory placed at the
+// deprecated path. The user must move such an entry aside before reinstalling.
+func TestPlanDeprecatedLoreMemoryCleanupRejectsNonRegularFile(t *testing.T) {
+	homeDir := t.TempDir()
+	layout := ResolvePiLayout(homeDir)
+	if err := os.MkdirAll(layout.ExtensionsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll extensions: %v", err)
+	}
+	absolutePath := filepath.Join(layout.AgentDir, filepath.FromSlash(managedDeprecatedLoreMemoryRelativePath))
+	if err := os.Symlink("/tmp/somewhere-else", absolutePath); err != nil {
+		t.Fatalf("Symlink deprecated path: %v", err)
+	}
+	action, err := planDeprecatedLoreMemoryCleanup(layout, filepath.Join(layout.AgentDir, "backups"))
+	if err == nil || action != nil {
+		t.Fatalf("planDeprecatedLoreMemoryCleanup = (%+v, %v), want non-nil error and nil action for symlink", action, err)
+	}
+	if !containsAll(err.Error(), managedDeprecatedLoreMemoryRelativePath, "symlink") {
+		t.Fatalf("error = %v, want mention of deprecated path and symlink kind", err)
+	}
+}
+
+// TestInstallPiRemovesAndBacksUpPreExistingLoreMemoryExtension is a focused
+// guard for the spec invariant: a pre-existing `~/.pi/agent/extensions/lore-memory.ts`
+// must be backed up under the managed backup root, removed from disk, and
+// reported in the install summary's Deleted and BackedUp lists. The manifest
+// refresh must not record the deprecated path as a managed file.
+func TestInstallPiRemovesAndBacksUpPreExistingLoreMemoryExtension(t *testing.T) {
+	homeDir := t.TempDir()
+	layout := ResolvePiLayout(homeDir)
+	if err := os.MkdirAll(layout.ExtensionsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll extensions: %v", err)
+	}
+	absolutePath := filepath.Join(layout.AgentDir, filepath.FromSlash(managedDeprecatedLoreMemoryRelativePath))
+	original := []byte("// pre-existing lore-memory.ts leftover from older install\nexport default function (pi) {}\n")
+	if err := os.WriteFile(absolutePath, original, 0o600); err != nil {
+		t.Fatalf("WriteFile lore-memory.ts: %v", err)
+	}
+
+	result, err := Service{}.InstallPi(PiInstallRequest{
+		HomeDir:        homeDir,
+		ServerURL:      "https://lore.example",
+		LoreBinaryPath: "/usr/local/bin/lore",
+		LoreConfigDir:  filepath.Join(homeDir, ".lore"),
+		LoreCLIVersion: "v1.2.3",
+		Now:            time.Date(2026, 5, 19, 5, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("InstallPi error: %v", err)
+	}
+	if len(result.Summary.Failed) != 0 {
+		t.Fatalf("Failed = %v, want none", result.Summary.Failed)
+	}
+	if !containsSummaryEntry(result.Summary.Deleted, managedDeprecatedLoreMemoryRelativePath) {
+		t.Fatalf("Deleted = %v, want entry %q", result.Summary.Deleted, managedDeprecatedLoreMemoryRelativePath)
+	}
+	if !containsSummaryEntry(result.Summary.BackedUp, managedDeprecatedLoreMemoryRelativePath) {
+		t.Fatalf("BackedUp = %v, want entry %q", result.Summary.BackedUp, managedDeprecatedLoreMemoryRelativePath)
+	}
+	if _, err := os.Stat(absolutePath); !os.IsNotExist(err) {
+		t.Fatalf("lore-memory.ts stat error = %v, want file removed from installed extensions", err)
+	}
+	backupPath := filepath.Join(result.Manifest.BackupRoot, managedDeprecatedLoreMemoryRelativePath)
+	backupContent, err := os.ReadFile(backupPath)
+	if err != nil {
+		t.Fatalf("ReadFile lore-memory.ts backup: %v", err)
+	}
+	if string(backupContent) != string(original) {
+		t.Fatalf("backup content = %q, want original %q", string(backupContent), string(original))
+	}
+	for _, managed := range result.Manifest.ManagedFiles {
+		if strings.Contains(managed.Path, "lore-memory.ts") {
+			t.Fatalf("manifest managed_files includes deprecated lore-memory.ts: %+v", managed)
+		}
+	}
+}
+
+// TestInstallPiIdempotentRerunAfterLoreMemoryCleanup verifies the cleanup is
+// idempotent across reruns: once the deprecated `lore-memory.ts` is removed
+// and backed up, subsequent applies report no duplicate cleanup, do not error
+// on a missing source file, and the file remains absent.
+func TestInstallPiIdempotentRerunAfterLoreMemoryCleanup(t *testing.T) {
+	homeDir := t.TempDir()
+	layout := ResolvePiLayout(homeDir)
+	if err := os.MkdirAll(layout.ExtensionsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll extensions: %v", err)
+	}
+	absolutePath := filepath.Join(layout.AgentDir, filepath.FromSlash(managedDeprecatedLoreMemoryRelativePath))
+	if err := os.WriteFile(absolutePath, []byte("leftover"), 0o600); err != nil {
+		t.Fatalf("WriteFile lore-memory.ts: %v", err)
+	}
+
+	req := PiInstallRequest{
+		HomeDir:        homeDir,
+		ServerURL:      "https://lore.example",
+		LoreBinaryPath: "/usr/local/bin/lore",
+		LoreConfigDir:  filepath.Join(homeDir, ".lore"),
+		LoreCLIVersion: "v1.2.3",
+		Now:            time.Date(2026, 5, 19, 6, 0, 0, 0, time.UTC),
+	}
+	first, err := Service{}.InstallPi(req)
+	if err != nil {
+		t.Fatalf("first InstallPi error: %v", err)
+	}
+	if !containsSummaryEntry(first.Summary.Deleted, managedDeprecatedLoreMemoryRelativePath) {
+		t.Fatalf("first Deleted = %v, want entry %q", first.Summary.Deleted, managedDeprecatedLoreMemoryRelativePath)
+	}
+
+	second, err := Service{}.InstallPi(req)
+	if err != nil {
+		t.Fatalf("second InstallPi error: %v, want idempotent success", err)
+	}
+	if containsSummaryEntry(second.Summary.Deleted, managedDeprecatedLoreMemoryRelativePath) {
+		t.Fatalf("second Deleted = %v, want no entry %q on idempotent rerun", second.Summary.Deleted, managedDeprecatedLoreMemoryRelativePath)
+	}
+	if _, err := os.Stat(absolutePath); !os.IsNotExist(err) {
+		t.Fatalf("lore-memory.ts stat error = %v, want file absent after rerun", err)
+	}
+	if len(second.Summary.Failed) != 0 {
+		t.Fatalf("second Failed = %v, want no findings on idempotent rerun", second.Summary.Failed)
+	}
+}
+
+// TestPlanPiInstallSurfacesLoreMemoryCleanupActionInDryRun verifies the
+// dry-run plan surfaces the backup-first deprecated `lore-memory.ts` cleanup
+// as a `managed_action=delete` entry whenever a pre-existing file is present.
+func TestPlanPiInstallSurfacesLoreMemoryCleanupActionInDryRun(t *testing.T) {
+	homeDir := t.TempDir()
+	layout := ResolvePiLayout(homeDir)
+	if err := os.MkdirAll(layout.ExtensionsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll extensions: %v", err)
+	}
+	absolutePath := filepath.Join(layout.AgentDir, filepath.FromSlash(managedDeprecatedLoreMemoryRelativePath))
+	if err := os.WriteFile(absolutePath, []byte("leftover"), 0o600); err != nil {
+		t.Fatalf("WriteFile lore-memory.ts: %v", err)
+	}
+
+	plan, err := Service{}.PlanPiInstall(PiInstallRequest{
+		HomeDir:        homeDir,
+		ServerURL:      "https://lore.example",
+		LoreBinaryPath: "/usr/local/bin/lore",
+		LoreConfigDir:  filepath.Join(homeDir, ".lore"),
+		LoreCLIVersion: "v1.2.3",
+		Now:            time.Date(2026, 5, 19, 7, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("PlanPiInstall error: %v", err)
+	}
+
+	// The action list must include a `delete` entry for the deprecated path.
+	var sawDelete bool
+	for _, action := range plan.ManagedFileActions {
+		if action.RelativePath == managedDeprecatedLoreMemoryRelativePath {
+			if action.Action != "delete" {
+				t.Fatalf("action.Action = %q, want delete", action.Action)
+			}
+			if action.BackupPath == "" || !strings.HasPrefix(action.BackupPath, plan.ManagedBackupRoot) {
+				t.Fatalf("action.BackupPath = %q, want path under ManagedBackupRoot %q", action.BackupPath, plan.ManagedBackupRoot)
+			}
+			sawDelete = true
+		}
+	}
+	if !sawDelete {
+		t.Fatalf("plan.ManagedFileActions = %+v, want delete action for %q", plan.ManagedFileActions, managedDeprecatedLoreMemoryRelativePath)
+	}
+}
+
+// TestPlanPiInstallOmitsLoreMemoryCleanupActionWhenAbsent verifies the cleanup
+// is a no-op for fresh installs and after a prior cleanup: no `delete` action
+// is appended to the dry-run plan when the deprecated file is not present.
+func TestPlanPiInstallOmitsLoreMemoryCleanupActionWhenAbsent(t *testing.T) {
+	homeDir := t.TempDir()
+	plan, err := Service{}.PlanPiInstall(PiInstallRequest{
+		HomeDir:        homeDir,
+		ServerURL:      "https://lore.example",
+		LoreBinaryPath: "/usr/local/bin/lore",
+		LoreConfigDir:  filepath.Join(homeDir, ".lore"),
+		LoreCLIVersion: "v1.2.3",
+		Now:            time.Date(2026, 5, 19, 8, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("PlanPiInstall error: %v", err)
+	}
+	for _, action := range plan.ManagedFileActions {
+		if action.RelativePath == managedDeprecatedLoreMemoryRelativePath {
+			t.Fatalf("plan.ManagedFileActions = %+v, want no entry for %q on fresh install", plan.ManagedFileActions, managedDeprecatedLoreMemoryRelativePath)
+		}
+	}
+}
+
 
 func TestInstallPiManagedOverlayConflictsAndContractCompatibility(t *testing.T) {
 	homeDir := t.TempDir()

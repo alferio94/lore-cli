@@ -100,7 +100,7 @@ func supportedTarget(adapter HarnessAdapter) Target {
 	target := Target{ID: adapter.ID(), Title: adapter.Title(), Available: true, Recommended: adapter.ID() == DefaultInstallTarget()}
 	switch adapter.ID() {
 	case TargetPi:
-		target.Description = "Recommended today; uses hosted Lore MCP via pi-mcp-adapter as the default backend, with optional explicit pi-extensions (lore-memory) via --component pi-extensions."
+		target.Description = "Recommended today; uses hosted Lore MCP via pi-mcp-adapter as the default backend, with optional explicit pi-extensions (lore-footer.ts only) via --component pi-extensions. The deprecated lore-memory extension has been removed and is not available."
 	case TargetAntigravity:
 		target.Description = "prompt + skills MVP target with managed Gemini lore agent profile and optional direct MCP config; Pi remains the default recommended path while Antigravity keeps harness-owned prompt, skills, and manifest semantics."
 	case TargetCodex:

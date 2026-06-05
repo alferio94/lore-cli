@@ -62,9 +62,10 @@ func TestUpgradeLegacyManifestAssignsPortableComponentMetadata(t *testing.T) {
 		ServerURL:     "https://example.test",
 		LoreBinary:    "/usr/local/bin/lore",
 		LoreConfigDir: "/tmp/lore",
-		// Legacy manifests include lore-memory.ts, lore-delegation.ts, lore-footer.ts, settings.json.
-		// The layout.ManagedFiles now points to settings.json + mcp.json + skills, but legacy
-		// manifests pre-date the hosted MCP change and include the extension files.
+		// Legacy manifests historically included lore-memory.ts, lore-delegation.ts,
+		// lore-footer.ts, and settings.json. The upgrade path must drop both the
+		// legacy delegation file and the deprecated lore-memory.ts so the resulting
+		// portable manifest matches the current install contract.
 		ManagedFiles: []string{
 			filepath.Join(layout.ExtensionsDir, "lore-memory.ts"),
 			filepath.Join(layout.ExtensionsDir, "lore-delegation.ts"),
@@ -83,21 +84,21 @@ func TestUpgradeLegacyManifestAssignsPortableComponentMetadata(t *testing.T) {
 	if got := manifest.Components; len(got) != 2 || got[0] != ComponentCorePack || got[1] != ComponentPiExtensions {
 		t.Fatalf("Components = %v, want default portable component set", got)
 	}
-	if len(manifest.ManagedFiles) != 3 {
-		t.Fatalf("len(ManagedFiles) = %d, want 3 without legacy delegation", len(manifest.ManagedFiles))
+	if len(manifest.ManagedFiles) != 2 {
+		t.Fatalf("len(ManagedFiles) = %d, want 2 (lore-footer + settings; legacy delegation and deprecated lore-memory must be filtered out)", len(manifest.ManagedFiles))
 	}
 	if manifest.ManagedFiles[0].Component != ComponentPiExtensions || manifest.ManagedFiles[0].MergeMode != MergeModeReplace {
-		t.Fatalf("managed lore-memory record = %+v, want pi-extensions/replace", manifest.ManagedFiles[0])
+		t.Fatalf("managed lore-footer record = %+v, want pi-extensions/replace", manifest.ManagedFiles[0])
 	}
-	if manifest.ManagedFiles[1].Component != ComponentPiExtensions || manifest.ManagedFiles[1].MergeMode != MergeModeReplace {
-		t.Fatalf("managed lore-footer record = %+v, want pi-extensions/replace", manifest.ManagedFiles[1])
-	}
-	if manifest.ManagedFiles[2].Component != ComponentCorePack || manifest.ManagedFiles[2].MergeMode != MergeModeAdditiveJSON {
-		t.Fatalf("managed settings record = %+v, want core-pack/additive-json", manifest.ManagedFiles[2])
+	if manifest.ManagedFiles[1].Component != ComponentCorePack || manifest.ManagedFiles[1].MergeMode != MergeModeAdditiveJSON {
+		t.Fatalf("managed settings record = %+v, want core-pack/additive-json", manifest.ManagedFiles[1])
 	}
 	for _, managed := range manifest.ManagedFiles {
 		if strings.Contains(managed.Path, "lore-delegation.ts") {
 			t.Fatalf("legacy delegation path unexpectedly preserved in upgraded manifest: %+v", managed)
+		}
+		if strings.Contains(managed.Path, "lore-memory.ts") {
+			t.Fatalf("deprecated lore-memory path unexpectedly preserved in upgraded manifest: %+v", managed)
 		}
 	}
 }

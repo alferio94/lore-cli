@@ -126,9 +126,11 @@ func ResolvePiLayout(homeDir string) PiLayout {
 		ManifestPath:     filepath.Join(agentDir, "lore-install.json"),
 		AlferioThemePath: filepath.Join(themesDir, "alferio.json"),
 		MCPConfigPath:    filepath.Join(agentDir, "mcp.json"),
-		// Managed files: settings.json + mcp.json (hosted MCP default) + extended skills
+		// Managed files: settings.json + mcp.json (hosted MCP default) + extended skills.
 		// Order matches adapter render order (settings.json first, then mcp.json, then extended skills).
-		// lore-memory assets are optional and only managed when pi-extensions is explicitly selected.
+		// The deprecated `lore-memory.ts` is not in this list and is not available in any
+		// install path; only the optional lore-footer.ts may be added when the
+		// `pi-extensions` component is explicitly selected.
 		ManagedFiles: []string{
 			filepath.Join(agentDir, "settings.json"),
 			filepath.Join(agentDir, "mcp.json"),
@@ -284,6 +286,28 @@ func (s Service) InstallPi(req PiInstallRequest) (PiInstallResult, error) {
 		}
 	}
 
+	// Backup-first idempotent cleanup for any pre-existing `lore-memory.ts`. The
+	// asset is deprecated and removed from the install bundle; remaining copies
+	// would autoload inside the Pi runtime if left untouched, so the apply step
+	// backs the file up under the managed backup root and removes it from the
+	// installed extension directory. When the file is absent (fresh install or
+	// after a prior cleanup), the planner returns nil and this block is a no-op,
+	// keeping reruns idempotent.
+	deprecatedMemoryAction, err := planDeprecatedLoreMemoryCleanup(layout, backupRoot)
+	if err != nil {
+		return PiInstallResult{}, err
+	}
+	if deprecatedMemoryAction != nil {
+		state, err := applyManagedDelete(*deprecatedMemoryAction)
+		if err != nil {
+			return PiInstallResult{}, fmt.Errorf("clean up deprecated lore-memory file: %w", err)
+		}
+		if state == "delete" {
+			result.Summary.Deleted = append(result.Summary.Deleted, deprecatedMemoryAction.RelativePath)
+			result.Summary.BackedUp = append(result.Summary.BackedUp, deprecatedMemoryAction.RelativePath)
+		}
+	}
+
 	validatedContents := make(map[string][]byte, len(rendered))
 	for _, file := range rendered {
 		finalContent, state, err := applyRenderedFile(file, backupRoot)
@@ -394,12 +418,19 @@ func validateRenderedPiFiles(files []renderedPiFile) error {
 	for _, file := range files {
 		byPath[file.relativePath] = file
 	}
-	// lore-memory assets are optional (pi-extensions component). The default hosted MCP
-	// install does not include them. Only validate them if they are present.
+	// The deprecated `lore-memory.ts` must never appear in the rendered file map.
+	if _, ok := byPath[managedDeprecatedLoreMemoryRelativePath]; ok {
+		return fmt.Errorf("validate rendered Pi assets: %s is deprecated and must not be rendered", managedDeprecatedLoreMemoryRelativePath)
+	}
+	// Optional Pi extensions (lore-footer.ts) are only rendered when the `pi-extensions`
+	// component is explicitly selected.
 	for _, relativePath := range managedPiExtensionRelativePaths {
+		if strings.HasSuffix(relativePath, "lore-memory.ts") {
+			return fmt.Errorf("validate rendered Pi assets: %s is deprecated and must not be rendered", relativePath)
+		}
 		file, ok := byPath[relativePath]
 		if !ok {
-			// lore-memory is optional; skip validation when not rendered.
+			// Optional extension not rendered in this install — skip validation.
 			continue
 		}
 		if !strings.Contains(string(file.content), "export default function") {
@@ -440,6 +471,51 @@ func planLegacyDelegationCleanup(layout PiLayout, backupRoot string) (*ManagedFi
 		AbsolutePath: absolutePath,
 		Action:       "delete",
 		BackupPath:   filepath.Join(backupRoot, legacyPiDelegationRelativePath),
+	}
+	return &action, nil
+}
+
+// planDeprecatedLoreMemoryCleanup returns the backup-first managed-delete action
+// for a pre-existing `~/.pi/agent/extensions/lore-memory.ts` left behind by older
+// installs. The asset was removed from the bundled install bundle and is no longer
+// rendered, validated, or accepted as a managed file in any install path; existing
+// copies on disk are still removed in a backup-first, idempotent manner so stale
+// `lore-memory.ts` files cannot continue to autoload inside the Pi runtime.
+//
+// Behavior:
+//   - File absent → returns nil (idempotent across reruns and fresh installs).
+//   - Regular file present → returns a delete action that points at the
+//     `managedDeprecatedLoreMemoryRelativePath` relative path and the
+//     `backupRoot`-rooted backup destination. The apply step performs the backup
+//     and delete via `applyManagedDelete`, mirroring the legacy delegation flow.
+//   - Non-regular-file (symlink, directory, etc.) at that path → returns an error
+//     instructing the user to move the entry aside, identical to the legacy
+//     delegation behavior. This avoids accidentally deleting a directory the
+//     user happens to have placed at the same path.
+//
+// Callers integrate this action in two places:
+//   - `PlanPiInstall` (dry-run path) appends the action to `plan.ManagedFileActions`
+//     so the dry-run output surfaces `managed_action=delete:extensions/lore-memory.ts`.
+//   - `InstallPi` (apply path) calls it after the legacy delegation cleanup, then
+//     applies it and records the result in `result.Summary.Deleted` and
+//     `result.Summary.BackedUp` so the manifest refresh reflects the cleanup.
+func planDeprecatedLoreMemoryCleanup(layout PiLayout, backupRoot string) (*ManagedFileAction, error) {
+	absolutePath := filepath.Join(layout.AgentDir, filepath.FromSlash(managedDeprecatedLoreMemoryRelativePath))
+	info, err := os.Lstat(absolutePath)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("inspect deprecated lore-memory file: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("deprecated lore-memory path at %s is %s; move it aside or replace it with a regular file before reinstalling", absolutePath, piEntryKind(info.Mode()))
+	}
+	action := ManagedFileAction{
+		RelativePath: managedDeprecatedLoreMemoryRelativePath,
+		AbsolutePath: absolutePath,
+		Action:       "delete",
+		BackupPath:   filepath.Join(backupRoot, managedDeprecatedLoreMemoryRelativePath),
 	}
 	return &action, nil
 }
@@ -732,118 +808,17 @@ func contentHash(content []byte) string {
 
 func validateManagedContents(contents map[string][]byte, req PiInstallRequest) []string {
 	var findings []string
-	// lore-memory assets are optional; they are only present when pi-extensions is explicitly selected.
-	// The default hosted MCP install does not include them. Only validate lore-memory when present.
-
-	// Validate lore-memory.ts (index 0) only when present.
-	memoryPath := managedPiExtensionRelativePaths[0]
-	memoryContent, memoryPresent := contents[memoryPath]
-	if memoryPresent {
-		text := string(memoryContent)
-		if strings.TrimSpace(req.SavedToken) != "" && strings.Contains(text, req.SavedToken) {
-			findings = append(findings, fmt.Sprintf("%s contains saved auth material", memoryPath))
-		}
-		if !strings.Contains(text, "\"api\", \"request\"") {
-			findings = append(findings, fmt.Sprintf("%s missing required contract snippet %q", memoryPath, "\"api\", \"request\""))
-		}
-		if !strings.Contains(text, "export default function") {
-			findings = append(findings, fmt.Sprintf("%s missing required contract snippet %q", memoryPath, "export default function"))
-		}
-		if !strings.Contains(text, "Text") {
-			findings = append(findings, fmt.Sprintf("%s missing required contract snippet %q", memoryPath, "Text"))
-		}
-		if !strings.Contains(text, "renderCall(") {
-			findings = append(findings, fmt.Sprintf("%s missing required contract snippet %q", memoryPath, "renderCall("))
-		}
-		if !strings.Contains(text, "renderResult(") {
-			findings = append(findings, fmt.Sprintf("%s missing required contract snippet %q", memoryPath, "renderResult("))
-		}
-		if !strings.Contains(text, "text: formatContent(payload.data)") {
-			findings = append(findings, fmt.Sprintf("%s missing required contract snippet %q", memoryPath, "text: formatContent(payload.data)"))
-		}
-		if !strings.Contains(text, "pi.registerTool") {
-			findings = append(findings, fmt.Sprintf("%s missing required contract snippet %q", memoryPath, "pi.registerTool"))
-		}
-		if !strings.Contains(text, "name: \"lore_search\"") {
-			findings = append(findings, fmt.Sprintf("%s missing required contract snippet %q", memoryPath, "name: \"lore_search\""))
-		}
-		if !strings.Contains(text, "name: \"lore_save\"") {
-			findings = append(findings, fmt.Sprintf("%s missing required contract snippet %q", memoryPath, "name: \"lore_save\""))
-		}
-		if !strings.Contains(text, "name: \"lore_get_observation\"") {
-			findings = append(findings, fmt.Sprintf("%s missing required contract snippet %q", memoryPath, "name: \"lore_get_observation\""))
-		}
-		if !strings.Contains(text, "name: \"lore_context\"") {
-			findings = append(findings, fmt.Sprintf("%s missing required contract snippet %q", memoryPath, "name: \"lore_context\""))
-		}
-		if !strings.Contains(text, "name: \"lore_project_list\"") {
-			findings = append(findings, fmt.Sprintf("%s missing required contract snippet %q", memoryPath, "name: \"lore_project_list\""))
-		}
-		if !strings.Contains(text, "name: \"lore_project_create\"") {
-			findings = append(findings, fmt.Sprintf("%s missing required contract snippet %q", memoryPath, "name: \"lore_project_create\""))
-		}
-		if !strings.Contains(text, "name: \"lore_project_get\"") {
-			findings = append(findings, fmt.Sprintf("%s missing required contract snippet %q", memoryPath, "name: \"lore_project_get\""))
-		}
-		if !strings.Contains(text, "name: \"lore_skill_save\"") {
-			findings = append(findings, fmt.Sprintf("%s missing required contract snippet %q", memoryPath, "name: \"lore_skill_save\""))
-		}
-		if !strings.Contains(text, "name: \"lore_skill_list\"") {
-			findings = append(findings, fmt.Sprintf("%s missing required contract snippet %q", memoryPath, "name: \"lore_skill_list\""))
-		}
-		if !strings.Contains(text, "name: \"lore_skill_get\"") {
-			findings = append(findings, fmt.Sprintf("%s missing required contract snippet %q", memoryPath, "name: \"lore_skill_get\""))
-		}
-		if !strings.Contains(text, "/v1/memories") {
-			findings = append(findings, fmt.Sprintf("%s missing required contract snippet %q", memoryPath, "/v1/memories"))
-		}
-		if !strings.Contains(text, "/v1/projects") {
-			findings = append(findings, fmt.Sprintf("%s missing required contract snippet %q", memoryPath, "/v1/projects"))
-		}
-		if !strings.Contains(text, "/v1/skills") {
-			findings = append(findings, fmt.Sprintf("%s missing required contract snippet %q", memoryPath, "/v1/skills"))
-		}
-		// Check forbidden legacy snippets for lore-memory.ts
-		if strings.Contains(text, "name: \"lore_update\"") {
-			findings = append(findings, fmt.Sprintf("%s contains forbidden legacy memory contract snippet %q", memoryPath, "name: \"lore_update\""))
-		}
-		if strings.Contains(text, "name: \"lore_delete\"") {
-			findings = append(findings, fmt.Sprintf("%s contains forbidden legacy memory contract snippet %q", memoryPath, "name: \"lore_delete\""))
-		}
-		if strings.Contains(text, "name: \"lore_timeline\"") {
-			findings = append(findings, fmt.Sprintf("%s contains forbidden legacy memory contract snippet %q", memoryPath, "name: \"lore_timeline\""))
-		}
-		if strings.Contains(text, "name: \"lore_stats\"") {
-			findings = append(findings, fmt.Sprintf("%s contains forbidden legacy memory contract snippet %q", memoryPath, "name: \"lore_stats\""))
-		}
-		if strings.Contains(text, "name: \"lore_session_summary\"") {
-			findings = append(findings, fmt.Sprintf("%s contains forbidden legacy memory contract snippet %q", memoryPath, "name: \"lore_session_summary\""))
-		}
-		if strings.Contains(text, "unsupportedLegacyTool") {
-			findings = append(findings, fmt.Sprintf("%s contains forbidden legacy memory contract snippet %q", memoryPath, "unsupportedLegacyTool"))
-		}
-		if strings.Contains(text, "/v1/search") {
-			findings = append(findings, fmt.Sprintf("%s contains forbidden legacy memory contract snippet %q", memoryPath, "/v1/search"))
-		}
-		if strings.Contains(text, "/v1/observations") {
-			findings = append(findings, fmt.Sprintf("%s contains forbidden legacy memory contract snippet %q", memoryPath, "/v1/observations"))
-		}
-		if strings.Contains(text, "/v1/context") {
-			findings = append(findings, fmt.Sprintf("%s contains forbidden legacy memory contract snippet %q", memoryPath, "/v1/context"))
-		}
-		if strings.Contains(text, "/v1/stats") {
-			findings = append(findings, fmt.Sprintf("%s contains forbidden legacy memory contract snippet %q", memoryPath, "/v1/stats"))
-		}
-		if strings.Contains(text, "/v1/timeline") {
-			findings = append(findings, fmt.Sprintf("%s contains forbidden legacy memory contract snippet %q", memoryPath, "/v1/timeline"))
-		}
-		if strings.Contains(text, "/v1/sessions") {
-			findings = append(findings, fmt.Sprintf("%s contains forbidden legacy memory contract snippet %q", memoryPath, "/v1/sessions"))
+	// The deprecated `lore-memory.ts` was removed and must never appear in the rendered
+	// install contents. If a caller (or test) hands it in anyway, reject it as a hard error.
+	if memoryContent, memoryPresent := contents[managedDeprecatedLoreMemoryRelativePath]; memoryPresent {
+		findings = append(findings, fmt.Sprintf("%s is deprecated and must not be present in any install path", managedDeprecatedLoreMemoryRelativePath))
+		if strings.TrimSpace(req.SavedToken) != "" && strings.Contains(string(memoryContent), req.SavedToken) {
+			findings = append(findings, fmt.Sprintf("%s contains saved auth material", managedDeprecatedLoreMemoryRelativePath))
 		}
 	}
 
-	// Validate lore-footer.ts (index 1) only when present.
-	footerPath := managedPiExtensionRelativePaths[1]
+	// The optional lore-footer.ts is the only Pi-native extension that may be rendered.
+	footerPath := managedPiExtensionRelativePaths[0]
 	footerContent, footerPresent := contents[footerPath]
 	if footerPresent {
 		footerText := string(footerContent)

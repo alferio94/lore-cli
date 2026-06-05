@@ -53,6 +53,16 @@ func RenderOrchestratorSystemInstruction(definition Definition) string {
 			"Use Lore memory/project-context tooling when available, and persist SDD artifacts through the configured durable store rather than inventing ad-hoc local substitutes.",
 		}),
 		"",
+		"Lore memory tool selection (harness-neutral canonical guidance):",
+		bulletize([]string{
+			"Prefer the MCP Lore Server tools (`lore_memory_*`) over any deprecated harness-local memory extension (for example, the Pi-native `lore-memory.ts` extension, which is removed and not available in any install path).",
+			"Use `lore_memory_search` for memory discovery. Search is filter-driven: pass `type`, `scope`, and `limit`; the `query` text field is not part of the current contract.",
+			"`lore_memory_search` accepts exactly one of `project_id` or `project_key` per call. Prefer `project_key` when a stable key is known; `project_id` (UUID) is only required when no stable key exists.",
+			"`lore_memory_search` returns compact `content_preview` results and omits the full memory content. Do not assume `content` is present in the search payload.",
+			"To load the full memory body, call `lore_memory_get` with `project_id` (UUID) plus the memory `id` returned by search. `lore_memory_get` requires a `project_id`; passing a `project_key` is not a supported substitute.",
+			"Harness-local or harness-native fallback tools (for example, legacy `lore_search` / `lore_save` / `lore_get_observation` Pi-extension tools) may have older schemas and MUST only be used when MCP Lore Server tools are unavailable. Do not mix the two surfaces in the same workflow.",
+		}),
+		"",
 		"SDD workflow:",
 		bulletize([]string{
 			"Default to Specification-Driven Development for architecture, persistence, public API contracts, auth, compliance, rollout, or other risky changes.",

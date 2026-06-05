@@ -921,7 +921,7 @@ func TestInstallCommandDryRunReportsPlanWithoutMutation(t *testing.T) {
 }
 
 func TestInstallCommandDryRunSurfacesManagedFileActions(t *testing.T) {
-	homeDir, piAgentDir := setIsolatedPiHome(t)
+	homeDir, _ := setIsolatedPiHome(t)
 	layout := install.ResolvePiLayout(homeDir)
 	if err := os.MkdirAll(layout.ExtensionsDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll extensions: %v", err)
@@ -933,15 +933,10 @@ func TestInstallCommandDryRunSurfacesManagedFileActions(t *testing.T) {
 		t.Fatalf("WriteFile legacyPath: %v", err)
 	}
 	configDir := t.TempDir()
-	loreMemory := renderInstallAssetForTest(t, filepath.Join("..", "install", "assets", "pi", "lore-memory.ts"), map[string]string{
-		"{{LORE_SERVER_URL}}":    "https://example.test",
-		"{{LORE_BINARY_PATH}}":   "/usr/local/bin/lore",
-		"{{LORE_CONFIG_DIR}}":    configDir,
-		"{{LORE_CLI_VERSION}}":   "v1.2.3",
-		"{{LORE_SETTINGS_PATH}}": filepath.Join(piAgentDir, "settings.json"),
-	})
-	if err := os.WriteFile(filepath.Join(layout.ExtensionsDir, "lore-memory.ts"), []byte(loreMemory), 0o600); err != nil {
-		t.Fatalf("WriteFile unchanged managed file: %v", err)
+	// Pre-existing deprecated lore-memory.ts is a backup-first cleanup candidate:
+	// the dry-run must surface the action but must not actually mutate the file.
+	if err := os.WriteFile(filepath.Join(layout.ExtensionsDir, "lore-memory.ts"), []byte("legacy memory leftover"), 0o600); err != nil {
+		t.Fatalf("WriteFile legacy lore-memory.ts: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(layout.ExtensionsDir, "lore-delegation.ts"), []byte("legacy-delegation"), 0o600); err != nil {
 		t.Fatalf("WriteFile updated managed file: %v", err)
@@ -987,14 +982,19 @@ func TestInstallCommandDryRunSurfacesManagedFileActions(t *testing.T) {
 	if _, err := os.Stat(layout.SettingsPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("settings stat err = %v, want no created settings in dry-run", err)
 	}
+	// Pre-existing legacy lore-memory.ts must be preserved untouched by the dry-run.
+	if _, err := os.Stat(filepath.Join(layout.ExtensionsDir, "lore-memory.ts")); err != nil {
+		t.Fatalf("legacy lore-memory.ts stat err = %v, want pre-existing file preserved across dry-run", err)
+	}
 	out := stdout.String()
 	for _, want := range []string{
 		"runtime=pi-remote-package",
 		"remote_package=git:github.com/nicobailon/pi-mcp-adapter@1091b34da83d58bd2d9fcaff2dc31f449a94bf1f",
 		"managed_local_files=5",
 		"project_agents=disabled(default-lore-managed)",
-		// lore-memory.ts is dormant for default install — not a managed file
+		// Pre-existing legacy cleanups surface as managed_action=delete entries.
 		"managed_action=delete:extensions/lore-delegation.ts",
+		"managed_action=delete:extensions/lore-memory.ts",
 		"managed_action=create:settings.json",
 		"managed_action=create:mcp.json",
 		"managed_action=update:agents/lore-managed-lore-worker.md",
@@ -1005,14 +1005,162 @@ func TestInstallCommandDryRunSurfacesManagedFileActions(t *testing.T) {
 			t.Fatalf("stdout = %q, want action-level dry-run detail %q", out, want)
 		}
 	}
-	// lore-memory.ts should NOT appear as a managed action (dormant for default install).
-	if strings.Contains(out, "managed_action=unchanged:extensions/lore-memory.ts") {
-		t.Fatalf("stdout = %q, want no lore-memory managed action (dormant for default)", out)
-	}
 	if strings.Contains(out, "managed_action=create:extensions/lore-footer.ts") {
 		t.Fatalf("stdout = %q, want no lore-footer managed action (dormant for default)", out)
 	}
 	assertNoTokenLeak(t, out, stderr.String(), "secret-token=plan-actions")
+}
+
+// TestInstallCommandReportsLoreMemoryCleanupActionInDryRun verifies the dry-run
+// CLI surface reports the backup-first deprecated `lore-memory.ts` cleanup as a
+// `managed_action=delete:extensions/lore-memory.ts` entry whenever a pre-existing
+// file is present in the home directory. The dry-run must not mutate the file.
+func TestInstallCommandReportsLoreMemoryCleanupActionInDryRun(t *testing.T) {
+	homeDir, _ := setIsolatedPiHome(t)
+	layout := install.ResolvePiLayout(homeDir)
+	if err := os.MkdirAll(layout.ExtensionsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll extensions: %v", err)
+	}
+	absolutePath := filepath.Join(layout.AgentDir, filepath.FromSlash(install.ManagedDeprecatedLoreMemoryRelativePathForTest()))
+	original := []byte("legacy memory leftover")
+	if err := os.WriteFile(absolutePath, original, 0o600); err != nil {
+		t.Fatalf("WriteFile lore-memory.ts: %v", err)
+	}
+
+	configDir := t.TempDir()
+	store := &fakeStore{path: filepath.Join(configDir, "config.json"), loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token=dryrun-memory"}}
+	client := &fakeClient{subject: httpclient.Subject{UserID: "user-1", Kind: "user"}}
+	app, stdout, stderr := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
+	app.ExecutablePath = func() (string, error) { return "/usr/local/bin/lore", nil }
+	app.BuildInfo = version.Info{Version: "v1.2.3"}
+
+	if exitCode := app.Run([]string{"install", "--dry-run"}); exitCode != 0 {
+		t.Fatalf("install --dry-run exitCode = %d, want 0, stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+	// Dry-run must preserve the pre-existing file untouched.
+	if got, err := os.ReadFile(absolutePath); err != nil || string(got) != string(original) {
+		t.Fatalf("lore-memory.ts after dry-run = %q err=%v, want pre-existing content preserved", string(got), err)
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "managed_action=delete:extensions/lore-memory.ts") {
+		t.Fatalf("stdout = %q, want managed_action=delete:extensions/lore-memory.ts", out)
+	}
+	assertNoTokenLeak(t, out, stderr.String(), "secret-token=dryrun-memory")
+}
+
+// TestInstallCommandApplyRemovesAndBacksUpPreExistingLoreMemoryExtension verifies
+// a real apply (in a temp home) backs up the deprecated `lore-memory.ts`, removes
+// it from disk, and reports the cleanup in the install summary, refreshing the
+// manifest. The backup must be present under the managed backup root.
+func TestInstallCommandApplyRemovesAndBacksUpPreExistingLoreMemoryExtension(t *testing.T) {
+	homeDir, _ := setIsolatedPiHome(t)
+	layout := install.ResolvePiLayout(homeDir)
+	if err := os.MkdirAll(layout.ExtensionsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll extensions: %v", err)
+	}
+	absolutePath := filepath.Join(layout.AgentDir, filepath.FromSlash(install.ManagedDeprecatedLoreMemoryRelativePathForTest()))
+	original := []byte("legacy memory leftover")
+	if err := os.WriteFile(absolutePath, original, 0o600); err != nil {
+		t.Fatalf("WriteFile lore-memory.ts: %v", err)
+	}
+
+	configDir := t.TempDir()
+	store := &fakeStore{path: filepath.Join(configDir, "config.json"), loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token=apply-memory"}}
+	client := &fakeClient{subject: httpclient.Subject{UserID: "user-1", Kind: "user"}}
+	app, stdout, stderr := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
+	app.ExecutablePath = func() (string, error) { return "/usr/local/bin/lore", nil }
+	app.BuildInfo = version.Info{Version: "v1.2.3"}
+
+	if exitCode := app.Run([]string{"install", "--yes"}); exitCode != 0 {
+		t.Fatalf("install --yes exitCode = %d, want 0, stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+	// File must be removed from the installed extensions directory.
+	if _, err := os.Stat(absolutePath); !os.IsNotExist(err) {
+		t.Fatalf("lore-memory.ts stat error = %v, want file removed after apply", err)
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "managed_action=delete:extensions/lore-memory.ts") {
+		t.Fatalf("stdout = %q, want managed_action=delete:extensions/lore-memory.ts", out)
+	}
+	// Manifest must be refreshed and must NOT record the deprecated path as a
+	// managed file.
+	manifestBytes, err := os.ReadFile(layout.ManifestPath)
+	if err != nil {
+		t.Fatalf("ReadFile manifest: %v", err)
+	}
+	if strings.Contains(string(manifestBytes), "lore-memory.ts") {
+		t.Fatalf("manifest = %q, want no lore-memory.ts reference in manifest", string(manifestBytes))
+	}
+	// Backup must live under the managed backup root, preserved with the original
+	// bytes. The backup root is recorded in the manifest and printed in the
+	// install summary as `managed_backup_root=...`.
+	backupDirs, err := filepath.Glob(filepath.Join(layout.AgentDir, "backups", "*"))
+	if err != nil {
+		t.Fatalf("Glob backup dirs: %v", err)
+	}
+	if len(backupDirs) == 0 {
+		t.Fatalf("backup dirs = %v, want at least one managed backup root", backupDirs)
+	}
+	var foundBackup []byte
+	for _, dir := range backupDirs {
+		candidate := filepath.Join(dir, "extensions", "lore-memory.ts")
+		if got, err := os.ReadFile(candidate); err == nil {
+			foundBackup = got
+			break
+		}
+	}
+	if foundBackup == nil {
+		t.Fatalf("no backup found for %q under %v", "extensions/lore-memory.ts", backupDirs)
+	}
+	if string(foundBackup) != string(original) {
+		t.Fatalf("backup content = %q, want original %q", string(foundBackup), string(original))
+	}
+	assertNoTokenLeak(t, out, stderr.String(), "secret-token=apply-memory")
+}
+
+// TestInstallCommandIdempotentRerunAfterLoreMemoryCleanup verifies a real
+// `lore install --yes` run twice in a temp home does not duplicate the cleanup
+// on the second run, does not error, and leaves the deprecated file absent.
+func TestInstallCommandIdempotentRerunAfterLoreMemoryCleanup(t *testing.T) {
+	homeDir, _ := setIsolatedPiHome(t)
+	layout := install.ResolvePiLayout(homeDir)
+	if err := os.MkdirAll(layout.ExtensionsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll extensions: %v", err)
+	}
+	absolutePath := filepath.Join(layout.AgentDir, filepath.FromSlash(install.ManagedDeprecatedLoreMemoryRelativePathForTest()))
+	if err := os.WriteFile(absolutePath, []byte("leftover"), 0o600); err != nil {
+		t.Fatalf("WriteFile lore-memory.ts: %v", err)
+	}
+
+	configDir := t.TempDir()
+	store := &fakeStore{path: filepath.Join(configDir, "config.json"), loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token=rerun-memory"}}
+	client := &fakeClient{subject: httpclient.Subject{UserID: "user-1", Kind: "user"}}
+	app, _, stderr := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
+	app.ExecutablePath = func() (string, error) { return "/usr/local/bin/lore", nil }
+	app.BuildInfo = version.Info{Version: "v1.2.3"}
+
+	if exitCode := app.Run([]string{"install", "--yes"}); exitCode != 0 {
+		t.Fatalf("first install --yes exitCode = %d, want 0, stderr=%q", exitCode, stderr.String())
+	}
+	if _, err := os.Stat(absolutePath); !os.IsNotExist(err) {
+		t.Fatalf("lore-memory.ts stat error = %v, want absent after first apply", err)
+	}
+
+	// Second run must be idempotent: no failure, no duplicate cleanup, file absent.
+	app2, stdout2, stderr2 := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
+	app2.ExecutablePath = func() (string, error) { return "/usr/local/bin/lore", nil }
+	app2.BuildInfo = version.Info{Version: "v1.2.3"}
+	if exitCode := app2.Run([]string{"install", "--yes"}); exitCode != 0 {
+		t.Fatalf("second install --yes exitCode = %d, want 0, stderr=%q stdout=%q", exitCode, stderr2.String(), stdout2.String())
+	}
+	if _, err := os.Stat(absolutePath); !os.IsNotExist(err) {
+		t.Fatalf("lore-memory.ts stat error = %v, want absent after idempotent rerun", err)
+	}
+	out := stdout2.String()
+	if strings.Contains(out, "managed_action=delete:extensions/lore-memory.ts") {
+		t.Fatalf("stdout = %q, want no managed_action=delete:extensions/lore-memory.ts on idempotent rerun", out)
+	}
+	assertNoTokenLeak(t, out, stderr2.String(), "secret-token=rerun-memory")
 }
 
 func TestInstallCommandYesModeBacksUpExistingPiWithoutPrompt(t *testing.T) {

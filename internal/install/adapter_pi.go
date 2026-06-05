@@ -43,7 +43,7 @@ func defaultPiAdapter() HarnessAdapter {
 			CapabilityPiExtensions: {
 				ID:          CapabilityPiExtensions,
 				Component:   ComponentPiExtensions,
-				Description: "Dormant Pi-native Lore extensions path (lore-memory). Available for rollback/testing only.",
+				Description: "Optional Pi-native Lore extension bundle (lore-footer UI status only). The deprecated lore-memory extension has been removed and is not available.",
 				Optional:    true,
 			},
 			CapabilityExtendedSkills: {
@@ -76,8 +76,27 @@ func (a piAdapter) Supports(component ComponentID) bool {
 
 var legacyPiDelegationRelativePath = filepath.Join("extensions", "lore-delegation.ts")
 
+// managedDeprecatedLoreMemoryRelativePath is the deprecated Pi-native memory extension
+// path. The asset has been removed from the embedded installer bundle and the
+// extension is no longer rendered, validated, or accepted in any default install path.
+// The constant is retained so that hard-guard checks, manifest upgrade filters, and
+// the static guards can reference the exact path the deprecated file used to occupy.
+var managedDeprecatedLoreMemoryRelativePath = filepath.Join("extensions", "lore-memory.ts")
+
+// ManagedDeprecatedLoreMemoryRelativePathForTest exposes the deprecated
+// `extensions/lore-memory.ts` relative path to external test packages (CLI-level
+// dry-run/apply tests) without leaking the constant into non-test code paths.
+// The path is treated as a stable install contract value; tests should not
+// branch on its contents.
+func ManagedDeprecatedLoreMemoryRelativePathForTest() string {
+	return managedDeprecatedLoreMemoryRelativePath
+}
+
+// managedPiExtensionRelativePaths lists the optional Pi-native Lore extensions that
+// may be installed when the `pi-extensions` component is explicitly selected. The
+// deprecated `lore-memory.ts` was removed and is intentionally NOT in this list —
+// no active install path renders or manages it.
 var managedPiExtensionRelativePaths = []string{
-	filepath.Join("extensions", "lore-memory.ts"),
 	filepath.Join("extensions", "lore-footer.ts"),
 }
 
@@ -103,8 +122,9 @@ func (a piAdapter) Render(_ context.Context, req RenderRequest) ([]RenderedFile,
 		return nil, err
 	}
 
-	// Default assets: core-pack (settings.json with hosted MCP package) + lore-server-mcp (mcp.json)
-	// Pi-extensions (lore-memory) is optional and only rendered when explicitly selected.
+	// Default assets: core-pack (settings.json with hosted MCP package) + lore-server-mcp (mcp.json).
+	// The deprecated `lore-memory.ts` is no longer rendered for any install — see
+	// `managedPiExtensionRelativePaths` for the only optional extension that remains.
 	assets := []struct {
 		assetPath    string
 		component    ComponentID
@@ -115,7 +135,8 @@ func (a piAdapter) Render(_ context.Context, req RenderRequest) ([]RenderedFile,
 		{assetPath: "assets/pi/mcp.json", component: ComponentLoreServerMCP, relativePath: managedMCPConfigRelativePath, mergeMode: MergeModeAdditiveJSON},
 	}
 
-	// Add optional lore-memory assets only when pi-extensions is explicitly selected.
+	// Add the optional lore-footer asset only when pi-extensions is explicitly selected.
+	// lore-memory.ts is deprecated and was removed from the bundled assets.
 	if containsComponent(components, ComponentPiExtensions) {
 		assets = append(assets, struct {
 			assetPath    string
@@ -123,19 +144,9 @@ func (a piAdapter) Render(_ context.Context, req RenderRequest) ([]RenderedFile,
 			relativePath string
 			mergeMode    MergeMode
 		}{
-			assetPath:    "assets/pi/lore-memory.ts",
-			component:    ComponentPiExtensions,
-			relativePath: managedPiExtensionRelativePaths[0],
-			mergeMode:    MergeModeReplace,
-		}, struct {
-			assetPath    string
-			component    ComponentID
-			relativePath string
-			mergeMode    MergeMode
-		}{
 			assetPath:    "assets/pi/lore-footer.ts",
 			component:    ComponentPiExtensions,
-			relativePath: managedPiExtensionRelativePaths[1],
+			relativePath: managedPiExtensionRelativePaths[0],
 			mergeMode:    MergeModeReplace,
 		})
 	}
