@@ -62,38 +62,88 @@ func TestInstallCommandRejectsUnsupportedInstallTarget(t *testing.T) {
 	assertNoTokenLeak(t, out, stderr.String(), "secret-token=unsupported-target")
 }
 
-func TestInstallCommandRejectsOpenCodeTarget(t *testing.T) {
-	// Hard-removed OpenCode target: `lore install --target opencode` is
-	// rejected as unsupported, with no installer side effects.
+func TestInstallCommandAcceptsOpenCodeTarget(t *testing.T) {
+	// OpenCode is supported again: `lore install --target opencode` runs the
+	// bounded foundation slice. This test exercises the dry-run path so we
+	// can assert the new `runtime=opencode-config-only` summary token, the
+	// default `core-pack` + `opencode-plugins` component selection
+	// (opencode-plugins is the default for OpenCode per the 1.3/2.x slice),
+	// the bundled plugin/tui.json managed actions, the bounded plugin and
+	// exclusion summary tokens, and that dry-run produces no installer
+	// side effects on disk.
 	homeDir := t.TempDir()
 	configDir := t.TempDir()
-	store := &fakeStore{path: filepath.Join(configDir, "config.json"), loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token=opencode-rejected"}}
+	store := &fakeStore{path: filepath.Join(configDir, "config.json"), loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token=opencode-supported"}}
 	client := &fakeClient{subject: httpclient.Subject{UserID: "user-1", Kind: "user"}}
 	app, stdout, stderr := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
 	app.UserHomeDir = func() (string, error) { return homeDir, nil }
 	app.BuildInfo = version.Info{Version: "v1.2.3"}
 
-	if exitCode := app.Run([]string{"install", "--target", "opencode"}); exitCode != 1 {
-		t.Fatalf("install --target opencode exitCode = %d, want 1, stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	if exitCode := app.Run([]string{"install", "--dry-run", "--target", "opencode"}); exitCode != 0 {
+		t.Fatalf("install --dry-run --target opencode exitCode = %d, want 0, stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
 	}
 	out := stdout.String()
-	for _, want := range []string{`unsupported target "opencode"`, "supported targets: pi, codex, antigravity"} {
+	for _, want := range []string{
+		"install_target=opencode",
+		"runtime=opencode-config-only",
+		"components=core-pack,opencode-plugins",
+		"plugins=bundled:background-agents,model-variants,opencode-subagent-statusline",
+		"plugins_location=~/.config/opencode/plugins/ (background-agents.ts, model-variants.ts); tui.json registers only opencode-subagent-statusline",
+		"mcp_lore_ownership=fail-closed-on-foreign",
+		"excluded_plugins=sdd-engram,logo",
+		"mode=dry-run",
+		"managed_action=create:AGENTS.md",
+		"managed_action=create:lore-install.json",
+		"managed_action=create:opencode.json",
+		"managed_action=create:plugins/background-agents.ts",
+		"managed_action=create:plugins/model-variants.ts",
+		"managed_action=create:plugins/opencode-subagent-statusline.ts",
+		"managed_action=create:tui.json",
+	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("stdout = %q, want substring %q", out, want)
 		}
 	}
-	// No OpenCode managed surface written to disk.
+	// Defensive: the legacy `plugins=none` summary token from the
+	// foundation slice MUST be gone now that opencode-plugins is a
+	// default component for OpenCode.
+	if strings.Contains(out, "plugins=none") {
+		t.Fatalf("stdout = %q, want legacy plugins=none summary token removed", out)
+	}
+	// Defensive: the legacy "no plugins" wording must not appear in
+	// the dry-run summary either.
+	if strings.Contains(out, "no plugins") {
+		t.Fatalf("stdout = %q, want legacy 'no plugins' wording removed", out)
+	}
+	// Defensive: the local plugin .ts files are copied to plugins/ and
+	// are NOT registered in tui.json. The summary must not say the
+	// background-agents / model-variants assets are in tui.json.
+	for _, forbidden := range []string{
+		"tui.json:background-agents",
+		"tui.json:model-variants",
+		"plugins/background-agents.ts:tui.json",
+		"plugins/model-variants.ts:tui.json",
+	} {
+		if strings.Contains(out, forbidden) {
+			t.Fatalf("stdout = %q, want %q to be absent (local plugin .ts files are copied to plugins/, not registered in tui.json)", out, forbidden)
+		}
+	}
+	// No OpenCode managed surface written to disk in dry-run mode.
 	for _, path := range []string{
 		filepath.Join(homeDir, ".config", "opencode", "AGENTS.md"),
 		filepath.Join(homeDir, ".config", "opencode", "opencode.json"),
 		filepath.Join(homeDir, ".config", "opencode", "lore-install.json"),
 		filepath.Join(homeDir, ".config", "opencode", "skills", "sdd-apply", "SKILL.md"),
+		filepath.Join(homeDir, ".config", "opencode", "plugins", "background-agents.ts"),
+		filepath.Join(homeDir, ".config", "opencode", "plugins", "model-variants.ts"),
+		filepath.Join(homeDir, ".config", "opencode", "plugins", "opencode-subagent-statusline.ts"),
+		filepath.Join(homeDir, ".config", "opencode", "tui.json"),
 	} {
 		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("stat %s err = %v, want no installer writes for rejected OpenCode target", path, err)
+			t.Fatalf("stat %s err = %v, want no installer writes for opencode dry-run", path, err)
 		}
 	}
-	assertNoTokenLeak(t, out, stderr.String(), "secret-token=opencode-rejected")
+	assertNoTokenLeak(t, out, stderr.String(), "secret-token=opencode-supported")
 }
 
 func TestInstallCommandSupportsAntigravityDryRunAndApply(t *testing.T) {
@@ -240,9 +290,50 @@ func TestInstallUsageIncludesTargetAndComponentFlags(t *testing.T) {
 	if exitCode := app.Run([]string{"install", "--help"}); exitCode != 1 {
 		t.Fatalf("install --help exitCode = %d, want 1 with usage output", exitCode)
 	}
-	for _, want := range []string{"--target", "--component", "Pi-first managed runtime", "portable Lore agent pack", "core-pack", "pi-extensions", "Antigravity", "prompt + skills MVP", "plaintext Authorization bearer token", "~/.gemini/config/mcp_config.json", "~/.gemini/config/agents/lore.json", "codex", "~/.codex/config.toml", "/v1/mcp"} {
+	for _, want := range []string{
+		"--target",
+		"--component",
+		"Pi-first managed runtime",
+		"portable Lore agent pack",
+		"core-pack",
+		"pi-extensions",
+		"Antigravity",
+		"prompt + skills MVP",
+		"plaintext Authorization bearer token",
+		"~/.gemini/config/mcp_config.json",
+		"~/.gemini/config/agents/lore.json",
+		"codex",
+		"~/.codex/config.toml",
+		"/v1/mcp",
+		"OpenCode",
+		"opencode-plugins",
+		"background-agents.ts",
+		"model-variants.ts",
+		"opencode-subagent-statusline",
+		"sdd-engram",
+		"logo",
+		"plaintext-token warning",
+		"Ownership contract",
+		"managed_by: lore-cli",
+		"fails closed with a typed conflict error",
+		"non-Lore-owned mcp.lore block",
+		// Cleanup slice: the install usage short target list AND the
+		// --target / --component flag descriptions must now include
+		// OpenCode consistently with the accepted runtime behavior and
+		// the longer help copy (this locks the verify-report warning
+		// resolution in the test surface).
+		"Usage: lore install [--dry-run] [--yes] [--target pi|opencode|codex|antigravity] [--component <id>]",
+		"Pi stays the default recommended target; OpenCode, Codex, and Antigravity are supported managed targets",
+		"Pi, OpenCode, Codex, and Antigravity support core-pack; Pi/Codex/Antigravity also support lore-server-mcp; OpenCode also supports opencode-plugins",
+	} {
 		if !strings.Contains(stderr.String(), want) {
 			t.Fatalf("stderr = %q, want substring %q", stderr.String(), want)
 		}
+	}
+	// Defensive negative: the install usage short target list must NOT
+	// regress to omitting `opencode` (the verify-report warning list
+	// specifically called out `pi|codex|antigravity` as stale copy).
+	if strings.Contains(stderr.String(), "[--target pi|codex|antigravity]") {
+		t.Fatalf("stderr = %q, want install usage short target list to include opencode (no regression to pi|codex|antigravity)", stderr.String())
 	}
 }

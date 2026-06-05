@@ -18,6 +18,7 @@ type TargetID string
 const (
 	TargetPi          TargetID = "pi"
 	TargetClaudeCode  TargetID = "claude-code"
+	TargetOpenCode    TargetID = "opencode"
 	TargetCodex       TargetID = "codex"
 	TargetAntigravity TargetID = "antigravity"
 )
@@ -74,7 +75,7 @@ func DefaultInstallTarget() TargetID {
 
 func DefaultTargets() []Target {
 	registry, _ := defaultInstallRegistry()
-	known := []TargetID{DefaultInstallTarget(), TargetClaudeCode, TargetCodex, TargetAntigravity}
+	known := []TargetID{DefaultInstallTarget(), TargetClaudeCode, TargetOpenCode, TargetCodex, TargetAntigravity}
 	targets := make([]Target, 0, len(known))
 	for _, id := range known {
 		target := roadmapTarget(id)
@@ -89,11 +90,10 @@ func DefaultTargets() []Target {
 }
 
 // SupportedTargets returns the set of currently supported install target IDs.
-// The set is exactly the three remaining supported targets (Pi, Codex,
-// Antigravity). OpenCode is intentionally excluded; it is unsupported and
-// cannot be selected or routed.
+// The set is the four supported install targets (Pi, OpenCode, Codex,
+// Antigravity). Claude Code stays on the roadmap list and is not routable.
 func SupportedTargets() []TargetID {
-	return []TargetID{TargetPi, TargetCodex, TargetAntigravity}
+	return []TargetID{TargetPi, TargetOpenCode, TargetCodex, TargetAntigravity}
 }
 
 func supportedTarget(adapter HarnessAdapter) Target {
@@ -103,6 +103,8 @@ func supportedTarget(adapter HarnessAdapter) Target {
 		target.Description = "Recommended today; uses hosted Lore MCP via pi-mcp-adapter as the default backend, with optional explicit pi-extensions (lore-footer.ts only) via --component pi-extensions. The deprecated lore-memory extension has been removed and is not available."
 	case TargetAntigravity:
 		target.Description = "prompt + skills MVP target with managed Gemini lore agent profile and optional direct MCP config; Pi remains the default recommended path while Antigravity keeps harness-owned prompt, skills, and manifest semantics."
+	case TargetOpenCode:
+		target.Description = "Bounded OpenCode projection: manages ~/.config/opencode/AGENTS.md, skills/<phase>/SKILL.md, a Lore-owned opencode.json block, and manifest. Lore MCP renders as a top-level mcp.lore remote entry with a managed_by: lore-cli ownership marker; the installer fails closed with a typed conflict error and a backup when the existing mcp.lore block is foreign. Commands and native plugin assets are deferred to a later slice. config-only projection: no profiles, bootstrap, or runtime subagents. Local plugin .ts files (background-agents.ts, model-variants.ts) are copied to ~/.config/opencode/plugins/; only the community opencode-subagent-statusline is registered in tui.json. Explicit sdd-engram and logo plugins are never bundled or registered."
 	case TargetCodex:
 		target.Description = "Managed Codex projection into ~/.codex with remote Lore MCP config, managed agents.md, skills/*.md, and manifest. No codex exec runner or bootstrap behavior is installed."
 	default:
@@ -115,8 +117,6 @@ func roadmapTarget(id TargetID) Target {
 	switch id {
 	case TargetClaudeCode:
 		return Target{ID: id, Title: "Claude Code", Description: "Listed for roadmap visibility.", Availability: "Coming soon"}
-	case TargetAntigravity:
-		return Target{ID: id, Title: "Antigravity", Description: "Listed for roadmap visibility.", Availability: "Coming soon"}
 	default:
 		return Target{ID: id, Title: string(id), Description: "Listed for roadmap visibility.", Availability: "Coming soon"}
 	}

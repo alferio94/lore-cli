@@ -261,6 +261,15 @@ func appendInstallSummaryAction(summary *InstallSummary, relativePath, action st
 		summary.Deleted = append(summary.Deleted, relativePath)
 	case "unchanged":
 		summary.Unchanged = append(summary.Unchanged, relativePath)
+	case "conflicted":
+		// `conflicted` is the fail-closed ownership action used by
+		// the OpenCode install path when the existing opencode.json
+		// carries a non-Lore-owned mcp.lore block. The backup is
+		// always written before the action is recorded so the
+		// summary, the install plan, and the on-disk state stay
+		// consistent (no managed write happens on a conflict).
+		summary.Conflicted = append(summary.Conflicted, relativePath)
+		summary.BackedUp = append(summary.BackedUp, relativePath)
 	}
 }
 

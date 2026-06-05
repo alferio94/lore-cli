@@ -37,6 +37,37 @@ func TestInitialRenderShowsMenuHintsAndInstallEntry(t *testing.T) {
 			t.Fatalf("view missing %q:\n%s", want, view)
 		}
 	}
+	// 3.x docs/UI slice: the install menu description MUST mention
+	// the bounded opencode-plugins bundle and the explicit exclusion
+	// list so the user sees the bounded surface before they enter the
+	// install flow. The bubbletea view wraps descriptions on word
+	// boundaries, so we assert against the underlying items[]
+	// description field instead of the wrapped view.
+	var installDescription string
+	for _, item := range m.items {
+		if item.key == "install" {
+			installDescription = item.description
+			break
+		}
+	}
+	if installDescription == "" {
+		t.Fatal("install menu item description not found")
+	}
+	for _, want := range []string{
+		"opencode-plugins",
+		"background-agents",
+		"model-variants",
+		"opencode-subagent-statusline",
+		"sdd-engram",
+		"logo",
+		"config-only projection",
+		"managed_by: lore-cli",
+		"fail-closed",
+	} {
+		if !strings.Contains(installDescription, want) {
+			t.Fatalf("install menu description missing %q:\n%s", want, installDescription)
+		}
+	}
 }
 
 func TestNavigationAndInstallTargetSelectionMessage(t *testing.T) {
@@ -141,6 +172,24 @@ func TestInstallTargetSelectionSurfacesPiDefaultAndAntigravityMVPGuidance(t *tes
 			t.Fatalf("statusBody = %q, want updated install guidance containing %q", m.statusBody, want)
 		}
 	}
+	// 3.x docs/UI slice: the target-selection body must surface the
+	// bounded opencode-plugins bundle and the explicit exclusion list
+	// so the user sees them when picking the OpenCode target.
+	for _, want := range []string{
+		"opencode-plugins",
+		"background-agents.ts",
+		"model-variants.ts",
+		"opencode-subagent-statusline",
+		"sdd-engram",
+		"logo",
+		"managed_by: lore-cli",
+		"fail-closed",
+		"NOT registered in tui.json",
+	} {
+		if !strings.Contains(m.statusBody, want) {
+			t.Fatalf("statusBody missing %q:\n%s", want, m.statusBody)
+		}
+	}
 	if strings.Contains(m.statusBody, "Only Pi is selectable in this slice.") {
 		t.Fatalf("statusBody = %q, want updated multi-target messaging", m.statusBody)
 	}
@@ -176,14 +225,20 @@ func TestInstallTargetSelectionAllowsAntigravityExecutionWithoutPiBackupPrompt(t
 	m = updated.(model)
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	m = updated.(model)
-	// First down from Pi goes to Codex (OpenCode is hard-removed and not selectable).
+	// First down from Pi goes to OpenCode (the bounded config-only
+	// projection is supported again in this change).
+	if got := m.selectedInstallTarget().ID; got != install.TargetOpenCode {
+		t.Fatalf("selected target = %q, want opencode (first down from Pi after OpenCode re-add)", got)
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = updated.(model)
 	if got := m.selectedInstallTarget().ID; got != install.TargetCodex {
-		t.Fatalf("selected target = %q, want codex (first down from Pi after hard OpenCode removal)", got)
+		t.Fatalf("selected target = %q, want codex (second down from Pi)", got)
 	}
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	m = updated.(model)
 	if got := m.selectedInstallTarget().ID; got != install.TargetAntigravity {
-		t.Fatalf("selected target = %q, want antigravity (second down from Pi)", got)
+		t.Fatalf("selected target = %q, want antigravity (third down from Pi)", got)
 	}
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(model)
@@ -215,14 +270,20 @@ func TestInstallTargetSelectionMovesBetweenSupportedTargetsOnly(t *testing.T) {
 	}
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	m = updated.(model)
-	// First down from Pi goes to Codex (OpenCode is hard-removed and not selectable).
+	// First down from Pi goes to OpenCode (the bounded config-only
+	// projection is supported again in this change).
+	if got := m.selectedInstallTarget().ID; got != install.TargetOpenCode {
+		t.Fatalf("selected target after down = %q, want opencode (first down from Pi after OpenCode re-add)", got)
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = updated.(model)
 	if got := m.selectedInstallTarget().ID; got != install.TargetCodex {
-		t.Fatalf("selected target after down = %q, want codex (first down from Pi after hard OpenCode removal)", got)
+		t.Fatalf("selected target after down = %q, want codex (second down from Pi)", got)
 	}
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	m = updated.(model)
 	if got := m.selectedInstallTarget().ID; got != install.TargetAntigravity {
-		t.Fatalf("selected target after down = %q, want antigravity (second down from Pi)", got)
+		t.Fatalf("selected target after down = %q, want antigravity (third down from Pi)", got)
 	}
 	if strings.Contains(m.statusBody, "Selected target: Claude Code") {
 		t.Fatalf("statusBody = %q, want roadmap targets visible but not selected", m.statusBody)

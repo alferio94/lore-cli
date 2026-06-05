@@ -12,6 +12,13 @@ const (
 	ComponentPiExtensions     ComponentID = "pi-extensions"
 	ComponentExtendedSkills   ComponentID = "extended-skills"
 	ComponentCodexAgentConfig ComponentID = "codex-agent-config"
+	// ComponentOpenCodePlugins is the bounded OpenCode plugin asset bundle
+	// (background-agents.ts, model-variants.ts, opencode-subagent-statusline,
+	// and the tui.json referencing the community statusline). The excluded
+	// plugins `sdd-engram` and `logo` are explicitly NEVER bundled; see
+	// `excludedOpenCodePluginNames` and the static guard in
+	// `static_guards_test.go` for the explicit rejection invariant.
+	ComponentOpenCodePlugins ComponentID = "opencode-plugins"
 
 	// PiHostedMCPPackageRepo is the canonical git source for the hosted Lore MCP adapter.
 	PiHostedMCPPackageRepo = "github.com/nicobailon/pi-mcp-adapter"
@@ -46,6 +53,7 @@ func ComponentCatalog() map[ComponentID]Component {
 			DefaultForTarget: map[TargetID]bool{
 				TargetPi:          true,
 				TargetClaudeCode:  true,
+				TargetOpenCode:    true,
 				TargetCodex:       true,
 				TargetAntigravity: true,
 			},
@@ -87,12 +95,21 @@ func ComponentCatalog() map[ComponentID]Component {
 				TargetCodex: true,
 			},
 		},
+		ComponentOpenCodePlugins: {
+			ID:          ComponentOpenCodePlugins,
+			Title:       "OpenCode Plugins",
+			Description: "Bounded OpenCode plugin asset bundle: background-agents.ts, model-variants.ts, and the community opencode-subagent-statusline (tui.json reference). Excludes sdd-engram and logo.",
+			Optional:    true,
+			DefaultForTarget: map[TargetID]bool{
+				TargetOpenCode: true,
+			},
+		},
 	}
 }
 
 func DefaultComponentSelection(target TargetID) []ComponentID {
 	catalog := ComponentCatalog()
-	ordered := []ComponentID{ComponentCorePack, ComponentPiExtensions, ComponentLoreServerMCP, ComponentExtendedSkills}
+	ordered := []ComponentID{ComponentCorePack, ComponentPiExtensions, ComponentLoreServerMCP, ComponentExtendedSkills, ComponentOpenCodePlugins}
 	supported := supportedComponentsForTarget(target)
 	selection := make([]ComponentID, 0, len(ordered))
 	for _, id := range ordered {

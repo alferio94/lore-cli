@@ -549,6 +549,9 @@ func (a *App) installActionWithOptions(ctx context.Context, opts installCommandO
 	if err == nil && selectedTarget.ID == install.TargetCodex {
 		return a.installCodexActionWithOptions(ctx, opts)
 	}
+	if err == nil && selectedTarget.ID == install.TargetOpenCode {
+		return a.installOpenCodeActionWithOptions(ctx, opts)
+	}
 	if err == nil && selectedTarget.ID == install.TargetAntigravity {
 		return a.installAntigravityActionWithOptions(ctx, opts)
 	}
@@ -721,6 +724,93 @@ func (a *App) installCodexActionWithOptions(ctx context.Context, opts installCom
 		output.Check{Name: "codex-config", Status: output.StatusWarn, Detail: fmt.Sprintf("managed MCP config path=%s server_url=%s auth_header=plaintext-bearer-token; Lore also manages ~/.codex/agents.md and ~/.codex/skills/.", result.Layout.Paths["config_toml"], preflight.ServerURL), Action: "Rerun lore install after lore login if the saved session changes or if the Lore server URL changes."},
 	)
 	return report
+}
+
+// installOpenCodeActionWithOptions is the foundation-slice entrypoint
+// for `lore install --target opencode`. It runs the same preflight as
+// the other shared targets, then delegates to PlanOpenCodeInstall /
+// ExecuteOpenCodeInstall and surfaces the bounded foundation summary.
+// Negative regression gates and the additive merge path are layered on
+// top in a later slice.
+func (a *App) installOpenCodeActionWithOptions(ctx context.Context, opts installCommandOptions) ActionReport {
+	service := install.Service{Store: a.Store, Auth: a.authManager(), ClientFactory: install.ClientFactory(a.ClientFactory), AgentConfigStore: a.AgentConfigStore}
+	report := ActionReport{Title: "Lore install"}
+	preflight := service.Preflight(ctx)
+	report.Checks = append(report.Checks, preflight.Checks...)
+	if !preflight.CanContinue {
+		report.ExitCode = 1
+		return report
+	}
+
+	homeDir, err := a.resolveUserHomeDir()
+	if err != nil {
+		report.Checks = append(report.Checks, output.Check{Name: "install", Status: output.StatusFail, Detail: err.Error(), Action: "Retry after HOME can be resolved for the current user."})
+		report.ExitCode = 1
+		return report
+	}
+	binaryPath, err := a.resolveExecutablePath()
+	if err != nil {
+		report.Checks = append(report.Checks, output.Check{Name: "install", Status: output.StatusFail, Detail: err.Error(), Action: "Retry from a normal Lore CLI binary context so the managed manifest can record the CLI path."})
+		report.ExitCode = 1
+		return report
+	}
+	configPath, err := a.Store.Path()
+	if err != nil {
+		report.Checks = append(report.Checks, output.Check{Name: "install", Status: output.StatusFail, Detail: err.Error(), Action: "Fix the local config directory permissions or override LORE_CONFIG_DIR."})
+		report.ExitCode = 1
+		return report
+	}
+
+	plan, err := service.PlanOpenCodeInstall(install.InstallRequest{
+		HomeDir:        homeDir,
+		ServerURL:      preflight.ServerURL,
+		SavedToken:     preflight.Token,
+		LoreBinaryPath: binaryPath,
+		LoreConfigDir:  filepath.Dir(configPath),
+		LoreCLIVersion: a.BuildInfo.Normalized().Version,
+		Target:         install.TargetOpenCode,
+		Components:     append([]install.ComponentID(nil), opts.Components...),
+	})
+	if err != nil {
+		report.Checks = append(report.Checks, output.Check{Name: "install", Status: output.StatusFail, Detail: err.Error(), Action: "Inspect the requested OpenCode components and rerun lore install after fixing the reported issue."})
+		report.ExitCode = 1
+		return report
+	}
+	if opts.DryRun {
+		report.Checks = append(report.Checks, output.Check{Name: "install", Status: output.StatusOK, Detail: formatSharedInstallPlanSummary(plan, true)})
+		return report
+	}
+	result, err := service.ExecuteOpenCodeInstall(plan, install.InstallCommandOptions{})
+	if err != nil {
+		report.Checks = append(report.Checks, output.Check{Name: "install", Status: output.StatusFail, Detail: err.Error(), Action: "Inspect the OpenCode runtime directory and rerun lore install after fixing the reported issue."})
+		report.ExitCode = 1
+		return report
+	}
+	status := output.StatusOK
+	if len(result.Summary.Failed) > 0 {
+		status = output.StatusFail
+		report.ExitCode = 1
+	}
+	report.Checks = append(report.Checks,
+		output.Check{Name: "install", Status: status, Detail: formatSharedInstallSummary(result)},
+	)
+	report.Checks = append(report.Checks,
+		output.Check{Name: "manifest", Status: output.StatusOK, Detail: fmt.Sprintf("verified %s auth_mode=%s managed_files=%d", result.Layout.ManifestPath, result.Manifest.AuthMode, len(result.Manifest.ManagedFiles))},
+	)
+	if openCodeMCPInstalled(result.Manifest.Components) {
+		detail := fmt.Sprintf("managed opencode.json path=%s server_url=%s auth_header=plaintext-bearer-token (saved token written under mcp.lore.headers.Authorization; the install summary never embeds the saved token)", result.Layout.Paths["opencode_json"], preflight.ServerURL)
+		report.Checks = append(report.Checks, output.Check{Name: "opencode-config", Status: output.StatusWarn, Detail: detail, Action: "Rerun lore install after lore login if the saved session changes or if the Lore server URL changes."})
+	}
+	return report
+}
+
+func openCodeMCPInstalled(components []install.ComponentID) bool {
+	for _, component := range components {
+		if component == install.ComponentLoreServerMCP {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *App) planPiInstallAction(ctx context.Context, opts installCommandOptions) (install.PiInstallPlan, ActionReport, bool) {
@@ -925,6 +1015,9 @@ func formatSharedInstallSummary(result install.InstallResult) string {
 	if result.Target == install.TargetCodex {
 		return formatCodexInstallSummary(result)
 	}
+	if result.Target == install.TargetOpenCode {
+		return formatOpenCodeInstallSummary(result)
+	}
 	return formatAntigravityInstallSummary(result)
 }
 
@@ -967,6 +1060,9 @@ func formatSharedInstallPlanSummary(plan install.InstallPlan, dryRun bool) strin
 	if plan.Layout.Target == install.TargetCodex {
 		return formatCodexInstallPlanSummary(plan, dryRun)
 	}
+	if plan.Layout.Target == install.TargetOpenCode {
+		return formatOpenCodeInstallPlanSummary(plan, dryRun)
+	}
 	return formatAntigravityInstallPlanSummary(plan, dryRun)
 }
 
@@ -1008,6 +1104,77 @@ func formatAntigravityInstallSummary(result install.InstallResult) string {
 	parts = append(parts, formatManagedFileSummaryParts(result.Summary.Unchanged, "unchanged")...)
 	if len(result.Summary.Failed) > 0 {
 		parts = append(parts, fmt.Sprintf("findings=%s", strings.Join(result.Summary.Failed, "; ")))
+	}
+	return strings.Join(parts, " ")
+}
+
+// formatOpenCodeInstallSummary produces the OpenCode-specific install
+// summary. It is shaped like the Codex summary but uses the
+// `runtime=opencode-config-only` token, the `runner=none` /
+// `bootstrap=none` markers that match the bounded foundation slice,
+// and the documented bounded plugin bundle plus the explicit
+// `sdd-engram` / `logo` exclusion list. The plaintext-token warning
+// is always surfaced when `lore-server-mcp` is selected and is
+// rendered as a separate `opencode-config` check (not embedded in
+// the summary line) so the saved token can never leak through the
+// summary. The `mcp_lore_ownership=fail-closed-on-foreign` token is
+// always surfaced so the bounded ownership contract is part of the
+// apply summary surface.
+func formatOpenCodeInstallSummary(result install.InstallResult) string {
+	summary := fmt.Sprintf("install_target=%s runtime=opencode-config-only auth_mode=%s components=%s managed_local_files=%d created=%d updated=%d unchanged=%d backed_up=%d conflicted=%d failed=%d",
+		result.Target, result.Manifest.AuthMode, formatComponentIDs(result.Manifest.Components),
+		len(result.Manifest.ManagedFiles), len(result.Summary.Created), len(result.Summary.Updated),
+		len(result.Summary.Unchanged), len(result.Summary.BackedUp), len(result.Summary.Conflicted), len(result.Summary.Failed))
+	parts := []string{summary}
+	parts = append(parts, formatManagedFileSummaryParts(result.Summary.Created, "create")...)
+	parts = append(parts, formatManagedFileSummaryParts(result.Summary.Updated, "update")...)
+	parts = append(parts, formatManagedFileSummaryParts(result.Summary.Unchanged, "unchanged")...)
+	parts = append(parts, formatManagedFileSummaryParts(result.Summary.Conflicted, "conflicted")...)
+	parts = append(parts,
+		"mcp=remote-when-selected",
+		"mcp_lore_ownership=fail-closed-on-foreign",
+		"runner=none",
+		"bootstrap=none",
+		"plugins=bundled:background-agents,model-variants,opencode-subagent-statusline",
+		"plugins_location=~/.config/opencode/plugins/ (background-agents.ts, model-variants.ts); tui.json registers only opencode-subagent-statusline",
+		"excluded_plugins=sdd-engram,logo",
+	)
+	if len(result.Summary.Failed) > 0 {
+		parts = append(parts, fmt.Sprintf("findings=%s", strings.Join(result.Summary.Failed, "; ")))
+	}
+	return strings.Join(parts, " ")
+}
+
+// formatOpenCodeInstallPlanSummary produces the OpenCode-specific plan
+// summary for the bounded foundation slice. The summary mirrors the
+// apply summary's plugin and exclusion tokens so dry-run output
+// matches the apply surface. The plaintext-token warning is only
+// surfaced at apply time (when `lore-server-mcp` is selected and the
+// `opencode-config` check is emitted); dry-run does not embed the
+// saved token. The `mcp_lore_ownership=fail-closed-on-foreign` token
+// is always surfaced so the ownership contract is part of the
+// dry-run surface too.
+func formatOpenCodeInstallPlanSummary(plan install.InstallPlan, dryRun bool) string {
+	parts := []string{
+		fmt.Sprintf("install_target=%s", plan.Layout.Target),
+		"runtime=opencode-config-only",
+		"auth_mode=config-only",
+		fmt.Sprintf("components=%s", formatComponentIDs(plan.Components)),
+		fmt.Sprintf("target=%s", plan.Layout.RootDir),
+		fmt.Sprintf("manifest=%s", plan.Layout.ManifestPath),
+		"mcp=remote-when-selected",
+		"mcp_lore_ownership=fail-closed-on-foreign",
+		"runner=none",
+		"bootstrap=none",
+		"plugins=bundled:background-agents,model-variants,opencode-subagent-statusline",
+		"plugins_location=~/.config/opencode/plugins/ (background-agents.ts, model-variants.ts); tui.json registers only opencode-subagent-statusline",
+		"excluded_plugins=sdd-engram,logo",
+	}
+	if dryRun {
+		parts = append(parts, "mode=dry-run")
+	}
+	for _, action := range plan.Files {
+		parts = append(parts, fmt.Sprintf("managed_action=%s:%s", action.Action, action.RelativePath))
 	}
 	return strings.Join(parts, " ")
 }

@@ -313,11 +313,11 @@ func (a *App) runInstall(_ InteractiveActions, args []string) int {
 	fs := newFlagSet("install", a.Stderr)
 	dryRun := fs.Bool("dry-run", false, "Show the selected install plan without mutating managed runtime files")
 	yes := fs.Bool("yes", false, "Accept the safe default full-backup behavior without prompting")
-	target := fs.String("target", string(install.DefaultInstallTarget()), "Install target (Pi stays the default recommended target; Codex and Antigravity are supported managed targets)")
+	target := fs.String("target", string(install.DefaultInstallTarget()), "Install target (Pi stays the default recommended target; OpenCode, Codex, and Antigravity are supported managed targets)")
 	var components componentFlag
-	fs.Var(&components, "component", "Optional component override; repeat or use a comma-separated list (Pi, Codex, and Antigravity support core-pack; Pi/Codex/Antigravity also support lore-server-mcp)")
+	fs.Var(&components, "component", "Optional component override; repeat or use a comma-separated list (Pi, OpenCode, Codex, and Antigravity support core-pack; Pi/Codex/Antigravity also support lore-server-mcp; OpenCode also supports opencode-plugins)")
 	fs.Usage = func() {
-		fmt.Fprintln(a.Stderr, "Usage: lore install [--dry-run] [--yes] [--target pi|codex|antigravity] [--component <id>]")
+		fmt.Fprintln(a.Stderr, "Usage: lore install [--dry-run] [--yes] [--target pi|opencode|codex|antigravity] [--component <id>]")
 		fmt.Fprintln(a.Stderr, "Install the Pi-first managed runtime using saved Lore login state.")
 		fmt.Fprintln(a.Stderr, "Pi is the default and installs the portable Lore agent pack, hosted Lore MCP via pi-mcp-adapter, and an extended-skills bundle (skill-creator, skill-registry, judgment-day).")
 		fmt.Fprintln(a.Stderr, "Antigravity is the prompt + skills MVP target with the portable pack, lore-server-mcp, and extended-skills bundle.")
@@ -327,6 +327,7 @@ func (a *App) runInstall(_ InteractiveActions, args []string) int {
 		fmt.Fprintln(a.Stderr, "Pi uses hosted Lore MCP via pi-mcp-adapter by default; the deprecated lore-memory.ts extension has been removed and is not available. The optional pi-extensions bundle (lore-footer.ts only) is available via --component pi-extensions but is not installed by default.")
 		fmt.Fprintln(a.Stderr, "Antigravity install writes ~/.gemini/config/agents/lore.json for the managed Lore profile and, when MCP is selected, writes ~/.gemini/config/mcp_config.json with the Lore /v1/mcp server URL plus a plaintext Authorization bearer token.")
 		fmt.Fprintln(a.Stderr, "Codex install writes ~/.codex/config.toml with a managed Lore remote MCP entry pointing at /v1/mcp and a plaintext Authorization bearer token under [mcp_servers.lore.http_headers].")
+		fmt.Fprintln(a.Stderr, "OpenCode install writes ~/.config/opencode/AGENTS.md, skills/<phase>/SKILL.md, opencode.json, lore-install.json, the bounded opencode-plugins bundle (background-agents.ts, model-variants.ts, and the community opencode-subagent-statusline referenced from tui.json), and an optional mcp.lore remote MCP entry. The opencode-plugins component is on by default for OpenCode; explicit exclusions (sdd-engram, logo) are never bundled or registered. When lore-server-mcp is selected, the saved token is persisted in plaintext under mcp.lore.headers.Authorization and the install summary surfaces a plaintext-token warning that never embeds the saved token. Ownership contract: opencode.json mcp.lore blocks are only overwritten when they carry a `managed_by: lore-cli` marker; a non-Lore-owned mcp.lore block (missing marker or owned by another tool) fails closed with a typed conflict error, a backup of the existing file at the managed backup root, and a resolution message that names the conflicting block. The tui.json file is always Lore-owned.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {

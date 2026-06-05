@@ -2,6 +2,7 @@ package install
 
 import (
 	"context"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,7 +23,8 @@ func TestNoActiveSourceTeachesStalePiEnvelopeContract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("os.Getwd: %v", err)
 	}
-	// Walk only internal/ — the same scope as the OpenCode guard.
+	// Walk only internal/ — the same scope as the opencodeready-package
+	// guard.
 	absRoot := filepath.Join(repoRoot, "internal")
 	_ = filepath.WalkDir(absRoot, func(path string, d os.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -172,5 +174,69 @@ func TestDefaultPiAdapterRenderDoesNotEmitLoreMemory(t *testing.T) {
 				t.Fatalf("Render(%v) emitted deprecated %s; lore-memory.ts must not be rendered in any install path", components, file.RelativePath)
 			}
 		}
+	}
+}
+
+// TestOpenCodeBundledPluginAssetsExcludeSddEngramAndLogo is a
+// static guard for the spec invariant: the bundled OpenCode plugin
+// assets under `internal/install/assets/opencode/plugins/` MUST
+// NOT include any `sdd-engram` or `logo` plugin file. The test
+// walks the embed.FS subtree and asserts no managed file basename
+// resolves to an excluded plugin.
+func TestOpenCodeBundledPluginAssetsExcludeSddEngramAndLogo(t *testing.T) {
+	assetFS := opencodeEmbeddedAssetFS()
+	entries, err := fs.ReadDir(assetFS, "assets/opencode/plugins")
+	if err != nil {
+		t.Fatalf("fs.ReadDir(assets/opencode/plugins) error = %v, want nil", err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		for _, excluded := range excludedOpenCodePluginNames {
+			if matchesExcludedOpenCodePlugin(name, excluded) {
+				t.Fatalf("bundled OpenCode plugin asset %q resolves to explicitly excluded plugin %q", name, excluded)
+			}
+		}
+	}
+}
+
+// TestOpenCodeBundledPluginAssetsNoGentleWordingLeakage is a
+// static guard for the spec invariant: the bundled OpenCode plugin
+// assets MUST NOT contain any Gentle-authored copy. The test
+// inspects every byte of every bundled asset (including tui.json)
+// and rejects any of the documented forbidden tokens.
+func TestOpenCodeBundledPluginAssetsNoGentleWordingLeakage(t *testing.T) {
+	assetFS := opencodeEmbeddedAssetFS()
+	forbidden := []string{
+		"gentle",
+		"gentle-ai",
+		"gentleprogramming",
+		"gentleman-programming",
+	}
+	walkErr := fs.WalkDir(assetFS, "assets/opencode", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		content, readErr := assetFS.(interface {
+			ReadFile(string) ([]byte, error)
+		}).ReadFile(path)
+		if readErr != nil {
+			t.Fatalf("ReadFile(%q) error = %v", path, readErr)
+		}
+		lower := strings.ToLower(string(content))
+		for _, token := range forbidden {
+			if strings.Contains(lower, token) {
+				t.Fatalf("bundled OpenCode asset %q leaked forbidden Gentle token %q; content=%q", path, token, string(content))
+			}
+		}
+		return nil
+	})
+	if walkErr != nil {
+		t.Fatalf("fs.WalkDir(assets/opencode) error = %v", walkErr)
 	}
 }

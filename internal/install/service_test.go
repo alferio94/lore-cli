@@ -21,8 +21,8 @@ import (
 
 func TestDefaultTargetsPreferPiAndMarkOthersComingSoon(t *testing.T) {
 	targets := DefaultTargets()
-	if len(targets) != 4 {
-		t.Fatalf("len(targets) = %d, want 4 (Pi + Codex + Antigravity + ClaudeCode as Coming soon)", len(targets))
+	if len(targets) != 5 {
+		t.Fatalf("len(targets) = %d, want 5 (Pi + OpenCode + Codex + Antigravity + ClaudeCode as Coming soon)", len(targets))
 	}
 	if got := targets[0]; got.ID != TargetPi || !got.Available || !got.Recommended {
 		t.Fatalf("targets[0] = %+v, want available recommended Pi", got)
@@ -33,9 +33,30 @@ func TestDefaultTargetsPreferPiAndMarkOthersComingSoon(t *testing.T) {
 	if got := findTarget(targets, TargetAntigravity); !got.Available || got.Recommended || !containsAll(got.Description, "prompt", "skills", "agent profile", "optional direct MCP config") {
 		t.Fatalf("antigravity target = %+v, want supported prompt/skills target with managed Gemini agent profile and optional direct MCP config", got)
 	}
-	// OpenCode is hard-removed: not in the visible default target list at all.
-	if got := findTarget(targets, TargetID("opencode")); got.Available {
-		t.Fatalf("target opencode = %+v, want unavailable/unsupported after hard removal", got)
+	// OpenCode is supported again: it must be in the visible default target
+	// list as a bounded config-only target.
+	if got := findTarget(targets, TargetOpenCode); !got.Available {
+		t.Fatalf("target opencode = %+v, want supported (bounded config-only projection)", got)
+	}
+	if got := findTarget(targets, TargetOpenCode).Description; !containsAll(got, "Bounded OpenCode projection", "config-only") {
+		t.Fatalf("opencode description = %q, want bounded config-only projection", got)
+	}
+	// 3.3 repair: the OpenCode target description must surface the
+	// fail-closed mcp.lore ownership contract and the gentle
+	// plugin-registration semantics (local plugin .ts files copied
+	// to plugins/, only the community statusline in tui.json).
+	opencodeDescription := findTarget(targets, TargetOpenCode).Description
+	for _, want := range []string{
+		"managed_by: lore-cli",
+		"fails closed",
+		"opencode-subagent-statusline",
+		"tui.json",
+		"sdd-engram",
+		"logo",
+	} {
+		if !strings.Contains(opencodeDescription, want) {
+			t.Fatalf("opencode description missing %q; got %q", want, opencodeDescription)
+		}
 	}
 	claudeCode := findTarget(targets, TargetClaudeCode)
 	if claudeCode.Available {
@@ -75,14 +96,14 @@ func TestResolveInstallTargetKeepsPiDefaultAndRejectsRoadmapTargets(t *testing.T
 		t.Fatalf("ResolveInstallTarget(antigravity) = %+v, want supported Antigravity target", selected)
 	}
 
-	// OpenCode is hard-removed: `ResolveInstallTarget(opencode)` returns an
-	// unsupported-target error that names the three supported targets.
-	_, err = ResolveInstallTarget(TargetID("opencode"))
-	if err == nil {
-		t.Fatalf("ResolveInstallTarget(opencode) error = nil, want unsupported-target rejection")
+	// OpenCode is supported again: `ResolveInstallTarget(opencode)` resolves
+	// to the bounded config-only projection target.
+	selected, err = ResolveInstallTarget(TargetOpenCode)
+	if err != nil {
+		t.Fatalf("ResolveInstallTarget(opencode) error = %v, want nil", err)
 	}
-	if !containsAll(err.Error(), "opencode", "unsupported", "pi", "codex", "antigravity") {
-		t.Fatalf("ResolveInstallTarget(opencode) error = %q, want unsupported target error listing supported targets", err)
+	if selected.ID != TargetOpenCode || !selected.Available {
+		t.Fatalf("ResolveInstallTarget(opencode) = %+v, want supported OpenCode target", selected)
 	}
 
 	if _, err := ResolveInstallTarget(TargetClaudeCode); err == nil || !containsAll(err.Error(), string(TargetClaudeCode), "Coming soon", "supported targets") {
@@ -95,29 +116,24 @@ func TestResolveInstallTargetKeepsPiDefaultAndRejectsRoadmapTargets(t *testing.T
 
 func TestFormatTargetSelectionExplainsPiNativePathAndMCPDeferral(t *testing.T) {
 	formatted := FormatTargetSelection(DefaultTargets())
-	for _, want := range []string{"Choose an install target:", "Pi — Recommended", "uses hosted Lore MCP", "Antigravity:", "prompt + skills", "Coming soon", "Pi remains the default recommended path", "uses hosted Lore MCP by default", "~/.gemini/config/agents/lore.json", "optionally write direct MCP config"} {
+	for _, want := range []string{"Choose an install target:", "Pi — Recommended", "uses hosted Lore MCP", "Antigravity:", "prompt + skills", "Coming soon", "Pi remains the default recommended path", "uses hosted Lore MCP by default", "~/.gemini/config/agents/lore.json", "optionally write direct MCP config", "Bounded OpenCode projection", "~/.config/opencode"} {
 		if !strings.Contains(formatted, want) {
 			t.Fatalf("FormatTargetSelection() = %q, want substring %q", formatted, want)
 		}
 	}
-	// OpenCode is hard-removed: no "OpenCode:" entry, no opencode.json mention,
-	// no Coming-soon placeholder for OpenCode.
-	for _, forbidden := range []string{"OpenCode:", "opencode.json", "Bounded OpenCode support", "~/.config/opencode"} {
-		if strings.Contains(formatted, forbidden) {
-			t.Fatalf("FormatTargetSelection() = %q, want %q omitted after hard removal", formatted, forbidden)
-		}
-	}
 }
 
-// TestSupportedTargetsExcludesOpenCode verifies the spec scenario for
-// `remove-opencode-support`:
+// TestSupportedTargetsIncludesOpenCode verifies the spec scenario for
+// `readd-opencode-support-from-gentle-ai` foundation slice:
 //   - GIVEN the install target catalog
 //   - WHEN code calls SupportedTargets()
-//   - THEN the returned set is exactly the three remaining supported targets
-//   - AND no opencode entry is present.
-func TestSupportedTargetsExcludesOpenCode(t *testing.T) {
+//   - THEN the returned set is exactly the four supported targets
+//   - AND the OpenCode entry is present
+//   - AND the supported set is ordered Pi, OpenCode, Codex, Antigravity
+//     to keep the visible TUI ordering consistent.
+func TestSupportedTargetsIncludesOpenCode(t *testing.T) {
 	got := SupportedTargets()
-	want := []TargetID{TargetPi, TargetCodex, TargetAntigravity}
+	want := []TargetID{TargetPi, TargetOpenCode, TargetCodex, TargetAntigravity}
 	if len(got) != len(want) {
 		t.Fatalf("SupportedTargets() length = %d, want %d (got=%v, want=%v)", len(got), len(want), got, want)
 	}
@@ -126,55 +142,50 @@ func TestSupportedTargetsExcludesOpenCode(t *testing.T) {
 			t.Fatalf("SupportedTargets()[%d] = %q, want %q", i, got[i], want[i])
 		}
 	}
-	for _, id := range got {
-		if id == TargetID("opencode") {
-			t.Fatalf("SupportedTargets() = %v, must not contain %q", got, "opencode")
-		}
-	}
 }
 
-// TestInstallRejectsOpenCodeTarget verifies the spec scenario for
-// `remove-opencode-support`:
+// TestInstallAcceptsOpenCodeTarget verifies the spec scenario for
+// `readd-opencode-support-from-gentle-ai` foundation slice:
 //   - GIVEN a user runs `lore install --target opencode`
 //   - WHEN the command runs
-//   - THEN the system returns a non-zero exit code (an error from
-//     ResolveInstallTarget)
-//   - AND the error names `opencode` as unsupported and lists the supported
-//     targets
-//   - AND no installer side effects occur (i.e., the resolver refuses
-//     before any target-specific code is invoked).
-func TestInstallRejectsOpenCodeTarget(t *testing.T) {
-	_, err := ResolveInstallTarget(TargetID("opencode"))
-	if err == nil {
-		t.Fatal("ResolveInstallTarget(opencode) error = nil, want unsupported-target rejection")
+//   - THEN the install target resolves successfully
+//   - AND the resolved target is the bounded config-only OpenCode target
+//   - AND the default install target remains Pi (not OpenCode).
+func TestInstallAcceptsOpenCodeTarget(t *testing.T) {
+	selected, err := ResolveInstallTarget(TargetOpenCode)
+	if err != nil {
+		t.Fatalf("ResolveInstallTarget(opencode) error = %v, want nil", err)
 	}
-	msg := err.Error()
-	if !containsAll(msg, "opencode", "unsupported", "pi", "codex", "antigravity") {
-		t.Fatalf("error message = %q, want unsupported target error listing supported targets", msg)
+	if selected.ID != TargetOpenCode || !selected.Available {
+		t.Fatalf("ResolveInstallTarget(opencode) = %+v, want supported OpenCode target", selected)
 	}
-	// The OpenCode target must NOT resolve to a supported adapter.
-	selected, _ := ResolveInstallTarget("")
-	if selected.ID == TargetID("opencode") {
-		t.Fatalf("default target = %q, want non-OpenCode default", selected.ID)
+	// The default install target must remain Pi.
+	defaultTarget, err := ResolveInstallTarget("")
+	if err != nil {
+		t.Fatalf("ResolveInstallTarget(\"\") error = %v, want nil", err)
+	}
+	if defaultTarget.ID == TargetOpenCode {
+		t.Fatalf("default target = %q, want non-OpenCode default", defaultTarget.ID)
 	}
 }
 
-// TestNoActiveSourceReferencesOpenCodeUserConfig is a focused static guard
-// for the spec invariant: no active (non-test) Go file under `internal/`
-// may reference the literal user-config path `~/.config/opencode` or
-// import the now-removed `internal/opencodeready` package. The
-// `internal/opencodeready` package itself has been hard-removed; any
-// surviving import is a regression. Test files are excluded from the
-// active-source check because they may legitimately reference the literal
-// "opencode" string in negative regression assertions.
-func TestNoActiveSourceReferencesOpenCodeUserConfig(t *testing.T) {
+// TestNoActiveSourceImportsOpencodereadyPackage is a focused static
+// guard for the spec invariant: no active (non-test) Go file under
+// `internal/` may import the removed `internal/opencodeready` package.
+// The `internal/opencodeready` package itself has been hard-removed;
+// any surviving import is a regression. Test files are excluded from
+// the active-source check because they may legitimately mention
+// "opencodeready" in negative regression assertions.
+//
+// Note: the `~/.config/opencode` literal IS legitimately referenced by
+// the OpenCode install surface (adapter_opencode.go,
+// opencode_install.go, and tui/root.go), so the prior user-config path
+// guard is now scoped to the `opencodeready` import only.
+func TestNoActiveSourceImportsOpencodereadyPackage(t *testing.T) {
 	repoRoot, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("os.Getwd: %v", err)
 	}
-	// Active non-test source: internal/cli, internal/tui, internal/install,
-	// internal/httpclient, internal/config, internal/output, internal/auth,
-	// internal/agentconfig, internal/agentpack.
 	activeDirs := []string{
 		"internal/cli", "internal/tui", "internal/install",
 		"internal/httpclient", "internal/config", "internal/output",
@@ -202,9 +213,6 @@ func TestNoActiveSourceReferencesOpenCodeUserConfig(t *testing.T) {
 				return err
 			}
 			text := string(content)
-			if strings.Contains(text, "~/.config/opencode") {
-				t.Fatalf("active non-test source %s references ~/.config/opencode", rel)
-			}
 			if strings.Contains(text, "internal/opencodeready") {
 				t.Fatalf("active non-test source %s imports internal/opencodeready", rel)
 			}

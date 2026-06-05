@@ -21,6 +21,13 @@ func TestDefaultComponentSelectionUsesHostedMCPForPiCodexAndAntigravity(t *testi
 	if got := DefaultComponentSelection(TargetCodex); !equalComponentIDs(got, []ComponentID{ComponentCorePack, ComponentLoreServerMCP, ComponentExtendedSkills}) {
 		t.Fatalf("DefaultComponentSelection(codex) = %v, want core-pack + lore-server-mcp + extended-skills", got)
 	}
+	// OpenCode: core-pack + opencode-plugins by default (MCP remains
+	// opt-in; the bounded plugin asset bundle is on by default in
+	// the 1.3/2.x slice so the re-add ships the documented plugin
+	// set plus the tui.json reference).
+	if got := DefaultComponentSelection(TargetOpenCode); !equalComponentIDs(got, []ComponentID{ComponentCorePack, ComponentOpenCodePlugins}) {
+		t.Fatalf("DefaultComponentSelection(opencode) = %v, want core-pack + opencode-plugins (MCP is opt-in for the foundation slice)", got)
+	}
 	// Other bounded targets: core-pack only.
 	for _, target := range []TargetID{TargetClaudeCode} {
 		if got := DefaultComponentSelection(target); !equalComponentIDs(got, []ComponentID{ComponentCorePack}) {
@@ -144,11 +151,20 @@ func TestRegistryResolveReturnsTargetAdapterAndCapabilities(t *testing.T) {
 		t.Fatal("Supports(lore-server-mcp) = false, want true for Codex remote MCP")
 	}
 
-	// OpenCode is hard-removed: the registry MUST NOT contain an OpenCode
-	// adapter. `Resolve(opencode)` returns the standard not-registered error
-	// because no adapter was registered for that ID.
-	if _, err := registry.Resolve(TargetID("opencode")); err == nil {
-		t.Fatal("Resolve(opencode) error = nil, want not-registered error after hard removal")
+	// OpenCode is supported again: the registry must contain an OpenCode
+	// adapter with the bounded foundation-slice capabilities.
+	adapter, err = registry.Resolve(TargetOpenCode)
+	if err != nil {
+		t.Fatalf("Resolve(opencode) error = %v, want nil", err)
+	}
+	if adapter.ID() != TargetOpenCode || adapter.Title() != "OpenCode" {
+		t.Fatalf("Resolve(opencode) = (%q, %q), want (opencode, OpenCode)", adapter.ID(), adapter.Title())
+	}
+	if !adapter.Supports(ComponentCorePack) {
+		t.Fatal("Supports(core-pack) = false, want true for OpenCode core pack rendering")
+	}
+	if !adapter.Supports(ComponentLoreServerMCP) {
+		t.Fatal("Supports(lore-server-mcp) = false, want true for OpenCode optional MCP")
 	}
 }
 
