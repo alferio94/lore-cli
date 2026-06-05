@@ -248,4 +248,3 @@ func checksumForAsset(sums, assetName string) (string, error) {
 	}
 	return "", fmt.Errorf("checksum entry for %s not found", assetName)
 }
-

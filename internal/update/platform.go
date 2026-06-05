@@ -22,14 +22,14 @@ const (
 )
 
 type BinaryTarget struct {
-	ExecutablePath string
-	ResolvedPath   string
+	ExecutablePath  string
+	ResolvedPath    string
 	ResolvedSymPath string
-	PathPath       string
-	GOOS           string
-	GOARCH         string
-	Status         TargetStatus
-	Reason         TargetReason
+	PathPath        string
+	GOOS            string
+	GOARCH          string
+	Status          TargetStatus
+	Reason          TargetReason
 }
 
 type resolveTargetOptions struct {

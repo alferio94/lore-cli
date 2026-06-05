@@ -309,7 +309,7 @@ func TestStatusAndDoctorActionsPreserveDiagnosticSemantics(t *testing.T) {
 	if doctor.Title != "Lore doctor" || doctor.ExitCode != 1 {
 		t.Fatalf("doctorAction() = %+v, want failing Lore doctor report", doctor)
 	}
-	assertCheckNames(t, doctor.Checks, "config", "healthz", "readyz", "auth", "pi", "agent-config", "opencode-readiness")
+	assertCheckNames(t, doctor.Checks, "config", "healthz", "readyz", "auth", "pi", "agent-config")
 	assertNoTokenLeak(t, output.RenderChecks(doctor.Title, doctor.Checks), "", "secret-token")
 }
 
@@ -362,65 +362,6 @@ func TestUpdateServiceWiresProductionCandidateProbe(t *testing.T) {
 	want := (version.Info{Version: "v1.2.3", Commit: "abc1234", BuildDate: "2026-05-20T00:00:00Z"}).Normalized()
 	if got != want {
 		t.Fatalf("CandidateVersion() = %+v, want %+v", got, want)
-	}
-}
-
-func TestOpenCodeInstallPlanSummaryUsesBoundedTargetSpecificCopy(t *testing.T) {
-	plan := install.InstallPlan{
-		Layout: install.HarnessLayout{
-			Target:       install.TargetOpenCode,
-			RootDir:      "/home/user/.config/opencode",
-			ManifestPath: "/home/user/.config/opencode/lore-install.json",
-		},
-		Components: []install.ComponentID{install.ComponentCorePack, install.ComponentExtendedSkills},
-		Files: []install.PlanFileAction{
-			{RelativePath: "AGENTS.md", Action: "create"},
-			{RelativePath: "opencode.json", Action: "create"},
-			{RelativePath: "skills/sdd-apply/SKILL.md", Action: "create"},
-			{RelativePath: "lore-install.json", Action: "create"},
-		},
-	}
-
-	summary := formatOpenCodeInstallPlanSummary(plan, true)
-	for _, forbidden := range []string{"runtime=antigravity", "prompt=", "mcp_optional", "runtime=codex", "config.toml"} {
-		if strings.Contains(summary, forbidden) {
-			t.Fatalf("OpenCode plan summary should omit %q: %s", forbidden, summary)
-		}
-	}
-	for _, want := range []string{"install_target=opencode", "scope=config-only", "settings_merge=lore-top-level-only", "commands=omitted", "managed_action=create:AGENTS.md", "managed_action=create:opencode.json", "mode=dry-run"} {
-		if !strings.Contains(summary, want) {
-			t.Fatalf("OpenCode plan summary = %q, want substring %q", summary, want)
-		}
-	}
-}
-
-func TestOpenCodeInstallSummaryUsesBoundedTargetSpecificCopy(t *testing.T) {
-	result := install.InstallResult{
-		Target: install.TargetOpenCode,
-		Layout: install.HarnessLayout{Target: install.TargetOpenCode, RootDir: "/home/user/.config/opencode", ManifestPath: "/home/user/.config/opencode/lore-install.json"},
-		Manifest: install.Manifest{
-			SchemaVersion: "1.0",
-			Target:        install.TargetOpenCode,
-			AuthMode:      "config-only",
-			Components:    []install.ComponentID{install.ComponentCorePack},
-			ManagedFiles: []install.ManagedFileRecord{
-				{Path: "/home/user/.config/opencode/AGENTS.md", Component: install.ComponentCorePack, MergeMode: install.MergeModeReplace, ContentHash: "abc"},
-				{Path: "/home/user/.config/opencode/opencode.json", Component: install.ComponentCorePack, MergeMode: install.MergeModeAdditiveJSON, ContentHash: "def"},
-			},
-		},
-		Summary: install.InstallSummary{Created: []string{"/home/user/.config/opencode/AGENTS.md", "/home/user/.config/opencode/opencode.json"}},
-	}
-
-	summary := formatOpenCodeInstallSummary(result)
-	for _, forbidden := range []string{"runtime=antigravity", "mcp_optional", "runtime=codex", "config.toml"} {
-		if strings.Contains(summary, forbidden) {
-			t.Fatalf("OpenCode apply summary should omit %q: %s", forbidden, summary)
-		}
-	}
-	for _, want := range []string{"install_target=opencode", "scope=config-only", "settings_merge=lore-top-level-only", "commands=omitted", "plugins=none", "profiles=none", "mcp=none"} {
-		if !strings.Contains(summary, want) {
-			t.Fatalf("OpenCode apply summary = %q, want substring %q", summary, want)
-		}
 	}
 }
 
@@ -565,108 +506,6 @@ func TestCodexInstallPlanSummaryIncludesManagedActions(t *testing.T) {
 	}
 	if !strings.Contains(summary, "managed_action=create:skills/sdd-apply/SKILL.md") {
 		t.Errorf("summary should contain create action for skill file: %s", summary)
-	}
-}
-
-// --- OpenCode install path tests ---
-
-func TestOpenCodeInstallDryRunPassesServerURLAndTokenToPlan(t *testing.T) {
-	// Verifies installOpenCodeActionWithOptions threads preflight.ServerURL
-	// and preflight.Token into PlanOpenCodeInstall (Fix 1).
-	homeDir := t.TempDir()
-	store := &fakeStore{
-		path: filepath.Join(t.TempDir(), "config.json"),
-		loaded: config.Config{ServerURL: "https://lore.example/v1/mcp", APIToken: "secret-token"},
-	}
-	client := &fakeClient{
-		subject: httpclient.Subject{UserID: "user-1", Kind: "user", TokenSource: "api_token"},
-	}
-	app, _, _ := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
-	app.UserHomeDir = func() (string, error) { return homeDir, nil }
-	app.ExecutablePath = func() (string, error) { return "/usr/local/bin/lore", nil }
-	app.BuildInfo = version.Info{Version: "v1.2.3"}
-
-	report := app.installActionWithOptions(context.Background(), installCommandOptions{
-		DryRun:     true,
-		Target:     install.TargetOpenCode,
-		Components: []install.ComponentID{install.ComponentCorePack, install.ComponentLoreServerMCP},
-	})
-
-	// Must not fail with "server url is required".
-	if report.ExitCode != 0 {
-		t.Fatalf("installActionWithOptions dry-run exit code = %d, want 0; checks = %+v", report.ExitCode, report.Checks)
-	}
-
-	// Summary must mention OpenCode target.
-	var foundOpenCodeCheck bool
-	var mcpCheck output.Check
-	for _, check := range report.Checks {
-		if strings.Contains(check.Detail, "install_target=opencode") {
-			foundOpenCodeCheck = true
-		}
-		if check.Name == "opencode-config" {
-			mcpCheck = check
-		}
-	}
-	if !foundOpenCodeCheck {
-		t.Fatalf("report.Checks = %+v, want opencode install check", report.Checks)
-	}
-
-	// If mcp was selected, the warning check must mention mcp=remote.
-	if mcpCheck.Detail != "" && !strings.Contains(mcpCheck.Detail, "mcp=") {
-		t.Fatalf("opencode-config check = %q, want mcp status indicated", mcpCheck.Detail)
-	}
-}
-
-func TestOpenCodeInstallPlanSummaryReportsMCPRemote(t *testing.T) {
-	// Verifies formatOpenCodeInstallPlanSummary reflects mcp=remote when
-	// lore-server-mcp is in the plan components.
-	plan := install.InstallPlan{
-		Layout: install.HarnessLayout{
-			Target:       install.TargetOpenCode,
-			RootDir:      "/home/user/.config/opencode",
-			ManifestPath: "/home/user/.config/opencode/lore-install.json",
-			Paths:        map[string]string{"config_root": "/home/user/.config"},
-		},
-		Components: []install.ComponentID{install.ComponentCorePack, install.ComponentLoreServerMCP},
-		Files: []install.PlanFileAction{
-			{RelativePath: "AGENTS.md", Action: "create"},
-			{RelativePath: "opencode.json", Action: "create"},
-		},
-	}
-
-	summary := formatOpenCodeInstallPlanSummary(plan, false)
-	if !strings.Contains(summary, "mcp=remote") {
-		t.Fatalf("summary = %q, want mcp=remote indicated", summary)
-	}
-	if !strings.Contains(summary, "install_target=opencode") {
-		t.Fatalf("summary = %q, want opencode target", summary)
-	}
-	if strings.Contains(summary, "mcp=none") {
-		t.Fatalf("summary = %q, want NOT mcp=none when lore-server-mcp selected", summary)
-	}
-}
-
-func TestOpenCodeInstallPlanSummaryReportsMCPNone(t *testing.T) {
-	// Verifies formatOpenCodeInstallPlanSummary reports mcp=none when
-	// lore-server-mcp is NOT selected.
-	plan := install.InstallPlan{
-		Layout: install.HarnessLayout{
-			Target:       install.TargetOpenCode,
-			RootDir:      "/home/user/.config/opencode",
-			ManifestPath: "/home/user/.config/opencode/lore-install.json",
-			Paths:        map[string]string{"config_root": "/home/user/.config"},
-		},
-		Components: []install.ComponentID{install.ComponentCorePack},
-		Files: []install.PlanFileAction{
-			{RelativePath: "AGENTS.md", Action: "create"},
-			{RelativePath: "opencode.json", Action: "create"},
-		},
-	}
-
-	summary := formatOpenCodeInstallPlanSummary(plan, false)
-	if !strings.Contains(summary, "mcp=none") {
-		t.Fatalf("summary = %q, want mcp=none when lore-server-mcp not selected", summary)
 	}
 }
 

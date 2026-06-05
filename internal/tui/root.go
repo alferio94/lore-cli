@@ -128,7 +128,7 @@ func newModel(actions cli.InteractiveActions) model {
 			{key: "login", title: "Login", description: "Use email + password to mint a reusable token, store only that token in secure credential storage, and keep --token as CLI compatibility mode."},
 			{key: "logout", title: "Logout", description: "Remove the local session only. Safe to repeat."},
 			{key: "doctor", title: "Doctor", description: "Run actionable diagnostics, including Pi availability."},
-			{key: "install", title: "Install", description: "Pi is recommended today; OpenCode manages bounded config files and optional lore-server-mcp (plaintext bearer token in opencode.json), Codex writes managed remote MCP + skills, Antigravity is the prompt + skills MVP target, and Claude Code remains Coming soon."},
+			{key: "install", title: "Install", description: "Pi is recommended today; Codex writes managed remote MCP + skills, Antigravity is the prompt + skills MVP target, and Claude Code remains Coming soon."},
 			{key: "update", title: "Update", description: "Check or apply a binary-only Lore CLI update; Pi runtime and ~/.pi stay untouched."},
 			{key: "quit", title: "Quit", description: "Leave the interactive shell."},
 		},
@@ -610,7 +610,7 @@ func (m model) renderInstallTargetSelection() string {
 		}
 		fmt.Fprintf(&b, "%s%s: %s (%s)\n", prefix, label, target.Description, target.Availability)
 	}
-	fmt.Fprintf(&b, "\nSelected target: %s. Use ↑/↓ to switch between supported targets and Enter to continue. Pi remains the default recommended path. OpenCode manages bounded config files (AGENTS.md, skills, lore top-level block in opencode.json) and optional lore-server-mcp (plaintext bearer token in mcp block). Optional SDD command/prompt assets can be installed via the opencode-sdd-assets component; they are install-time assets only, not runtime-wired or subagent claims. Commands and prompts are omitted unless explicitly selected via --component opencode-sdd-assets. Antigravity can write ~/.gemini/config/agents/lore.json and optionally write direct MCP config.", selected.Title)
+	fmt.Fprintf(&b, "\nSelected target: %s. Use ↑/↓ to switch between supported targets and Enter to continue. Pi remains the default recommended path. Codex writes managed remote MCP + skills, and Antigravity can write ~/.gemini/config/agents/lore.json and optionally write direct MCP config.", selected.Title)
 	return b.String()
 }
 

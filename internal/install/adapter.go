@@ -19,7 +19,6 @@ const (
 	CapabilitySkills         CapabilityID = "skills"
 	CapabilityLoreServerMCP  CapabilityID = "lore-server-mcp"
 	CapabilityExtendedSkills CapabilityID = "extended-skills"
-	CapabilityOpenCodeSDDAssets CapabilityID = "opencode-sdd-assets"
 
 	MergeModeReplace      MergeMode = "replace"
 	MergeModeAdditiveJSON MergeMode = "additive-json"
@@ -109,7 +108,7 @@ func (r RenderRequest) Validate() error {
 	if err != nil {
 		return err
 	}
-	if (r.Target == TargetAntigravity || r.Target == TargetCodex || r.Target == TargetOpenCode) && containsComponent(components, ComponentLoreServerMCP) {
+	if (r.Target == TargetAntigravity || r.Target == TargetCodex) && containsComponent(components, ComponentLoreServerMCP) {
 		if stringsTrimSpace(r.ServerURL) == "" {
 			return fmt.Errorf("server url is required for target %q component %q", r.Target, ComponentLoreServerMCP)
 		}
@@ -152,7 +151,7 @@ func (r RenderRequest) effectiveExtendedSkills(resolver agentpack.SkillPathResol
 }
 
 func defaultInstallRegistry() (*Registry, error) {
-	return NewRegistry(defaultPiAdapter(), defaultAntigravityAdapter(), defaultOpenCodeAdapter(), defaultCodexAdapter())
+	return NewRegistry(defaultPiAdapter(), defaultAntigravityAdapter(), defaultCodexAdapter())
 }
 
 func containsComponent(components []ComponentID, target ComponentID) bool {

@@ -33,8 +33,8 @@ var canonicalSDDPhases = agentpack.SDDPhaseAgentNames()
 // Config is the agent-config.json document.
 // It is secret-free: no tokens, passwords, bearer headers, or credentials.
 type Config struct {
-	SchemaVersion int               `json:"schema_version"`
-	SDDAgents    map[string]Agent  `json:"sdd_agents"`
+	SchemaVersion int              `json:"schema_version"`
+	SDDAgents     map[string]Agent `json:"sdd_agents"`
 }
 
 // Agent describes one declared SDD agent.
@@ -60,7 +60,7 @@ func DefaultConfig() Config {
 	}
 	return Config{
 		SchemaVersion: SchemaVersion,
-		SDDAgents:      agents,
+		SDDAgents:     agents,
 	}
 }
 
@@ -99,7 +99,7 @@ func (c Config) Validate() error {
 // renderConfig is the internal struct used for deterministic JSON output.
 // Keys are written in canonical order so repeated saves are byte-stable.
 type renderConfig struct {
-	SchemaVersion int               `json:"schema_version"`
+	SchemaVersion int              `json:"schema_version"`
 	SDDAgents     map[string]Agent `json:"sdd_agents"`
 }
 

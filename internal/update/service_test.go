@@ -578,7 +578,7 @@ func resolvePiLayoutForTest(t *testing.T, homeDir string) install.PiLayout {
 		HomeDir:          homeDir,
 		PiDir:            filepath.Join(homeDir, ".pi"),
 		AgentDir:         agentDir,
-		ExtensionsDir:     filepath.Join(agentDir, "extensions"),
+		ExtensionsDir:    filepath.Join(agentDir, "extensions"),
 		ManagedAgentsDir: filepath.Join(agentDir, "agents"),
 		SettingsPath:     filepath.Join(agentDir, "settings.json"),
 		ManifestPath:     filepath.Join(agentDir, "lore-install.json"),
@@ -590,8 +590,8 @@ func resolveAntigravityLayoutForTest(t *testing.T, homeDir string) install.Harne
 	geminiDir := filepath.Join(homeDir, ".gemini")
 	rootDir := filepath.Join(geminiDir, "antigravity-cli")
 	return install.HarnessLayout{
-		Target:      install.TargetAntigravity,
-		RootDir:     rootDir,
+		Target:       install.TargetAntigravity,
+		RootDir:      rootDir,
 		ManifestPath: filepath.Join(rootDir, "lore-install.json"),
 		Paths: map[string]string{
 			"skills_dir": filepath.Join(rootDir, "skills"),

@@ -47,11 +47,11 @@ const (
 
 // Default models
 const (
-	ModelGPT5        = "gpt-5"
-	ModelGPT5Mini    = "gpt-5-mini"
-	ModelGPT54       = "gpt-5.4"
-	ModelGPT4        = "gpt-4"
-	ModelGPT35       = "gpt-3.5"
+	ModelGPT5     = "gpt-5"
+	ModelGPT5Mini = "gpt-5-mini"
+	ModelGPT54    = "gpt-5.4"
+	ModelGPT4     = "gpt-4"
+	ModelGPT35    = "gpt-3.5"
 )
 
 // DefaultSDDModel is the model assigned to every canonical SDD agent in the
@@ -64,8 +64,8 @@ type CodexModel string
 
 const (
 	CodexModelGPT54 CodexModel = "gpt-5.4"
-	CodexModelGPT4   CodexModel = "gpt-4"
-	CodexModelGPT35  CodexModel = "gpt-3.5"
+	CodexModelGPT4  CodexModel = "gpt-4"
+	CodexModelGPT35 CodexModel = "gpt-3.5"
 )
 
 var validCodexModels = map[CodexModel]bool{

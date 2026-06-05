@@ -22,7 +22,7 @@ func TestDefaultComponentSelectionUsesHostedMCPForPiCodexAndAntigravity(t *testi
 		t.Fatalf("DefaultComponentSelection(codex) = %v, want core-pack + lore-server-mcp + extended-skills", got)
 	}
 	// Other bounded targets: core-pack only.
-	for _, target := range []TargetID{TargetClaudeCode, TargetOpenCode} {
+	for _, target := range []TargetID{TargetClaudeCode} {
 		if got := DefaultComponentSelection(target); !equalComponentIDs(got, []ComponentID{ComponentCorePack}) {
 			t.Fatalf("DefaultComponentSelection(%s) = %v, want core-pack only", target, got)
 		}
@@ -144,19 +144,11 @@ func TestRegistryResolveReturnsTargetAdapterAndCapabilities(t *testing.T) {
 		t.Fatal("Supports(lore-server-mcp) = false, want true for Codex remote MCP")
 	}
 
-	adapter, err = registry.Resolve(TargetOpenCode)
-	if err != nil {
-		t.Fatalf("Resolve(opencode) error = %v, want nil", err)
-	}
-	if adapter.Title() != "OpenCode" {
-		t.Fatalf("adapter.Title() = %q, want OpenCode", adapter.Title())
-	}
-	if !adapter.Supports(ComponentCorePack) {
-		t.Fatal("Supports(core-pack) = false, want true for OpenCode groundwork")
-	}
-	// OpenCode supports ComponentLoreServerMCP via CapabilityLoreServerMCP.
-	if !adapter.Supports(ComponentLoreServerMCP) {
-		t.Fatal("Supports(lore-server-mcp) = false, want true (MCP support added)")
+	// OpenCode is hard-removed: the registry MUST NOT contain an OpenCode
+	// adapter. `Resolve(opencode)` returns the standard not-registered error
+	// because no adapter was registered for that ID.
+	if _, err := registry.Resolve(TargetID("opencode")); err == nil {
+		t.Fatal("Resolve(opencode) error = nil, want not-registered error after hard removal")
 	}
 }
 

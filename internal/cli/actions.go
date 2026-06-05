@@ -19,7 +19,6 @@ import (
 	"github.com/alferio94/lore-cli/internal/config"
 	"github.com/alferio94/lore-cli/internal/httpclient"
 	"github.com/alferio94/lore-cli/internal/install"
-	"github.com/alferio94/lore-cli/internal/opencodeready"
 	"github.com/alferio94/lore-cli/internal/output"
 	cliupdate "github.com/alferio94/lore-cli/internal/update"
 	"github.com/alferio94/lore-cli/internal/version"
@@ -547,9 +546,6 @@ func (a *App) updateActionWithOptions(ctx context.Context, opts updateCommandOpt
 
 func (a *App) installActionWithOptions(ctx context.Context, opts installCommandOptions) ActionReport {
 	selectedTarget, err := install.ResolveInstallTarget(opts.Target)
-	if err == nil && selectedTarget.ID == install.TargetOpenCode {
-		return a.installOpenCodeActionWithOptions(ctx, opts)
-	}
 	if err == nil && selectedTarget.ID == install.TargetCodex {
 		return a.installCodexActionWithOptions(ctx, opts)
 	}
@@ -652,81 +648,6 @@ func (a *App) installAntigravityActionWithOptions(ctx context.Context, opts inst
 	}
 	report.Checks = append(report.Checks,
 		output.Check{Name: "manifest", Status: output.StatusOK, Detail: fmt.Sprintf("verified %s auth_mode=%s managed_files=%d managed_overlays=%d", result.Layout.ManifestPath, result.Manifest.AuthMode, len(result.Manifest.ManagedFiles), len(result.Manifest.ManagedAgentOverlays))},
-	)
-	return report
-}
-
-func (a *App) installOpenCodeActionWithOptions(ctx context.Context, opts installCommandOptions) ActionReport {
-	service := install.Service{Store: a.Store, Auth: a.authManager(), ClientFactory: install.ClientFactory(a.ClientFactory), AgentConfigStore: a.AgentConfigStore}
-	report := ActionReport{Title: "Lore install"}
-	preflight := service.Preflight(ctx)
-	report.Checks = append(report.Checks, preflight.Checks...)
-	if !preflight.CanContinue {
-		report.ExitCode = 1
-		return report
-	}
-
-	// OpenCode readiness preflight (informational only — does NOT block install).
-	// Reports readiness-only state; does NOT claim plugin installation, runtime/native
-	// subagent support, or command routing. The check exists so users can see the
-	// readiness state before install, but it is never a precondition.
-	opencodecCheck := a.openCodeReadinessCheck(ctx)
-	// Keep status OK even if readiness is not ready — informational only
-	if opencodecCheck.Status == output.StatusFail {
-		opencodecCheck.Status = output.StatusWarn
-	}
-	report.Checks = append(report.Checks, opencodecCheck)
-
-	homeDir, err := a.resolveUserHomeDir()
-	if err != nil {
-		report.Checks = append(report.Checks, output.Check{Name: "install", Status: output.StatusFail, Detail: err.Error(), Action: "Retry after HOME can be resolved for the current user."})
-		report.ExitCode = 1
-		return report
-	}
-	configPath, err := a.Store.Path()
-	if err != nil {
-		report.Checks = append(report.Checks, output.Check{Name: "install", Status: output.StatusFail, Detail: err.Error(), Action: "Fix the local config directory permissions or override LORE_CONFIG_DIR."})
-		report.ExitCode = 1
-		return report
-	}
-
-	plan, err := service.PlanOpenCodeInstall(install.InstallRequest{
-		HomeDir:        homeDir,
-		ServerURL:      preflight.ServerURL,
-		SavedToken:     preflight.Token,
-		LoreConfigDir:  filepath.Dir(configPath),
-		LoreCLIVersion: a.BuildInfo.Normalized().Version,
-		Target:         install.TargetOpenCode,
-		Components:     append([]install.ComponentID(nil), opts.Components...),
-	})
-	if err != nil {
-		report.Checks = append(report.Checks, output.Check{Name: "install", Status: output.StatusFail, Detail: err.Error(), Action: "Inspect the requested OpenCode components and rerun lore install after fixing the reported issue."})
-		report.ExitCode = 1
-		return report
-	}
-	if opts.DryRun {
-		report.Checks = append(report.Checks, output.Check{Name: "install", Status: output.StatusOK, Detail: formatSharedInstallPlanSummary(plan, true)})
-		return report
-	}
-	result, err := service.ExecuteOpenCodeInstall(plan, install.InstallCommandOptions{})
-	if err != nil {
-		report.Checks = append(report.Checks, output.Check{Name: "install", Status: output.StatusFail, Detail: err.Error(), Action: "Inspect the OpenCode config directory and rerun lore install after fixing the reported issue."})
-		report.ExitCode = 1
-		return report
-	}
-	status := output.StatusOK
-	if len(result.Summary.Failed) > 0 {
-		status = output.StatusFail
-		report.ExitCode = 1
-	}
-	report.Checks = append(report.Checks,
-		output.Check{Name: "install", Status: status, Detail: formatSharedInstallSummary(result)},
-	)
-	report.Checks = append(report.Checks,
-		output.Check{Name: "manifest", Status: output.StatusOK, Detail: fmt.Sprintf("verified %s auth_mode=%s managed_files=%d", result.Layout.ManifestPath, result.Manifest.AuthMode, len(result.Manifest.ManagedFiles))},
-	)
-	report.Checks = append(report.Checks,
-		output.Check{Name: "opencode-config", Status: output.StatusWarn, Detail: formatOpenCodeInstallWarning(result), Action: "Rerun lore install after agent-config or managed skill changes; plugins, profiles, bootstrap, and commands remain out of scope in this slice."},
 	)
 	return report
 }
@@ -970,14 +891,6 @@ func (a *App) collectChecks(ctx context.Context, includePi bool) ([]output.Check
 	// Read-only agent-config check in status and doctor; does not imply Codex execution support.
 	checks = append(checks, a.agentConfigCheck())
 
-	// OpenCode readiness preflight check (doctor only, not blocking install).
-	// States readiness-only; does NOT claim plugin installation, runtime/native subagent
-	// support, or command routing. Plugin/runtime checks return "unknown" conservatively
-	// when not safely verifiable.
-	if includePi {
-		checks = append(checks, a.openCodeReadinessCheck(ctx))
-	}
-
 	return checks, exitCode
 }
 
@@ -1008,9 +921,6 @@ func formatInstallSummary(result install.PiInstallResult) string {
 func formatSharedInstallSummary(result install.InstallResult) string {
 	if result.Target == install.TargetPi {
 		return fmt.Sprintf("install_target=%s runtime=pi-remote-package", result.Target)
-	}
-	if result.Target == install.TargetOpenCode {
-		return formatOpenCodeInstallSummary(result)
 	}
 	if result.Target == install.TargetCodex {
 		return formatCodexInstallSummary(result)
@@ -1054,9 +964,6 @@ func formatSharedInstallPlanSummary(plan install.InstallPlan, dryRun bool) strin
 	if plan.Layout.Target == install.TargetPi {
 		return fmt.Sprintf("install_target=%s runtime=pi-remote-package", plan.Layout.Target)
 	}
-	if plan.Layout.Target == install.TargetOpenCode {
-		return formatOpenCodeInstallPlanSummary(plan, dryRun)
-	}
 	if plan.Layout.Target == install.TargetCodex {
 		return formatCodexInstallPlanSummary(plan, dryRun)
 	}
@@ -1070,52 +977,6 @@ func antigravityMCPInstalled(components []install.ComponentID) bool {
 		}
 	}
 	return false
-}
-
-// formatOpenCodeInstallWarning produces the OpenCode post-install warning.
-// When lore-server-mcp is selected, it warns about plaintext bearer-token
-// persistence in ~/.config/opencode/opencode.json without printing the token value.
-func formatOpenCodeInstallWarning(result install.InstallResult) string {
-	hasMCP := false
-	for _, c := range result.Manifest.Components {
-		if c == install.ComponentLoreServerMCP {
-			hasMCP = true
-			break
-		}
-	}
-	mcpNote := "mcp=none"
-	if hasMCP {
-		mcpNote = "mcp=remote"
-	}
-	return fmt.Sprintf("managed surface root=%s lore_block=top-level-only commands=omitted backups=before-overwrite %s auth=plaintext-bearer-token-in-opencode.json", result.Layout.RootDir, mcpNote)
-}
-
-// formatOpenCodeInstallSummary produces the OpenCode-specific apply summary.
-func formatOpenCodeInstallSummary(result install.InstallResult) string {
-	hasMCP := false
-	for _, c := range result.Manifest.Components {
-		if c == install.ComponentLoreServerMCP {
-			hasMCP = true
-			break
-		}
-	}
-	mcpLine := "mcp=none"
-	if hasMCP {
-		mcpLine = "mcp=remote"
-	}
-	summary := fmt.Sprintf("install_target=%s scope=config-only settings_merge=lore-top-level-only components=%s managed_files=%d created=%d updated=%d unchanged=%d backed_up=%d failed=%d",
-		result.Target, formatComponentIDs(result.Manifest.Components), len(result.Manifest.ManagedFiles),
-		len(result.Summary.Created), len(result.Summary.Updated), len(result.Summary.Unchanged),
-		len(result.Summary.BackedUp), len(result.Summary.Failed))
-	parts := []string{summary}
-	parts = append(parts, formatManagedFileSummaryParts(result.Summary.Created, "create")...)
-	parts = append(parts, formatManagedFileSummaryParts(result.Summary.Updated, "update")...)
-	parts = append(parts, formatManagedFileSummaryParts(result.Summary.Unchanged, "unchanged")...)
-	parts = append(parts, "commands=omitted", "plugins=none", "profiles=none", mcpLine)
-	if len(result.Summary.Failed) > 0 {
-		parts = append(parts, fmt.Sprintf("findings=%s", strings.Join(result.Summary.Failed, "; ")))
-	}
-	return strings.Join(parts, " ")
 }
 
 // formatCodexInstallSummary produces the Codex-specific dry-run/apply summary.
@@ -1147,41 +1008,6 @@ func formatAntigravityInstallSummary(result install.InstallResult) string {
 	parts = append(parts, formatManagedFileSummaryParts(result.Summary.Unchanged, "unchanged")...)
 	if len(result.Summary.Failed) > 0 {
 		parts = append(parts, fmt.Sprintf("findings=%s", strings.Join(result.Summary.Failed, "; ")))
-	}
-	return strings.Join(parts, " ")
-}
-
-// formatOpenCodeInstallPlanSummary produces the OpenCode-specific plan summary.
-// When lore-server-mcp is in the plan components, it reflects mcp=remote; otherwise mcp=none.
-func formatOpenCodeInstallPlanSummary(plan install.InstallPlan, dryRun bool) string {
-	hasMCP := false
-	for _, c := range plan.Components {
-		if c == install.ComponentLoreServerMCP {
-			hasMCP = true
-			break
-		}
-	}
-	mcpLine := "mcp=none"
-	if hasMCP {
-		mcpLine = "mcp=remote"
-	}
-	parts := []string{
-		fmt.Sprintf("install_target=%s", plan.Layout.Target),
-		"scope=config-only",
-		"settings_merge=lore-top-level-only",
-		fmt.Sprintf("components=%s", formatComponentIDs(plan.Components)),
-		fmt.Sprintf("target=%s", plan.Layout.RootDir),
-		fmt.Sprintf("manifest=%s", plan.Layout.ManifestPath),
-		"commands=omitted",
-		"plugins=none",
-		"profiles=none",
-		mcpLine,
-	}
-	if dryRun {
-		parts = append(parts, "mode=dry-run")
-	}
-	for _, action := range plan.Files {
-		parts = append(parts, fmt.Sprintf("managed_action=%s:%s", action.Action, action.RelativePath))
 	}
 	return strings.Join(parts, " ")
 }
@@ -1368,104 +1194,6 @@ func (a *App) piCheck() output.Check {
 		return output.Check{Name: "pi", Status: output.StatusWarn, Detail: "pi binary not found on PATH", Action: "Install Pi or add it to PATH if Pi automation is expected on this machine."}
 	}
 	return output.Check{Name: "pi", Status: output.StatusOK, Detail: "pi binary available on PATH"}
-}
-
-// openCodeReadinessCheck performs a read-only OpenCode readiness preflight check
-// for future plugin-backed subagent support. It does NOT install plugins, configure
-// agents, or write to user config. Output explicitly states "preflight" and "readiness"
-// to avoid implying plugin installation, runtime subagent support, or command routing.
-func (a *App) openCodeReadinessCheck(ctx context.Context) output.Check {
-	homeDir, err := a.resolveUserHomeDir()
-	if err != nil {
-		return output.Check{Name: "opencode-readiness", Status: output.StatusWarn, Detail: fmt.Sprintf("preflight skipped: could not resolve HOME: %v", err)}
-	}
-
-	opts := opencodeready.Options{
-		HomeDir:       homeDir,
-		AllowTempProbe: true,
-		LookupEnv:      func(key string) (string, bool) { return os.LookupEnv(key) },
-	}
-
-	report, err := opencodeready.Probe(ctx, nil, nil, opts)
-	if err != nil {
-		return output.Check{Name: "opencode-readiness", Status: output.StatusWarn, Detail: fmt.Sprintf("preflight error: %v", err)}
-	}
-
-	// Format a compact readiness summary without claiming plugin installation,
-	// runtime/native subagent support, or command routing.
-	detail := formatOpenCodeReadinessDetail(report)
-	status := output.StatusOK
-	if report.Overall == opencodeready.StatusBlocking {
-		status = output.StatusFail
-	} else if report.Overall == opencodeready.StatusUnknown {
-		status = output.StatusWarn
-	} else if report.Overall == opencodeready.StatusWarn {
-		status = output.StatusWarn
-	}
-
-	action := ""
-	if status != output.StatusOK {
-		// Collect non-ok findings for remediation guidance
-		var reasons []string
-		for _, f := range report.Findings {
-			if f.Status == opencodeready.StatusBlocking || f.Status == opencodeready.StatusWarn {
-				if f.Remediation != "" {
-					reasons = append(reasons, f.Remediation)
-				}
-			}
-		}
-		if len(reasons) > 0 {
-			action = "Readiness preflight failed. " + strings.Join(reasons, " ")
-		}
-	}
-
-	return output.Check{Name: "opencode-readiness", Status: status, Detail: detail, Action: action}
-}
-
-// formatOpenCodeReadinessDetail produces a compact readiness-only detail string
-// that does NOT imply plugin installation, runtime/native subagent support, or
-// command routing. It uses OpenCode CLI terminology for clarity.
-func formatOpenCodeReadinessDetail(report opencodeready.Report) string {
-	var parts []string
-	parts = append(parts, "opencode-preflight=readiness-only")
-
-	// Overall status
-	switch report.Overall {
-	case opencodeready.StatusReady:
-		parts = append(parts, "overall=ready")
-	case opencodeready.StatusWarn:
-		parts = append(parts, "overall=warn")
-	case opencodeready.StatusBlocking:
-		parts = append(parts, "overall=blocking")
-	default:
-		parts = append(parts, "overall=unknown")
-	}
-
-	// Version if available
-	if report.Version != "" {
-		parts = append(parts, "version="+report.Version)
-	}
-
-	// Summary of findings: count by status
-	var readyCount, warnCount, blockingCount, unknownCount int
-	for _, f := range report.Findings {
-		switch f.Status {
-		case opencodeready.StatusReady:
-			readyCount++
-		case opencodeready.StatusWarn:
-			warnCount++
-		case opencodeready.StatusBlocking:
-			blockingCount++
-		default:
-			unknownCount++
-		}
-	}
-	parts = append(parts, fmt.Sprintf("findings=ready:%d warn:%d blocking:%d unknown:%d", readyCount, warnCount, blockingCount, unknownCount))
-
-	// Explicit non-claims
-	parts = append(parts, "plugins=none", "runtime-subagents=none", "command-routing=none")
-
-	return strings.Join(parts, " ")
 }
 
 func localUpdateSafetyReason(currentVersion, execPath, pathPath string) (string, bool) {

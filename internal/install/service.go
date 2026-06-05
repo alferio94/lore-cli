@@ -18,7 +18,6 @@ type TargetID string
 const (
 	TargetPi          TargetID = "pi"
 	TargetClaudeCode  TargetID = "claude-code"
-	TargetOpenCode    TargetID = "opencode"
 	TargetCodex       TargetID = "codex"
 	TargetAntigravity TargetID = "antigravity"
 )
@@ -75,7 +74,7 @@ func DefaultInstallTarget() TargetID {
 
 func DefaultTargets() []Target {
 	registry, _ := defaultInstallRegistry()
-	known := []TargetID{DefaultInstallTarget(), TargetClaudeCode, TargetOpenCode, TargetCodex, TargetAntigravity}
+	known := []TargetID{DefaultInstallTarget(), TargetClaudeCode, TargetCodex, TargetAntigravity}
 	targets := make([]Target, 0, len(known))
 	for _, id := range known {
 		target := roadmapTarget(id)
@@ -89,6 +88,14 @@ func DefaultTargets() []Target {
 	return targets
 }
 
+// SupportedTargets returns the set of currently supported install target IDs.
+// The set is exactly the three remaining supported targets (Pi, Codex,
+// Antigravity). OpenCode is intentionally excluded; it is unsupported and
+// cannot be selected or routed.
+func SupportedTargets() []TargetID {
+	return []TargetID{TargetPi, TargetCodex, TargetAntigravity}
+}
+
 func supportedTarget(adapter HarnessAdapter) Target {
 	target := Target{ID: adapter.ID(), Title: adapter.Title(), Available: true, Recommended: adapter.ID() == DefaultInstallTarget()}
 	switch adapter.ID() {
@@ -96,8 +103,6 @@ func supportedTarget(adapter HarnessAdapter) Target {
 		target.Description = "Recommended today; uses hosted Lore MCP via pi-mcp-adapter as the default backend, with optional explicit pi-extensions (lore-memory) via --component pi-extensions."
 	case TargetAntigravity:
 		target.Description = "prompt + skills MVP target with managed Gemini lore agent profile and optional direct MCP config; Pi remains the default recommended path while Antigravity keeps harness-owned prompt, skills, and manifest semantics."
-	case TargetOpenCode:
-		target.Description = "Bounded OpenCode support manages ~/.config/opencode/AGENTS.md, skills/*.md, a Lore-owned opencode.json block, and manifest/backups. Commands stay omitted unless a later approved slice adds them."
 	case TargetCodex:
 		target.Description = "Managed Codex projection into ~/.codex with remote Lore MCP config, managed agents.md, skills/*.md, and manifest. No codex exec runner or bootstrap behavior is installed."
 	default:
@@ -110,8 +115,6 @@ func roadmapTarget(id TargetID) Target {
 	switch id {
 	case TargetClaudeCode:
 		return Target{ID: id, Title: "Claude Code", Description: "Listed for roadmap visibility.", Availability: "Coming soon"}
-	case TargetOpenCode:
-		return Target{ID: id, Title: "OpenCode", Description: "Listed for roadmap visibility.", Availability: "Coming soon"}
 	case TargetAntigravity:
 		return Target{ID: id, Title: "Antigravity", Description: "Listed for roadmap visibility.", Availability: "Coming soon"}
 	default:
@@ -124,6 +127,11 @@ func ResolveInstallTarget(target TargetID) (Target, error) {
 	if strings.TrimSpace(string(selected)) == "" {
 		selected = DefaultInstallTarget()
 	}
+	supported := SupportedTargets()
+	supportedNames := make([]string, 0, len(supported))
+	for _, id := range supported {
+		supportedNames = append(supportedNames, string(id))
+	}
 	available := make([]string, 0, len(DefaultTargets()))
 	for _, candidate := range DefaultTargets() {
 		if candidate.Available {
@@ -133,9 +141,12 @@ func ResolveInstallTarget(target TargetID) (Target, error) {
 			continue
 		}
 		if !candidate.Available {
-			return Target{}, fmt.Errorf("target %q is %s; supported targets: %s", selected, candidate.Availability, strings.Join(available, ", "))
+			return Target{}, fmt.Errorf("target %q is %s; supported targets: %s", selected, candidate.Availability, strings.Join(supportedNames, ", "))
 		}
 		return candidate, nil
+	}
+	if strings.TrimSpace(string(selected)) != "" {
+		return Target{}, fmt.Errorf("unsupported target %q; supported targets: %s", selected, strings.Join(supportedNames, ", "))
 	}
 	return Target{}, fmt.Errorf("unknown target %q", selected)
 }
@@ -154,7 +165,7 @@ func FormatTargetSelection(targets []Target) string {
 		}
 		fmt.Fprintf(&b, "- %s: %s (%s)\n", label, target.Description, target.Availability)
 	}
-	b.WriteString("\nPi remains the default recommended path and uses hosted Lore MCP by default. OpenCode provides bounded config-only support for ~/.config/opencode/AGENTS.md, skills/*.md, a Lore-owned opencode.json block with optional lore-server-mcp (plaintext bearer token in config), and manifest/backups without plugins, profiles, or bootstrap. Antigravity can write ~/.gemini/config/agents/lore.json and optionally write direct MCP config.")
+	b.WriteString("\nPi remains the default recommended path and uses hosted Lore MCP by default. Codex writes managed remote MCP + skills. Antigravity can write ~/.gemini/config/agents/lore.json and optionally write direct MCP config.")
 	return b.String()
 }
 
