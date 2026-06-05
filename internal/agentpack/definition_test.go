@@ -86,28 +86,68 @@ func TestDefaultDefinitionIncludesManagedAgentOverlays(t *testing.T) {
 	if !contains(body, "You are the canonical Lore repository worker.") {
 		t.Fatalf("lore-worker body = %q, want canonical worker body", body)
 	}
+	if !contains(body, "## Response contract (Pi Lore delegation adapter contract)") {
+		t.Fatalf("lore-worker body = %q, want Pi adapter contract section label", body)
+	}
 	for _, want := range []string{
-		"Return ONLY one JSON object with exactly these keys: `status`, `summary`, `artifacts`, `next`, `question`, `options`, `risks`, `skill_resolution`.",
+		"Return ONLY one JSON object with exactly these keys: `status`, `summary`, `artifacts`, `files`, `validations`, `risks`, `next_step`, `continuation`, `question`, `options`, `skill_resolution`.",
+		"`status`: `completed` | `needs_user_input` | `failed` (final only; `running` is reserved for parent-side transient process state)",
 		"`summary`: one compact operational line, <= 280 chars",
 		"`artifacts`: string array with <= 8 artifact references, each <= 160 chars",
-		"`next`: string <= 160 chars or null",
+		"`files`: string array with <= 16 file references touched in this work, each <= 200 chars",
+		"`validations`: string array with <= 16 focused validation commands/observations, each <= 200 chars",
+		"`risks`: string array with <= 5 compact items, each <= 180 chars",
+		"`next_step`: string <= 160 chars or null",
+		"`continuation`: string <= 240 chars or null",
 		"`question`: string <= 220 chars or null",
 		"`options`: string array with <= 5 compact choices",
-		"`risks`: string array with <= 5 compact items, each <= 180 chars",
 		"`skill_resolution`: `injected` | `fallback-registry` | `fallback-path` | `none` and <= 80 chars",
 		"Persist or reference long details in artifacts; do not embed long logs, diffs, or narratives in the envelope itself.",
+		"Delegation is provided by the `lore-pi-runtime` package",
 	} {
 		if !contains(body, want) {
 			t.Fatalf("lore-worker body = %q, want envelope contract snippet %q", body, want)
 		}
 	}
-	for _, forbidden := range []string{"`kind`", "`specialization`", "`memory_saved`"} {
+	for _, forbidden := range []string{
+		"`kind`",
+		"`specialization`",
+		"`memory_saved`",
+		"exactly these keys: `status`, `summary`, `artifacts`, `next`, `question`, `options`, `risks`, `skill_resolution`.",
+		"`status`: `completed` | `running` | `needs_user_input` | `failed`",
+	} {
 		if contains(body, forbidden) {
-			t.Fatalf("lore-worker body = %q, want legacy worker envelope field %q omitted", body, forbidden)
+			t.Fatalf("lore-worker body = %q, want obsolete response contract fragment %q omitted", body, forbidden)
 		}
 	}
 	if exception := "`judgment-day` remains explicitly out of scope"; contains(body, "judgment-day") && !contains(body, exception) {
 		t.Fatalf("lore-worker body = %q, want strict child-envelope judgment-day exclusion %q when judgment-day is mentioned", body, exception)
+	}
+}
+
+func TestDefaultDefinitionSDDPhaseBodyUsesCanonicalPiEnvelopeContract(t *testing.T) {
+	definition := DefaultDefinition()
+
+	for _, agent := range definition.ManagedAgents {
+		if agent.Role != "sdd" {
+			continue
+		}
+		if !contains(agent.Body, "Return ONLY the compact SDD JSON envelope with keys `status`, `phase`, `summary`, `artifacts`, `files`, `validations`, `risks`, `next_step`, `continuation`, `question`, `options`, `skill_resolution`") {
+			t.Fatalf("sdd agent %q body = %q, want canonical Pi SDD envelope field list", agent.Name, agent.Body)
+		}
+		if !contains(agent.Body, "Final output status must be one of: `completed`, `needs_user_input`, `failed`") {
+			t.Fatalf("sdd agent %q body = %q, want final-status wording that excludes running", agent.Name, agent.Body)
+		}
+		if !contains(agent.Body, "This is the Pi Lore delegation adapter contract") {
+			t.Fatalf("sdd agent %q body = %q, want Pi adapter contract label", agent.Name, agent.Body)
+		}
+		for _, forbidden := range []string{
+			"envelope with keys `status`, `phase`, `summary`, `artifacts`, `next`, `question`, `options`, `risks`, `skill_resolution`",
+		} {
+			if contains(agent.Body, forbidden) {
+				t.Fatalf("sdd agent %q body = %q, want obsolete response contract fragment %q omitted", agent.Name, agent.Body, forbidden)
+			}
+		}
 	}
 }
 

@@ -268,19 +268,34 @@ func TestDefaultPiAdapterRenderManagedAgentsUsesCanonicalAgentpack(t *testing.T)
 		"tools:",
 		"requiredEnvelope: worker",
 		"You are the canonical Lore repository worker.",
-		"Return ONLY one JSON object with exactly these keys: `status`, `summary`, `artifacts`, `next`, `question`, `options`, `risks`, `skill_resolution`.",
+		"## Response contract (Pi Lore delegation adapter contract)",
+		"Return ONLY one JSON object with exactly these keys: `status`, `summary`, `artifacts`, `files`, `validations`, `risks`, `next_step`, `continuation`, `question`, `options`, `skill_resolution`.",
+		"`status`: `completed` | `needs_user_input` | `failed` (final only; `running` is reserved for parent-side transient process state)",
 		"`summary`: one compact operational line, <= 280 chars",
 		"`artifacts`: string array with <= 8 artifact references, each <= 160 chars",
-		"`next`: string <= 160 chars or null",
+		"`files`: string array with <= 16 file references touched in this work, each <= 200 chars",
+		"`validations`: string array with <= 16 focused validation commands/observations, each <= 200 chars",
+		"`risks`: string array with <= 5 compact items, each <= 180 chars",
+		"`next_step`: string <= 160 chars or null",
+		"`continuation`: string <= 240 chars or null",
 		"`question`: string <= 220 chars or null",
 		"`options`: string array with <= 5 compact choices",
-		"`risks`: string array with <= 5 compact items, each <= 180 chars",
 		"`skill_resolution`: `injected` | `fallback-registry` | `fallback-path` | `none` and <= 80 chars",
 		"Persist or reference long details in artifacts; do not embed long logs, diffs, or narratives in the envelope itself.",
+		"Delegation is provided by the `lore-pi-runtime` package",
 	) {
 		t.Fatalf("worker managed overlay content = %q, want compact worker envelope snippets in rendered markdown", got)
 	} else {
-		for _, forbidden := range []string{"managedBy: lore-cli", "managedLayer: global-overlay", "managedPackId: portable-agent-pack", "`kind`", "`specialization`", "`memory_saved`"} {
+		for _, forbidden := range []string{
+			"managedBy: lore-cli",
+			"managedLayer: global-overlay",
+			"managedPackId: portable-agent-pack",
+			"`kind`",
+			"`specialization`",
+			"`memory_saved`",
+			"exactly these keys: `status`, `summary`, `artifacts`, `next`, `question`, `options`, `risks`, `skill_resolution`.",
+			"`status`: `completed` | `running` | `needs_user_input` | `failed`",
+		} {
 			if strings.Contains(got, forbidden) {
 				t.Fatalf("worker managed overlay content = %q, want %q omitted from the rendered active contract", got, forbidden)
 			}
@@ -289,8 +304,24 @@ func TestDefaultPiAdapterRenderManagedAgentsUsesCanonicalAgentpack(t *testing.T)
 			t.Fatalf("worker managed overlay content = %q, want strict child-envelope judgment-day exclusion %q when judgment-day is mentioned", got, exception)
 		}
 	}
-	if got := string(files[applyPath].Content); !containsAll(got, "phase: apply", "skillPolicyMode: explicit", "~/.pi/agent/skills/sdd-apply/SKILL.md", "You execute the SDD apply phase.") {
+	if got := string(files[applyPath].Content); !containsAll(got,
+		"phase: apply",
+		"skillPolicyMode: explicit",
+		"~/.pi/agent/skills/sdd-apply/SKILL.md",
+		"You execute the SDD apply phase.",
+		"Return ONLY the compact SDD JSON envelope with keys `status`, `phase`, `summary`, `artifacts`, `files`, `validations`, `risks`, `next_step`, `continuation`, `question`, `options`, `skill_resolution`",
+		"Final output status must be one of: `completed`, `needs_user_input`, `failed`",
+		"This is the Pi Lore delegation adapter contract",
+	) {
 		t.Fatalf("apply managed overlay content = %q, want canonical SDD apply metadata and body", got)
+	} else {
+		for _, forbidden := range []string{
+			"envelope with keys `status`, `phase`, `summary`, `artifacts`, `next`, `question`, `options`, `risks`, `skill_resolution`",
+		} {
+			if strings.Contains(got, forbidden) {
+				t.Fatalf("apply managed overlay content = %q, want %q omitted from the rendered active contract", got, forbidden)
+			}
+		}
 	}
 	if got := string(files[proposePath].Content); !containsAll(got, "phase: propose", "You execute the SDD propose phase.") || strings.Contains(got, "phase: proposal") {
 		t.Fatalf("propose managed overlay content = %q, want render-time propose phase mapping", got)
