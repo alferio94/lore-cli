@@ -188,32 +188,96 @@ func inspectOpenCodeMCPConfigOwnership(existing []byte, relativePath string) (lo
 	}, nil
 }
 
+// migrateOpenCodeLegacyStaleShape returns a copy of the parsed
+// existing payload with the stale legacy shape silently removed.
+// The post-repair shape is:
+//
+//   - For `opencode.json`: drop the top-level `lore` block (the
+//     legacy `lore`-shaped renderer no longer produces this block;
+//     the new renderer emits the native `agent` overlay).
+//   - For `tui.json`: drop the top-level `lore` block AND drop the
+//     plural `plugins` (an array of objects) key. The native
+//     tui.json uses a singular `plugin` string array; the legacy
+//     plural `plugins` array of objects is no longer the
+//     documented shape and is replaced by the singular `plugin`
+//     string array on every render.
+//
+// The migration is intentionally silent and additive: the user
+// loses only the stale Lore-metadata fields, not any user-owned
+// keys (e.g. `theme`, custom `mcp.<other>` entries, custom
+// `agent.<other>` overrides). The migration runs on EVERY merge
+// (idempotent), not only once: the drop is a no-op when the
+// existing file is already on the native shape, so reruns stay
+// safe. The function returns the migrated payload map (which is
+// the same map as the input when no migration is needed) and a
+// boolean reporting whether any stale fields were removed; the
+// boolean is exposed for future instrumentation but is not
+// required to drive the merge semantics.
+func migrateOpenCodeLegacyStaleShape(payload map[string]any, relativePath string) (map[string]any, bool) {
+	changed := false
+	normalized := filepathToSlash(relativePath)
+	if _, present := payload[opencodeLoreBlockKey]; present {
+		// The legacy top-level `lore` block was the metadata-only
+		// shape the previous renderer produced. It is no longer
+		// emitted by the installer and is dropped during merge so
+		// existing installs migrate to the native `agent` overlay
+		// shape on the next run.
+		delete(payload, opencodeLoreBlockKey)
+		changed = true
+	}
+	if normalized == "tui.json" {
+		// The legacy tui.json used a plural `plugins` array of
+		// objects (e.g. `[{"id": "...", "owner": "community", ...}]`).
+		// The native OpenCode tui.json uses a singular `plugin`
+		// string array (e.g. `["opencode-subagent-statusline"]`).
+		// The plural `plugins` key is dropped during merge so the
+		// next render replaces it with the native singular form.
+		// The values are intentionally NOT preserved: the new
+		// shape uses bare plugin names with no per-entry metadata,
+		// and the legacy per-entry fields (`owner`, `source`,
+		// `enabled`) had no native equivalent in the new shape.
+		if _, present := payload["plugins"]; present {
+			delete(payload, "plugins")
+			changed = true
+		}
+	}
+	return payload, changed
+}
+
 // mergeOpenCodeConfigJSON performs an additive merge for OpenCode
 // JSON config files (currently `opencode.json` and `tui.json`). The
 // merge:
 //
 //   - Treats a missing, empty, or whitespace-only existing file as a
 //     fresh write (renders the desired payload verbatim).
+//   - Silently migrates the legacy stale shape (top-level `lore`
+//     block in opencode.json; top-level `lore` block + plural
+//     `plugins` array in tui.json) by dropping the stale keys
+//     before merging the new native shape on top. The migration is
+//     idempotent: reruns on an already-migrated file are a no-op
+//     for the migration step.
 //   - Preserves user-owned top-level keys (e.g. `theme`, custom
-//     `mcp.<other>` entries, user-added keys) from the existing file.
-//   - Writes the Lore-managed top-level keys (`lore`, `mcp.lore` for
-//     opencode.json; the `plugins` array and `lore` block for tui.json)
-//     from the desired payload via the existing `mergeMaps` helper.
+//     `mcp.<other>` entries, custom `agent.<other>` overrides,
+//     user-added keys) from the existing file.
+//   - Writes the Lore-managed top-level keys (`$schema`, `agent`,
+//     `skills` for opencode.json; `plugin` string array for
+//     tui.json) from the desired payload via the existing
+//     `mergeMaps` helper.
 //   - Returns a typed *OpenCodeMCPConfigOwnershipError when the
 //     existing `opencode.json` carries a non-Lore-owned `mcp.lore`
 //     block. The conflict is detected before the merge runs so the
-//     installer can fail closed with a backup-before-abort action and
-//     never silently clobber a user-owned or third-party MCP
-//     configuration. The `tui.json` file is always fully Lore-owned
-//     (the embedded asset carries the `lore.managed_by: lore-cli`
-//     marker on every render), so the conflict path is effectively
+//     installer can fail closed with a backup-before-abort action
+//     and never silently clobber a user-owned or third-party MCP
+//     configuration. The `tui.json` file is fully Lore-owned and
+//     does not carry an `mcp.lore` block, so the conflict path is
 //     unreachable for `tui.json`; the helper still consults the
 //     payload defensively in case the file was hand-edited.
 //   - Returns an error when the existing file is not valid JSON, so
-//     ambiguous user content is rejected rather than silently dropped.
+//     ambiguous user content is rejected rather than silently
+//     dropped.
 //
-// The function is idempotent for the additive-merge path: applying it
-// twice with the same input produces byte-identical output. The
+// The function is idempotent for the additive-merge path: applying
+// it twice with the same input produces byte-identical output. The
 // fail-closed path is intentionally NOT idempotent — a re-run after
 // the user resolves the conflict proceeds with a normal merge.
 func mergeOpenCodeConfigJSON(existing, desired []byte, relativePath string) ([]byte, error) {
@@ -222,10 +286,9 @@ func mergeOpenCodeConfigJSON(existing, desired []byte, relativePath string) ([]b
 		return append([]byte(nil), desired...), nil
 	}
 	// Ownership check is scoped to opencode.json (where a foreign
-	// mcp.lore block is possible). The tui.json payload is fully
-	// Lore-owned and the embedded asset re-introduces the
-	// `lore.managed_by: lore-cli` marker on every render, so the
-	// conflict path is unreachable for tui.json in practice.
+	// mcp.lore block is possible). The tui.json payload does not
+	// carry an mcp.lore block and is always fully Lore-owned, so
+	// the conflict path is unreachable for tui.json in practice.
 	if filepathToSlash(relativePath) == "opencode.json" {
 		loreOwned, conflict, inspectErr := inspectOpenCodeMCPConfigOwnership(existing, relativePath)
 		if inspectErr != nil {
@@ -235,6 +298,25 @@ func mergeOpenCodeConfigJSON(existing, desired []byte, relativePath string) ([]b
 			return nil, conflict
 		}
 	}
+	// Migration: silently drop the legacy top-level `lore` block
+	// (and, for tui.json, the legacy plural `plugins` array) from
+	// the existing payload before merging. The desired payload
+	// always carries the new native shape (no top-level `lore`,
+	// singular `plugin` string array for tui.json), so the merge
+	// naturally replaces the stale fields. The function is safe
+	// to call on already-migrated payloads (no-op) and on
+	// hand-edited payloads that intentionally keep the legacy
+	// shape (the migration is the repair path).
+	parsed := map[string]any{}
+	if err := json.Unmarshal(existing, &parsed); err != nil {
+		return nil, fmt.Errorf("decode existing %s: %w", relativePath, err)
+	}
+	migrated, _ := migrateOpenCodeLegacyStaleShape(parsed, relativePath)
+	data, err := json.MarshalIndent(migrated, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("encode migrated existing %s: %w", relativePath, err)
+	}
+	existing = append(data, '\n')
 	return mergeJSONObject(existing, desired, relativePath, relativePath, relativePath)
 }
 

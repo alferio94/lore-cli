@@ -129,6 +129,16 @@ func TestDefaultOpenCodeAdapterRenderProducesAGENTSAndSkills(t *testing.T) {
 		"`mcp.lore` ownership",
 		"managed_by: lore-cli",
 		"fails closed",
+		// Post-repair shape: the AGENTS.md managed surface MUST
+		// describe the native opencode.json shape (`$schema`,
+		// native `agent` overlay, no top-level Lore-only `lore`)
+		// so the user-facing copy matches what the installer
+		// actually writes.
+		"native OpenCode shape",
+		"https://opencode.ai/config.json",
+		"native `agent` overlay",
+		"never writes a top-level Lore-only `lore`",
+		"Migration:",
 	} {
 		if !strings.Contains(agentsText, want) {
 			t.Fatalf("AGENTS.md managed surface = %q, want substring %q", agentsText, want)
@@ -204,11 +214,15 @@ func TestDefaultOpenCodeAdapterRenderRejectsMCPWithoutAuth(t *testing.T) {
 	}
 }
 
-// TestOpenCodeMCPConfigRendersRemoteMCPBlock verifies the Pi/Antigravity-
-// shaped remote MCP block: top-level `lore` block, `mcp.lore` entry with
-// type=remote, a normalized server URL, and a Bearer Authorization
-// header that exactly mirrors the Antigravity local plaintext-token
-// tradeoff.
+// TestOpenCodeMCPConfigRendersRemoteMCPBlock verifies the native
+// OpenCode shape with the documented top-level `mcp.lore` remote
+// entry: the payload carries the native `$schema` reference, the
+// native `agent` overlay (one entry per SDD phase agent with
+// `model` + `{file:./skills/<name>/SKILL.md}` prompt reference),
+// the native `skills` block, and the `mcp.lore` remote entry with
+// `type=remote`, a normalized server URL, and a Bearer
+// Authorization header. The post-repair shape MUST NOT contain a
+// top-level Lore-only `lore` block.
 func TestOpenCodeMCPConfigRendersRemoteMCPBlock(t *testing.T) {
 	data, err := renderOpenCodeMCPConfig(agentconfig.Config{}, "https://lore.example", "secret-token")
 	if err != nil {
@@ -218,12 +232,39 @@ func TestOpenCodeMCPConfigRendersRemoteMCPBlock(t *testing.T) {
 	if err := json.Unmarshal(data, &payload); err != nil {
 		t.Fatalf("decode payload: %v", err)
 	}
-	lore, ok := payload["lore"].(map[string]any)
-	if !ok {
-		t.Fatalf("payload missing top-level `lore` object: %v", payload)
+	// Post-repair shape: NO top-level `lore` block. The renderer's
+	// job is to produce a native opencode.json, not a Lore metadata
+	// blob.
+	if _, ok := payload["lore"]; ok {
+		t.Fatalf("payload carries top-level `lore` object after repair; want native opencode.json without a Lore-only metadata block: %v", payload)
 	}
-	if got := lore["managed_by"]; got != "lore-cli" {
-		t.Fatalf("lore.managed_by = %v, want lore-cli", got)
+	if got := payload["$schema"]; got != opencodeConfigSchemaURL {
+		t.Fatalf("payload $schema = %v, want %q", got, opencodeConfigSchemaURL)
+	}
+	agent, ok := payload["agent"].(map[string]any)
+	if !ok {
+		t.Fatalf("payload missing top-level `agent` overlay: %v", payload)
+	}
+	for _, phaseAgent := range agentpack.SDDPhaseAgentNames() {
+		entry, ok := agent[phaseAgent].(map[string]any)
+		if !ok {
+			t.Fatalf("agent overlay missing %q entry: %v", phaseAgent, agent)
+		}
+		if _, ok := entry["model"]; !ok {
+			t.Fatalf("agent.%s missing model: %v", phaseAgent, entry)
+		}
+		prompt, _ := entry["prompt"].(string)
+		wantPrompt := "{file:./skills/" + phaseAgent + "/SKILL.md}"
+		if prompt != wantPrompt {
+			t.Fatalf("agent.%s.prompt = %q, want %q (native {file:...} reference)", phaseAgent, prompt, wantPrompt)
+		}
+	}
+	skills, ok := payload["skills"].(map[string]any)
+	if !ok {
+		t.Fatalf("payload missing top-level `skills` block: %v", payload)
+	}
+	if got := skills["path"]; got != opencodeSkillsDirPath {
+		t.Fatalf("skills.path = %v, want %q", got, opencodeSkillsDirPath)
 	}
 	mcp, ok := payload["mcp"].(map[string]any)
 	if !ok {

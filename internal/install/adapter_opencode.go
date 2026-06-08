@@ -31,6 +31,15 @@ const (
 // top-level key.
 const opencodeMCPBlockKey = "mcp"
 
+// opencodeConfigSchemaURL is the documented `$schema` URL for the
+// native OpenCode `opencode.json` file. The installer always writes
+// this schema reference so editor tooling can validate the file.
+const opencodeConfigSchemaURL = "https://opencode.ai/config.json"
+
+// opencodeTUISettingsSchemaURL is the documented `$schema` URL for
+// the native OpenCode `tui.json` file.
+const opencodeTUISettingsSchemaURL = "https://opencode.ai/tui.json"
+
 // opencode layout path keys (shared with opencode_install.go).
 const (
 	opencodeConfigRootPathKey  = "config_root"
@@ -44,13 +53,36 @@ const (
 )
 
 // opencode managed-block keys (shared with opencode_install.go).
+// These keys describe the schema that the installer renders into
+// the native `opencode.json` file. The `opencodeLoreBlockKey` is no
+// longer written into the opencode.json payload (the post-repair
+// shape uses the native `agent` overlay block, not a top-level
+// `lore` metadata object), but the constant is preserved as the
+// ownership marker for the migration layer so legacy `lore`-shaped
+// blocks in existing files are detected and stripped.
 const (
 	opencodeLoreBlockKey     = "lore"
 	opencodeManagedByKey     = "managed_by"
 	opencodeManagedByValue   = "lore-cli"
 	opencodeSchemaVersionKey = "schema_version"
-	opencodeAgentsKey        = "agents"
-	opencodeSkillsDirKey     = "skills_dir"
+	opencodeAgentsKey        = "agent"
+	opencodeSkillsDirKey     = "skills"
+	opencodeSkillsDirPath    = "~/.config/opencode/skills"
+	opencodeThemeKey         = "theme"
+	opencodeThemeValue       = "system"
+	opencodeMCPLoreKey       = "lore"
+)
+
+// opencodeManagedPluginNames is the bounded set of plugin names
+// the OpenCode installer registers in the native `tui.json` file.
+// The OpenCode TUI native shape uses a singular `plugin` string
+// array (e.g. `["opencode-subagent-statusline"]`), and only the
+// community statusline is registered — local plugin .ts files
+// (background-agents.ts, model-variants.ts) are copied into the
+// plugins/ directory but are NOT registered as native TUI plugins
+// (they are picked up automatically from the plugins/ directory).
+const (
+	opencodeCommunityStatuslinePlugin = "opencode-subagent-statusline"
 )
 
 // CapabilityOpenCodePlugins is the OpenCode plugin asset bundle
@@ -191,13 +223,15 @@ func ResolveOpenCodeLayout(homeDir string) HarnessLayout {
 		RootDir:      rootDir,
 		ManifestPath: manifestPath,
 		Paths: map[string]string{
-			opencodeConfigRootPathKey: filepath.Join(homeDir, opencodeConfigRootDirName),
-			opencodeDirPathKey:        rootDir,
-			opencodeAgentsPathKey:     filepath.Join(rootDir, opencodeAgentsFileName),
-			opencodeJSONPathKey:       filepath.Join(rootDir, opencodeConfigFileName),
-			opencodeSkillsDirPathKey:  filepath.Join(rootDir, opencodeSkillsDirName),
-			opencodeManifestPathKey:   manifestPath,
-			"harness_root":            rootDir,
+			opencodeConfigRootPathKey:  filepath.Join(homeDir, opencodeConfigRootDirName),
+			opencodeDirPathKey:         rootDir,
+			opencodeAgentsPathKey:      filepath.Join(rootDir, opencodeAgentsFileName),
+			opencodeJSONPathKey:        filepath.Join(rootDir, opencodeConfigFileName),
+			opencodeSkillsDirPathKey:   filepath.Join(rootDir, opencodeSkillsDirName),
+			opencodeManifestPathKey:    manifestPath,
+			opencodePluginsDirPathKey:  filepath.Join(rootDir, "plugins"),
+			opencodeTUISettingsPathKey: filepath.Join(rootDir, "tui.json"),
+			"harness_root":             rootDir,
 		},
 	}
 }
@@ -279,13 +313,14 @@ func renderOpenCodeAgentsMD(req RenderRequest) ([]byte, error) {
 		"",
 		"## OpenCode managed surface",
 		"- Managed skills directory: `~/.config/opencode/skills`",
-		"- Managed settings merge target: `~/.config/opencode/opencode.json` (Lore owns the top-level `lore` block and, when lore-server-mcp is selected, the `mcp.lore` remote entry)",
-		"- Managed plugin bundle: `~/.config/opencode/plugins/` (default component: `opencode-plugins`). Bundled assets: `background-agents.ts`, `model-variants.ts`, and the community `opencode-subagent-statusline`. Managed TUI settings: `~/.config/opencode/tui.json` references the community statusline and declares the explicit exclusion list under `lore.plugins_excluded`.",
+		"- Managed settings merge target: `~/.config/opencode/opencode.json` (native OpenCode shape: `$schema: https://opencode.ai/config.json`, the native `agent` overlay wiring every SDD phase agent to its `~/.config/opencode/skills/<name>/SKILL.md` prompt via `{file:...}` references, and — when lore-server-mcp is selected — the documented `mcp.lore` remote entry). The installer never writes a top-level Lore-only `lore` metadata block into opencode.json.",
+		"- Managed plugin bundle: `~/.config/opencode/plugins/` (default component: `opencode-plugins`). Bundled assets: `background-agents.ts`, `model-variants.ts`, and the community `opencode-subagent-statusline`. The native `tui.json` registers ONLY the community statusline in its singular `plugin` string array; local plugin .ts files are picked up automatically from the plugins/ directory and are not registered in tui.json.",
 		"- Explicit exclusions: the installer NEVER bundles, renders, or registers `sdd-engram` or `logo`. The exclusion list is enforced at the embed.FS static guard, the plugin asset reader, and the tui.json plugin allowlist.",
 		"- Managed manifest: `~/.config/opencode/lore-install.json`",
 		"- Scope boundary: config-only Lore projection; no profiles, bootstrap/package-manager behavior, or native/runtime subagents in this slice. The bundled plugin set is bounded to the three plugin .ts files plus `tui.json` and the explicit exclusion list above.",
 		"- Lore server MCP token: when lore-server-mcp is selected, the bearer token is persisted in opencode.json under `mcp.lore.headers.Authorization` and a plaintext-token warning (`auth_header=plaintext-bearer-token`) appears at install time. The install summary never embeds the saved token; only the path, the server URL, and the auth header name are surfaced.",
 		"- `mcp.lore` ownership: the installer writes a `managed_by: lore-cli` marker on the `mcp.lore` block. The installer only ever overwrites the `mcp.lore` subtree when the existing block is already Lore-owned; a non-Lore-owned `mcp.lore` block (owned by another tool, missing the marker, or hand-edited) is treated as a foreign MCP configuration and the installer fails closed with a typed conflict error. The existing file is backed up to the managed backup root before the installer aborts, the error names the conflicting `mcp.lore` `type` and `url` (without the token), and the resolution guidance points the user at editing the existing block or removing the conflicting `mcp.lore` subtree.",
+		"- Migration: when an existing install was produced by the legacy `lore`-shaped renderer (a top-level `lore` block in opencode.json, or a plural `plugins` object array plus a top-level `lore` block in tui.json), the additive merge drops the stale shape and writes the native shape on the next run. The existing user-owned top-level keys (e.g. `theme`, custom `mcp.<other>` entries, user `agent` overrides) are preserved.",
 		"",
 		"## Managed SDD model declarations",
 		strings.Join(modelLines, "\n"),
@@ -382,38 +417,98 @@ func canonicalOpenCodePhaseName(phase agentpack.PhaseID) string {
 	}
 }
 
-// renderOpenCodeLoreBlock returns the standalone lore block (no mcp
-// entry). It is used by the opencode_install.go install pipeline when
-// the lore-server-mcp component is not selected. The merge-aware flow
-// (existing-file detection, backup/restore, additive mcp.lore) belongs
-// to a later regression slice.
-func renderOpenCodeLoreBlock(cfg agentconfig.Config) ([]byte, error) {
+// opencodeAgentOverlay returns the native `agent` overlay object
+// that wires each canonical SDD phase agent into OpenCode's native
+// `opencode.json` config. The overlay is shaped like the
+// documented OpenCode `agent` block: each agent maps to a
+// `{model, prompt}` pair, and the `prompt` is a `{file:./path}`
+// reference to the corresponding managed SKILL.md file. The
+// overlay is intentionally a NATIVE OpenCode config artifact, not
+// a Lore metadata block; OpenCode consumes it without any
+// adapter layer. The model values come from the per-agent
+// agent-config.json overrides when present and fall back to the
+// agentpack default model otherwise.
+func opencodeAgentOverlay(cfg agentconfig.Config) map[string]any {
 	models := openCodeAgentModels(cfg)
-	agents := make(map[string]map[string]string, len(models))
+	overlay := make(map[string]any, len(models))
 	for _, name := range agentpack.SDDPhaseAgentNames() {
-		agents[name] = map[string]string{"model": models[name]}
+		overlay[name] = map[string]any{
+			"model":  models[name],
+			"prompt": "{file:./skills/" + name + "/SKILL.md}",
+		}
+	}
+	return overlay
+}
+
+// opencodeSkillsBlock returns the native `skills` block for the
+// `opencode.json` file. The block declares the path of the
+// managed skills directory so OpenCode can resolve the
+// `{file:./skills/<name>/SKILL.md}` references declared on each
+// `agent.prompt` field. The value is a small `{path, ...}` map
+// that matches the documented OpenCode shape and never includes
+// any Lore-specific metadata.
+func opencodeSkillsBlock() map[string]any {
+	return map[string]any{
+		"path": opencodeSkillsDirPath,
+	}
+}
+
+// renderOpenCodeNativeConfig returns the opencode.json payload in
+// the native OpenCode shape, with NO top-level `lore` metadata
+// block. The shape is: `$schema`, `theme`, the native `agent`
+// overlay (model + `{file:./skills/<name>/SKILL.md}` prompt
+// reference per SDD phase), and a `skills.path` declaration.
+// When the caller wants the MCP-enabled variant they should call
+// `renderOpenCodeMCPConfig` instead, which extends this shape
+// with the documented top-level `mcp.lore` remote entry.
+//
+// The function is the bounded post-repair replacement for the
+// legacy `renderOpenCodeLoreBlock` helper, which produced a
+// `lore`-only metadata blob. The new shape is what the
+// OpenCode-native config contract expects and is the source of
+// truth for the user-owned `~/.config/opencode/opencode.json`
+// file.
+func renderOpenCodeNativeConfig(cfg agentconfig.Config) ([]byte, error) {
+	payload := map[string]any{
+		opencodeSchemaKey():       opencodeConfigSchemaURL,
+		opencodeThemeKey:          opencodeThemeValue,
+		opencodeAgentsKey:         opencodeAgentOverlay(cfg),
+		opencodeSkillsDirKey:      opencodeSkillsBlock(),
 	}
 
-	lore := map[string]any{
-		opencodeManagedByKey:     opencodeManagedByValue,
-		opencodeSchemaVersionKey: 1,
-		opencodeAgentsKey:        agents,
-		opencodeSkillsDirKey:     "~/.config/opencode/skills",
-	}
-
-	payload := map[string]any{opencodeLoreBlockKey: lore}
 	data, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
-		return nil, fmt.Errorf("encode opencode lore block: %w", err)
+		return nil, fmt.Errorf("encode opencode native config: %w", err)
 	}
 	return append(data, '\n'), nil
 }
 
-// renderOpenCodeMCPConfig returns the opencode.json file with both the
-// top-level `lore` block and the `mcp.lore` remote entry. Shaped like
-// Pi/Antigravity remote MCP. This is the "fresh write" path used when
-// the installer detects no existing user-managed opencode.json; the
-// additive merge path belongs to a later slice.
+// opencodeSchemaKey returns the JSON key for the `$schema`
+// property. Encoding it as `map[string]any{...}` would force the
+// field name to be the literal string `opencodeSchemaKey` instead
+// of `$schema`; the helper centralizes the escape so callers do
+// not have to remember it. The key is intentionally a function so
+// it cannot be shadowed by a const rename.
+func opencodeSchemaKey() string { return "$schema" }
+
+// renderOpenCodeMCPConfig returns the opencode.json file in the
+// native OpenCode shape with the documented top-level `mcp.lore`
+// remote entry appended. The shape is identical to
+// `renderOpenCodeNativeConfig` (no top-level `lore` block,
+// native `agent` overlay, native `skills` block) plus the
+// `mcp.lore` remote entry. Shaped like the documented OpenCode
+// remote MCP contract: `type: remote`, normalized server URL, and
+// a Bearer Authorization header.
+//
+// The `managed_by: lore-cli` marker on the mcp.lore block is the
+// ownership contract: the additive merge in
+// `mergeOpenCodeConfigJSON` is allowed to overwrite the mcp.lore
+// subtree when and only when the existing block is already
+// Lore-owned. A foreign mcp.lore block (managed by anything else,
+// or missing the marker entirely) MUST fail closed with a clear
+// conflict error so the installer never silently clobbers a
+// user-owned or third-party MCP configuration. The token is
+// intentionally NOT surfaced in the conflict error.
 func renderOpenCodeMCPConfig(cfg agentconfig.Config, serverURL, token string) ([]byte, error) {
 	normalizedServerURL := strings.TrimRight(strings.TrimSpace(serverURL), "/")
 	if normalizedServerURL == "" {
@@ -424,40 +519,22 @@ func renderOpenCodeMCPConfig(cfg agentconfig.Config, serverURL, token string) ([
 		return nil, fmt.Errorf("saved token is required for OpenCode MCP config")
 	}
 
-	models := openCodeAgentModels(cfg)
-	agents := make(map[string]map[string]string, len(models))
-	for _, name := range agentpack.SDDPhaseAgentNames() {
-		agents[name] = map[string]string{"model": models[name]}
-	}
-
-	lore := map[string]any{
-		opencodeManagedByKey:     opencodeManagedByValue,
-		opencodeSchemaVersionKey: 1,
-		opencodeAgentsKey:        agents,
-		opencodeSkillsDirKey:     "~/.config/opencode/skills",
-	}
-
-	// The `managed_by: lore-cli` marker on the mcp.lore block is the
-	// ownership contract: the additive merge in `mergeOpenCodeConfigJSON`
-	// is allowed to overwrite the mcp.lore subtree when and only when the
-	// existing block is already Lore-owned. A foreign mcp.lore block
-	// (managed by anything else, or missing the marker entirely) MUST
-	// fail closed with a clear conflict error so the installer never
-	// silently clobbers a user-owned or third-party MCP configuration.
-	// The token is intentionally NOT surfaced in the conflict error.
 	mcpPayload := map[string]any{
-		"managed_by": opencodeManagedByValue,
-		"type":       "remote",
-		"url":        normalizedServerURL + "/v1/mcp",
-		"enabled":    true,
+		opencodeManagedByKey: opencodeManagedByValue,
+		"type":               "remote",
+		"url":                normalizedServerURL + "/v1/mcp",
+		"enabled":            true,
 		"headers": map[string]any{
 			"Authorization": "Bearer " + trimmedToken,
 		},
 	}
 
 	payload := map[string]any{
-		opencodeLoreBlockKey: lore,
-		opencodeMCPBlockKey:  map[string]any{"lore": mcpPayload},
+		opencodeSchemaKey():  opencodeConfigSchemaURL,
+		opencodeThemeKey:     opencodeThemeValue,
+		opencodeAgentsKey:    opencodeAgentOverlay(cfg),
+		opencodeSkillsDirKey: opencodeSkillsBlock(),
+		opencodeMCPBlockKey:  map[string]any{opencodeMCPLoreKey: mcpPayload},
 	}
 
 	data, err := json.MarshalIndent(payload, "", "  ")

@@ -16,9 +16,9 @@ import (
 // the additive merge treats a missing or empty file as a fresh
 // write: the merged output is byte-equal to the desired payload.
 func TestOpenCodeConfigJSONMergeFreshWriteProducesManagedBlock(t *testing.T) {
-	desired, err := renderOpenCodeLoreBlock(agentconfig.Config{})
+	desired, err := renderOpenCodeNativeConfig(agentconfig.Config{})
 	if err != nil {
-		t.Fatalf("renderOpenCodeLoreBlock() error = %v, want nil", err)
+		t.Fatalf("renderOpenCodeNativeConfig() error = %v, want nil", err)
 	}
 	merged, err := mergeOpenCodeConfigJSON(nil, desired, "opencode.json")
 	if err != nil {
@@ -38,8 +38,10 @@ func TestOpenCodeConfigJSONMergeFreshWriteProducesManagedBlock(t *testing.T) {
 }
 
 // TestOpenCodeConfigJSONMergePreservesExistingUserContent verifies
-// the additive merge preserves user-owned top-level keys and merges
-// the Lore-managed `lore` and `mcp.lore` blocks via the overlay.
+// the additive merge preserves user-owned top-level keys and
+// writes the native `$schema`, native `agent` overlay, and
+// `mcp.lore` block from the desired payload. The post-repair
+// shape MUST NOT contain a top-level `lore` block.
 func TestOpenCodeConfigJSONMergePreservesExistingUserContent(t *testing.T) {
 	desired, err := renderOpenCodeMCPConfig(agentconfig.Config{}, "https://lore.example", "secret-token")
 	if err != nil {
@@ -61,13 +63,22 @@ func TestOpenCodeConfigJSONMergePreservesExistingUserContent(t *testing.T) {
 	if got := payload["customTopLevel"]; got != float64(42) {
 		t.Fatalf("merged payload customTopLevel = %v, want 42", got)
 	}
-	// The Lore-managed top-level `lore` and `mcp.lore` must be present.
-	lore, ok := payload["lore"].(map[string]any)
-	if !ok {
-		t.Fatalf("merged payload missing top-level `lore` object; got keys %v", keysOfMap(payload))
+	// Post-repair shape: no top-level `lore` block. The legacy
+	// metadata-only `lore` block is no longer emitted and MUST NOT
+	// appear in the merged result.
+	if _, ok := payload["lore"]; ok {
+		t.Fatalf("merged payload unexpectedly carries top-level `lore` object after repair: %v", payload)
 	}
-	if got := lore["managed_by"]; got != "lore-cli" {
-		t.Fatalf("merged payload lore.managed_by = %v, want lore-cli", got)
+	// Native `$schema` and `agent` overlay must be present.
+	if got := payload["$schema"]; got != opencodeConfigSchemaURL {
+		t.Fatalf("merged payload $schema = %v, want %q", got, opencodeConfigSchemaURL)
+	}
+	agent, ok := payload["agent"].(map[string]any)
+	if !ok {
+		t.Fatalf("merged payload missing top-level `agent` overlay; got keys %v", keysOfMap(payload))
+	}
+	if _, ok := agent["sdd-propose"]; !ok {
+		t.Fatalf("merged agent overlay missing sdd-propose entry; got %v", keysOfMap(agent))
 	}
 	mcp, ok := payload["mcp"].(map[string]any)
 	if !ok {
@@ -130,9 +141,9 @@ func TestOpenCodeConfigJSONMergeIsIdempotent(t *testing.T) {
 // merge returns an error rather than silently dropping user content
 // when the existing file is not valid JSON.
 func TestOpenCodeConfigJSONMergeRejectsInvalidExistingJSON(t *testing.T) {
-	desired, err := renderOpenCodeLoreBlock(agentconfig.Config{})
+	desired, err := renderOpenCodeNativeConfig(agentconfig.Config{})
 	if err != nil {
-		t.Fatalf("renderOpenCodeLoreBlock() error = %v, want nil", err)
+		t.Fatalf("renderOpenCodeNativeConfig() error = %v, want nil", err)
 	}
 	if _, err := mergeOpenCodeConfigJSON([]byte("not-json"), desired, "opencode.json"); err == nil {
 		t.Fatal("mergeOpenCodeConfigJSON(invalid existing) error = nil, want JSON decode error")
@@ -272,10 +283,11 @@ func TestOpenCodeConfigJSONMergeAllowsLoreOwnedMcpLoreBlock(t *testing.T) {
 
 // TestOpenCodeConfigJSONMergeIgnoresOwnershipForTUIJSON verifies the
 // ownership check is scoped to opencode.json. The tui.json payload
-// is fully Lore-owned (the embedded asset re-introduces the
-// `lore.managed_by: lore-cli` marker on every render) and must
-// always proceed with the additive merge even if a user hand-edits
-// the file and removes the marker.
+// is fully Lore-owned and must always proceed with the additive
+// merge even if a user hand-edits the file. The post-repair shape
+// uses a singular `plugin` string array (not the legacy plural
+// `plugins` object array) and MUST NOT carry a top-level `lore`
+// block.
 func TestOpenCodeConfigJSONMergeIgnoresOwnershipForTUIJSON(t *testing.T) {
 	desired, err := readOpenCodeTUISettingsAsset()
 	if err != nil {
@@ -294,11 +306,21 @@ func TestOpenCodeConfigJSONMergeIgnoresOwnershipForTUIJSON(t *testing.T) {
 	if got := payload["theme"]; got != "solarized" {
 		t.Fatalf("merged tui.json theme = %v, want solarized (user content preserved)", got)
 	}
-	if _, ok := payload["plugins"].([]any); !ok {
-		t.Fatalf("merged tui.json plugins array missing")
+	// Post-repair shape: the singular `plugin` string array from
+	// the desired payload is present, and the legacy plural
+	// `plugins` array of objects is dropped.
+	plugin, ok := payload["plugin"].([]any)
+	if !ok {
+		t.Fatalf("merged tui.json missing singular `plugin` string array; got keys %v", keysOfMap(payload))
 	}
-	if _, ok := payload["lore"].(map[string]any); !ok {
-		t.Fatalf("merged tui.json missing top-level `lore` object; got keys %v", keysOfMap(payload))
+	if len(plugin) != 1 || plugin[0] != opencodeCommunityStatuslinePlugin {
+		t.Fatalf("merged tui.json `plugin` = %v, want [%q]", plugin, opencodeCommunityStatuslinePlugin)
+	}
+	if _, ok := payload["plugins"]; ok {
+		t.Fatalf("merged tui.json unexpectedly carries legacy plural `plugins` array; want native singular `plugin` string array")
+	}
+	if _, ok := payload["lore"]; ok {
+		t.Fatalf("merged tui.json unexpectedly carries top-level `lore` object after repair: %v", payload)
 	}
 }
 
@@ -373,8 +395,17 @@ func TestOpenCodePlanOpenCodeInstallBacksUpAndUpdatesExistingOpenCodeJSON(t *tes
 	if got := merged["customTopLevel"]; got != float64(42) {
 		t.Fatalf("merged opencode.json customTopLevel = %v, want 42 (user content preserved)", got)
 	}
-	if _, ok := merged["lore"].(map[string]any); !ok {
-		t.Fatalf("merged opencode.json missing top-level `lore` object; got keys %v", keysOfMap(merged))
+	// Post-repair shape: no top-level `lore` block in the merged
+	// opencode.json. The legacy metadata-only `lore` block is no
+	// longer emitted by the installer.
+	if _, ok := merged["lore"]; ok {
+		t.Fatalf("merged opencode.json unexpectedly carries top-level `lore` object after repair: %v", merged)
+	}
+	if got := merged["$schema"]; got != opencodeConfigSchemaURL {
+		t.Fatalf("merged opencode.json $schema = %v, want %q", got, opencodeConfigSchemaURL)
+	}
+	if _, ok := merged["agent"].(map[string]any); !ok {
+		t.Fatalf("merged opencode.json missing top-level `agent` overlay; got keys %v", keysOfMap(merged))
 	}
 	mcp, ok := merged["mcp"].(map[string]any)
 	if !ok {
@@ -631,12 +662,239 @@ func TestOpenCodePlanOpenCodeInstallIsIdempotent(t *testing.T) {
 	}
 }
 
-// TestOpenCodeInstallSummaryDoesNotEmbedSavedToken is a focused
-// redaction gate for the OpenCode install path. The full install
-// summary must not contain the saved login token even when
-// `lore-server-mcp` is selected (the MCP block persists the token
-// in the opencode.json file, but the summary line is rendered
-// separately and must redact).
+// TestOpenCodeConfigJSONMergeMigratesLegacyTopLevelLoreBlock is
+// the focused migration gate: an existing opencode.json written
+// by the legacy `lore`-shaped renderer (top-level `lore` block
+// + a user-managed top-level key) must be repaired to the native
+// `agent` overlay shape on the next merge. The legacy `lore`
+// block is silently dropped; the user's `theme` key is preserved.
+func TestOpenCodeConfigJSONMergeMigratesLegacyTopLevelLoreBlock(t *testing.T) {
+	desired, err := renderOpenCodeNativeConfig(agentconfig.Config{})
+	if err != nil {
+		t.Fatalf("renderOpenCodeNativeConfig() error = %v, want nil", err)
+	}
+	// Legacy shape: top-level `lore` metadata block, no native
+	// `agent` overlay, no `$schema`. The user kept their own
+	// `theme` and `customTopLevel` keys.
+	legacyExisting := []byte(`{"theme":"solarized","customTopLevel":42,"lore":{"managed_by":"lore-cli","schema_version":1,"agents":{"sdd-propose":{"model":"gpt-5.4"}},"skills_dir":"~/.config/opencode/skills"}}`)
+	merged, err := mergeOpenCodeConfigJSON(legacyExisting, desired, "opencode.json")
+	if err != nil {
+		t.Fatalf("mergeOpenCodeConfigJSON(legacy) error = %v, want nil", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(merged, &payload); err != nil {
+		t.Fatalf("decode merged payload: %v", err)
+	}
+	// Legacy top-level `lore` block is gone.
+	if _, ok := payload["lore"]; ok {
+		t.Fatalf("merged payload still carries legacy top-level `lore` block after migration: %v", payload)
+	}
+	// User-owned keys are preserved.
+	if got := payload["theme"]; got != "solarized" {
+		t.Fatalf("merged payload theme = %v, want solarized (user content preserved)", got)
+	}
+	if got := payload["customTopLevel"]; got != float64(42) {
+		t.Fatalf("merged payload customTopLevel = %v, want 42 (user content preserved)", got)
+	}
+	// Native `agent` overlay is present.
+	agent, ok := payload["agent"].(map[string]any)
+	if !ok {
+		t.Fatalf("merged payload missing native `agent` overlay; got keys %v", keysOfMap(payload))
+	}
+	if _, ok := agent["sdd-propose"]; !ok {
+		t.Fatalf("merged `agent` overlay missing sdd-propose entry; got %v", keysOfMap(agent))
+	}
+	// Native `$schema` is present.
+	if got := payload["$schema"]; got != opencodeConfigSchemaURL {
+		t.Fatalf("merged payload $schema = %v, want %q", got, opencodeConfigSchemaURL)
+	}
+}
+
+// TestOpenCodeConfigJSONMergeMigratesLegacyTuiJSONPluralPlugins
+// is the focused migration gate for the legacy tui.json shape: an
+// existing tui.json written by the previous renderer (top-level
+// `lore` block + a plural `plugins` array of objects) must be
+// repaired to the native singular `plugin` string array shape on
+// the next merge. The legacy `lore` block AND the legacy plural
+// `plugins` array are silently dropped; the user's `theme` key is
+// preserved.
+func TestOpenCodeConfigJSONMergeMigratesLegacyTuiJSONPluralPlugins(t *testing.T) {
+	desired, err := readOpenCodeTUISettingsAsset()
+	if err != nil {
+		t.Fatalf("readOpenCodeTUISettingsAsset() error = %v, want nil", err)
+	}
+	// Legacy shape: top-level `lore` block + plural `plugins`
+	// array of objects. The user kept their own `theme` and
+	// `customTopLevel` keys.
+	legacyExisting := []byte(`{"theme":"solarized","customTopLevel":7,"plugins":[{"id":"opencode-subagent-statusline","owner":"community","source":"community://opencode-subagent-statusline","enabled":true}],"lore":{"managed_by":"lore-cli","schema_version":1,"tui_managed":true,"plugins_excluded":["sdd-engram","logo"],"config_only":true}}`)
+	merged, err := mergeOpenCodeConfigJSON(legacyExisting, desired, "tui.json")
+	if err != nil {
+		t.Fatalf("mergeOpenCodeConfigJSON(legacy tui.json) error = %v, want nil", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(merged, &payload); err != nil {
+		t.Fatalf("decode merged tui.json: %v", err)
+	}
+	// Legacy top-level `lore` block is gone.
+	if _, ok := payload["lore"]; ok {
+		t.Fatalf("merged tui.json still carries legacy top-level `lore` block after migration: %v", payload)
+	}
+	// Legacy plural `plugins` array of objects is gone (replaced
+	// by the native singular `plugin` string array from the
+	// desired payload).
+	if _, ok := payload["plugins"]; ok {
+		t.Fatalf("merged tui.json still carries legacy plural `plugins` array after migration: %v", payload)
+	}
+	// User-owned keys are preserved.
+	if got := payload["theme"]; got != "solarized" {
+		t.Fatalf("merged tui.json theme = %v, want solarized (user content preserved)", got)
+	}
+	if got := payload["customTopLevel"]; got != float64(7) {
+		t.Fatalf("merged tui.json customTopLevel = %v, want 7 (user content preserved)", got)
+	}
+	// Native singular `plugin` string array is present.
+	plugin, ok := payload["plugin"].([]any)
+	if !ok {
+		t.Fatalf("merged tui.json missing native singular `plugin` string array; got keys %v", keysOfMap(payload))
+	}
+	if len(plugin) != 1 || plugin[0] != opencodeCommunityStatuslinePlugin {
+		t.Fatalf("merged tui.json `plugin` = %v, want [%q]", plugin, opencodeCommunityStatuslinePlugin)
+	}
+}
+
+// TestOpenCodePlanOpenCodeInstallMigratesLegacyStaleShape is the
+// end-to-end migration gate: a home directory that was previously
+// installed with the legacy `lore`-shaped renderer (top-level
+// `lore` block in opencode.json AND plural `plugins` + `lore` in
+// tui.json) is repaired on the next `lore install --target
+// opencode` run. The on-disk opencode.json MUST be rewritten in
+// the native shape (no top-level `lore`, native `agent` overlay,
+// native `$schema`, `mcp.lore` for MCP), and the on-disk tui.json
+// MUST be rewritten in the native singular `plugin` string array
+// shape. The plan must record a `update` action for both files
+// (existing broken shape → new native shape) and the existing
+// user-owned top-level keys (`theme`, `customTopLevel`) MUST be
+// preserved.
+func TestOpenCodePlanOpenCodeInstallMigratesLegacyStaleShape(t *testing.T) {
+	homeDir := t.TempDir()
+	layout := ResolveOpenCodeLayout(homeDir)
+	if err := os.MkdirAll(layout.RootDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(rootDir) error = %v", err)
+	}
+	// Pre-create a legacy-shape opencode.json on disk.
+	opencodeJSONPath := layout.Paths[opencodeJSONPathKey]
+	legacyOpencode := []byte(`{"theme":"solarized","customTopLevel":42,"lore":{"managed_by":"lore-cli","schema_version":1,"agents":{},"skills_dir":"~/.config/opencode/skills"}}`)
+	if err := os.WriteFile(opencodeJSONPath, legacyOpencode, 0o600); err != nil {
+		t.Fatalf("WriteFile(opencode.json) error = %v", err)
+	}
+	// Pre-create a legacy-shape tui.json on disk.
+	tuiPath := filepath.Join(layout.RootDir, "tui.json")
+	legacyTUI := []byte(`{"theme":"solarized","customTopLevel":7,"plugins":[{"id":"opencode-subagent-statusline","owner":"community","enabled":true}],"lore":{"managed_by":"lore-cli","schema_version":1,"tui_managed":true,"plugins_excluded":["sdd-engram","logo"],"config_only":true}}`)
+	if err := os.WriteFile(tuiPath, legacyTUI, 0o600); err != nil {
+		t.Fatalf("WriteFile(tui.json) error = %v", err)
+	}
+
+	service := Service{}
+	now := time.Date(2026, 6, 8, 12, 0, 0, 0, time.UTC)
+	plan, err := service.PlanOpenCodeInstall(InstallRequest{
+		HomeDir:        homeDir,
+		ServerURL:      "https://lore.example",
+		SavedToken:     "secret-token",
+		LoreBinaryPath: "/usr/local/bin/lore",
+		LoreConfigDir:  filepath.Join(homeDir, ".lore"),
+		LoreCLIVersion: "v0.1.0",
+		Target:         TargetOpenCode,
+		Components:     []ComponentID{ComponentCorePack, ComponentLoreServerMCP, ComponentOpenCodePlugins},
+		Now:            now,
+	})
+	if err != nil {
+		t.Fatalf("PlanOpenCodeInstall() error = %v, want nil", err)
+	}
+	opencodeAction := findOpenCodePlannedFileAction(plan.Files, "opencode.json")
+	if opencodeAction == nil {
+		t.Fatalf("PlanOpenCodeInstall() missing opencode.json action; got %v", plannedActionSummary(plan.Files))
+	}
+	if opencodeAction.Action != "update" {
+		t.Fatalf("opencode.json plan action = %q, want update (legacy shape must be repaired)", opencodeAction.Action)
+	}
+	tuiAction := findOpenCodePlannedFileAction(plan.Files, "tui.json")
+	if tuiAction == nil {
+		t.Fatalf("PlanOpenCodeInstall() missing tui.json action; got %v", plannedActionSummary(plan.Files))
+	}
+	if tuiAction.Action != "update" {
+		t.Fatalf("tui.json plan action = %q, want update (legacy shape must be repaired)", tuiAction.Action)
+	}
+
+	// Execute the plan and verify the on-disk files are rewritten
+	// in the native shape.
+	result, err := service.ExecuteOpenCodeInstall(plan, InstallCommandOptions{})
+	if err != nil {
+		t.Fatalf("ExecuteOpenCodeInstall() error = %v, want nil", err)
+	}
+	if len(result.Summary.Failed) > 0 {
+		t.Fatalf("ExecuteOpenCodeInstall() failed files = %v, want none", result.Summary.Failed)
+	}
+
+	// opencode.json: native shape, no top-level `lore` block, user
+	// keys preserved.
+	mergedBytes, err := os.ReadFile(opencodeJSONPath)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.json) error = %v", err)
+	}
+	var merged map[string]any
+	if err := json.Unmarshal(mergedBytes, &merged); err != nil {
+		t.Fatalf("decode merged opencode.json: %v", err)
+	}
+	if _, ok := merged["lore"]; ok {
+		t.Fatalf("merged opencode.json still carries top-level `lore` block after migration: %v", merged)
+	}
+	if got := merged["$schema"]; got != opencodeConfigSchemaURL {
+		t.Fatalf("merged opencode.json $schema = %v, want %q", got, opencodeConfigSchemaURL)
+	}
+	if _, ok := merged["agent"].(map[string]any); !ok {
+		t.Fatalf("merged opencode.json missing native `agent` overlay; got keys %v", keysOfMap(merged))
+	}
+	if got := merged["theme"]; got != "solarized" {
+		t.Fatalf("merged opencode.json theme = %v, want solarized (user content preserved)", got)
+	}
+	if got := merged["customTopLevel"]; got != float64(42) {
+		t.Fatalf("merged opencode.json customTopLevel = %v, want 42 (user content preserved)", got)
+	}
+	mcp, ok := merged["mcp"].(map[string]any)
+	if !ok || mcp["lore"] == nil {
+		t.Fatalf("merged opencode.json missing mcp.lore block; got %v", merged)
+	}
+
+	// tui.json: native singular `plugin` string array, no top-level
+	// `lore` block, no plural `plugins` array, user keys preserved.
+	mergedTUI, err := os.ReadFile(tuiPath)
+	if err != nil {
+		t.Fatalf("ReadFile(tui.json) error = %v", err)
+	}
+	var mergedTUIPayload map[string]any
+	if err := json.Unmarshal(mergedTUI, &mergedTUIPayload); err != nil {
+		t.Fatalf("decode merged tui.json: %v", err)
+	}
+	if _, ok := mergedTUIPayload["lore"]; ok {
+		t.Fatalf("merged tui.json still carries top-level `lore` block after migration: %v", mergedTUIPayload)
+	}
+	if _, ok := mergedTUIPayload["plugins"]; ok {
+		t.Fatalf("merged tui.json still carries legacy plural `plugins` array after migration: %v", mergedTUIPayload)
+	}
+	plugin, ok := mergedTUIPayload["plugin"].([]any)
+	if !ok {
+		t.Fatalf("merged tui.json missing native singular `plugin` string array; got keys %v", keysOfMap(mergedTUIPayload))
+	}
+	if len(plugin) != 1 || plugin[0] != opencodeCommunityStatuslinePlugin {
+		t.Fatalf("merged tui.json `plugin` = %v, want [%q]", plugin, opencodeCommunityStatuslinePlugin)
+	}
+	if got := mergedTUIPayload["theme"]; got != "solarized" {
+		t.Fatalf("merged tui.json theme = %v, want solarized (user content preserved)", got)
+	}
+	if got := mergedTUIPayload["customTopLevel"]; got != float64(7) {
+		t.Fatalf("merged tui.json customTopLevel = %v, want 7 (user content preserved)", got)
+	}
+}
 func TestOpenCodeInstallSummaryDoesNotEmbedSavedToken(t *testing.T) {
 	homeDir := t.TempDir()
 	service := Service{}

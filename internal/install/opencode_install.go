@@ -190,7 +190,7 @@ func renderOpenCodeFiles(req InstallRequest) ([]RenderedFile, error) {
 	if hasMCPEffective {
 		configBytes, err = renderOpenCodeMCPConfig(agentCfg, req.ServerURL, req.SavedToken)
 	} else {
-		configBytes, err = renderOpenCodeLoreBlock(agentCfg)
+		configBytes, err = renderOpenCodeNativeConfig(agentCfg)
 	}
 	if err != nil {
 		return nil, err

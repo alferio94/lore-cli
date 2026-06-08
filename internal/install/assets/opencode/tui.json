@@ -1,19 +1,7 @@
 {
-  "$schema": "https://opencode.example/tui.schema.json",
+  "$schema": "https://opencode.ai/tui.json",
   "theme": "system",
-  "plugins": [
-    {
-      "id": "opencode-subagent-statusline",
-      "owner": "community",
-      "source": "community://opencode-subagent-statusline",
-      "enabled": true
-    }
-  ],
-  "lore": {
-    "managed_by": "lore-cli",
-    "schema_version": 1,
-    "tui_managed": true,
-    "plugins_excluded": ["sdd-engram", "logo"],
-    "config_only": true
-  }
+  "plugin": [
+    "opencode-subagent-statusline"
+  ]
 }

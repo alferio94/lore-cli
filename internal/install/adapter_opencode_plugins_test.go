@@ -47,13 +47,96 @@ func TestOpenCodePluginAssetsAreBoundedToManagedSet(t *testing.T) {
 	}
 }
 
+// TestOpenCodeTUISettingsUsesNativeShape is the focused regression
+// gate for the post-repair native OpenCode tui.json shape:
+//
+//   - `$schema` is exactly the documented OpenCode schema URL
+//     (https://opencode.ai/tui.json), not a placeholder URL.
+//   - The `plugin` field is a SINGULAR string array containing
+//     ONLY the community `opencode-subagent-statusline` name.
+//   - There is NO plural `plugins` array of objects (the legacy
+//     shape the previous renderer produced).
+//   - There is NO top-level `lore` block (the legacy shape the
+//     previous renderer produced).
+//   - There is no Gentle-authored copy or other forbidden wording.
+func TestOpenCodeTUISettingsUsesNativeShape(t *testing.T) {
+	content, err := readOpenCodeTUISettingsAsset()
+	if err != nil {
+		t.Fatalf("readOpenCodeTUISettingsAsset() error = %v, want nil", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(content, &payload); err != nil {
+		t.Fatalf("decode tui.json: %v", err)
+	}
+	// Schema URL: the documented OpenCode tui.json schema, not a
+	// placeholder. The previous renderer used a fake URL
+	// (`https://opencode.example/tui.schema.json`); the post-repair
+	// asset MUST use the canonical OpenCode URL.
+	if got, want := payload["$schema"], opencodeTUISettingsSchemaURL; got != want {
+		t.Fatalf("tui.json $schema = %v, want %q", got, want)
+	}
+	// Singular `plugin` string array, not a plural `plugins` array
+	// of objects.
+	plugin, ok := payload["plugin"].([]any)
+	if !ok {
+		t.Fatalf("tui.json missing singular `plugin` string array; got keys %v", keysOfMapTUI(payload))
+	}
+	if len(plugin) != 1 {
+		t.Fatalf("tui.json `plugin` array length = %d, want 1 (only the community statusline)", len(plugin))
+	}
+	if name, _ := plugin[0].(string); name != opencodeCommunityStatuslinePlugin {
+		t.Fatalf("tui.json `plugin`[0] = %q, want %q", name, opencodeCommunityStatuslinePlugin)
+	}
+	// Legacy plural `plugins` array of objects MUST NOT be present.
+	if _, present := payload["plugins"]; present {
+		t.Fatalf("tui.json unexpectedly carries legacy plural `plugins` array; want native singular `plugin` string array only")
+	}
+	// Legacy top-level `lore` block MUST NOT be present.
+	if _, present := payload["lore"]; present {
+		t.Fatalf("tui.json unexpectedly carries top-level `lore` block; want native OpenCode shape without a Lore metadata blob")
+	}
+	// No excluded plugin names appear in the singular `plugin` array.
+	for _, entry := range plugin {
+		name, _ := entry.(string)
+		for _, excluded := range excludedOpenCodePluginNames {
+			if matchesExcludedOpenCodePlugin(name, excluded) {
+				t.Fatalf("tui.json `plugin` array references explicitly excluded plugin id %q", excluded)
+			}
+		}
+	}
+	// Defense in depth: the asset bytes contain no Gentle-authored
+	// copy. The dedicated Gentle-leakage test already enforces
+	// this; the assertion here makes the native-shape test
+	// self-contained.
+	lower := strings.ToLower(string(content))
+	for _, forbidden := range []string{
+		"gentle",
+		"gentle-ai",
+		"gentleprogramming",
+		"gentleman-programming",
+		"opencode.example",
+	} {
+		if strings.Contains(lower, forbidden) {
+			t.Fatalf("tui.json content contains forbidden token %q; want clean native OpenCode shape", forbidden)
+		}
+	}
+}
+
+func keysOfMapTUI(m map[string]any) []string {
+	out := make([]string, 0, len(m))
+	for key := range m {
+		out = append(out, key)
+	}
+	return out
+}
+
 // TestOpenCodePluginAssetsExcludeSddEngramAndLogo is a focused
 // regression gate: the explicitly-excluded plugin names `sdd-engram`
 // and `logo` must never appear as a managed plugin asset or in the
-// `tui.json` plugin list. The `tui.json` file is allowed to
-// DECLARE the exclusion list under the `lore.plugins_excluded` key
-// (the positive assertion); the test only verifies that no excluded
-// plugin id is registered as an enabled plugin.
+// `tui.json` plugin list. The `tui.json` file uses the native
+// OpenCode singular `plugin` string array (e.g.
+// `["opencode-subagent-statusline"]`); the test verifies that no
+// excluded plugin id is registered as a plugin name.
 func TestOpenCodePluginAssetsExcludeSddEngramAndLogo(t *testing.T) {
 	pluginFiles, err := renderOpenCodePluginAssets()
 	if err != nil {
@@ -75,10 +158,8 @@ func TestOpenCodePluginAssetsExcludeSddEngramAndLogo(t *testing.T) {
 	}
 
 	// The bundled tui.json must not register any excluded plugin id
-	// in its `plugins` array; only the community
-	// `opencode-subagent-statusline` is referenced. The exclusion
-	// list may appear under the `lore.plugins_excluded` key as a
-	// positive declaration.
+	// in its singular `plugin` string array; only the community
+	// `opencode-subagent-statusline` is referenced.
 	tuiContent, err := readOpenCodeTUISettingsAsset()
 	if err != nil {
 		t.Fatalf("readOpenCodeTUISettingsAsset() error = %v, want nil", err)
@@ -87,16 +168,15 @@ func TestOpenCodePluginAssetsExcludeSddEngramAndLogo(t *testing.T) {
 	if err := json.Unmarshal(tuiContent, &payload); err != nil {
 		t.Fatalf("decode tui.json: %v", err)
 	}
-	plugins, _ := payload["plugins"].([]any)
-	for _, entry := range plugins {
-		entryMap, ok := entry.(map[string]any)
-		if !ok {
-			continue
-		}
-		id, _ := entryMap["id"].(string)
+	plugin, ok := payload["plugin"].([]any)
+	if !ok {
+		t.Fatalf("tui.json missing singular `plugin` string array; got keys %v", keysOfMapTUI(payload))
+	}
+	for _, entry := range plugin {
+		name, _ := entry.(string)
 		for _, excluded := range excludedOpenCodePluginNames {
-			if matchesExcludedOpenCodePlugin(id, excluded) {
-				t.Fatalf("tui.json plugins array references explicitly excluded plugin id %q", excluded)
+			if matchesExcludedOpenCodePlugin(name, excluded) {
+				t.Fatalf("tui.json `plugin` array references explicitly excluded plugin id %q", excluded)
 			}
 		}
 	}
