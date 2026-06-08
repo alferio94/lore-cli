@@ -11,6 +11,28 @@ import (
 	"github.com/alferio94/lore-cli/internal/agentpack"
 )
 
+// expectedOrchestratorModelForDefaultDefinition returns the model
+// the production `opencodeOrchestratorModel` helper resolves when
+// given `agentpack.DefaultDefinition()`. It is a local helper kept
+// in the test file so the assertions read as a one-liner
+// (`expectedOrchestratorModelForDefaultDefinition()`) instead of
+// repeating the (profile, err) dance for `agentpack.Definition.Profile`.
+//
+// The helper is intentionally NOT exported: the production code
+// path is `opencodeOrchestratorModel`, and the test's job is to
+// assert that the rendered entry matches the production lookup.
+func expectedOrchestratorModelForDefaultDefinition() string {
+	definition := agentpack.DefaultDefinition()
+	profile, err := definition.Profile(agentpack.ProfileBalanced)
+	if err != nil {
+		return agentpack.DefaultSDDModel
+	}
+	if model := profile.ModelForRole(agentpack.RoleOrchestrator); model != "" {
+		return model
+	}
+	return agentpack.DefaultSDDModel
+}
+
 // TestOpenCodeLayoutPathsAreBoundedToConfigRoot verifies the foundation-slice
 // invariant: OpenCode-managed files live under ~/.config/opencode/ and the
 // harness root is exactly that directory.
@@ -224,7 +246,7 @@ func TestDefaultOpenCodeAdapterRenderRejectsMCPWithoutAuth(t *testing.T) {
 // Authorization header. The post-repair shape MUST NOT contain a
 // top-level Lore-only `lore` block.
 func TestOpenCodeMCPConfigRendersRemoteMCPBlock(t *testing.T) {
-	data, err := renderOpenCodeMCPConfig(agentconfig.Config{}, "https://lore.example", "secret-token")
+	data, err := renderOpenCodeMCPConfig(agentpack.DefaultDefinition(), agentconfig.Config{}, "https://lore.example", "secret-token")
 	if err != nil {
 		t.Fatalf("renderOpenCodeMCPConfig error = %v, want nil", err)
 	}
@@ -244,6 +266,27 @@ func TestOpenCodeMCPConfigRendersRemoteMCPBlock(t *testing.T) {
 	agent, ok := payload["agent"].(map[string]any)
 	if !ok {
 		t.Fatalf("payload missing top-level `agent` overlay: %v", payload)
+	}
+	// Primary `lore` orchestrator entry MUST be present in the
+	// native `agent` overlay so OpenCode can boot into the global
+	// Lore orchestrator instead of falling back to the built-in
+	// `build` agent. The model is derived from
+	// `ProfileBalanced.RoleModels["orchestrator"]` and the prompt
+	// references the managed AGENTS.md file.
+	loreEntry, ok := agent[opencodePrimaryAgentName].(map[string]any)
+	if !ok {
+		t.Fatalf("agent overlay missing primary %q entry: %v", opencodePrimaryAgentName, agent)
+	}
+	wantOrchestratorModel := expectedOrchestratorModelForDefaultDefinition()
+	if got := loreEntry["model"]; got != wantOrchestratorModel {
+		t.Fatalf("agent.%s.model = %v, want %q (from ProfileBalanced.RoleModels[orchestrator])", opencodePrimaryAgentName, got, wantOrchestratorModel)
+	}
+	wantPrompt := "{file:./" + opencodePrimaryAgentPromptFile + "}"
+	if got, _ := loreEntry["prompt"].(string); got != wantPrompt {
+		t.Fatalf("agent.%s.prompt = %q, want %q", opencodePrimaryAgentName, got, wantPrompt)
+	}
+	if _, ok := loreEntry["description"]; !ok {
+		t.Fatalf("agent.%s missing description: %v", opencodePrimaryAgentName, loreEntry)
 	}
 	for _, phaseAgent := range agentpack.SDDPhaseAgentNames() {
 		entry, ok := agent[phaseAgent].(map[string]any)
@@ -297,12 +340,236 @@ func TestOpenCodeMCPConfigRendersRemoteMCPBlock(t *testing.T) {
 // TestOpenCodeMCPConfigRequiresServerURLAndToken verifies the failure
 // modes of the opencode MCP renderer.
 func TestOpenCodeMCPConfigRequiresServerURLAndToken(t *testing.T) {
-	if _, err := renderOpenCodeMCPConfig(agentconfig.Config{}, "", "token"); err == nil {
+	if _, err := renderOpenCodeMCPConfig(agentpack.DefaultDefinition(), agentconfig.Config{}, "", "token"); err == nil {
 		t.Fatal("renderOpenCodeMCPConfig(empty server) error = nil, want server-url validation error")
 	}
-	if _, err := renderOpenCodeMCPConfig(agentconfig.Config{}, "https://lore.example", "  "); err == nil {
+	if _, err := renderOpenCodeMCPConfig(agentpack.DefaultDefinition(), agentconfig.Config{}, "https://lore.example", "  "); err == nil {
 		t.Fatal("renderOpenCodeMCPConfig(empty token) error = nil, want token validation error")
 	}
+}
+
+// TestOpenCodeNativeConfigDeclaresLorePrimaryOrchestratorAgent is
+// the focused regression gate for the primary `lore` orchestrator
+// entry. The native `opencode.json` (with no lore-server-mcp
+// component selected) MUST declare the `agent.lore` entry sourced
+// from the `ProfileBalanced.RoleModels["orchestrator"]` mapping of
+// the active agentpack definition, with a prompt reference to the
+// managed AGENTS.md file. The test is the safety gate that keeps
+// the primary orchestrator in the opencode.json on every render,
+// so OpenCode can boot into the global Lore orchestrator instead
+// of falling back to the built-in `build` agent.
+//
+// The test also asserts:
+//
+//   - The 9 sdd-* phase agent entries are still present (the
+//     primary entry is layered on top additively, not as a
+//     replacement).
+//   - The primary `lore` entry is NOT one of the sdd-* phase
+//     agents (sanity check: the canonical phase list is
+//     unchanged).
+//   - The `agent` overlay is the only top-level block that
+//     contains a `lore` key (no top-level `lore` metadata block;
+//     the `lore` identity lives under `agent.lore`).
+//   - The local contract for the `agent` block does not include a
+//     documented `default` field. The installer emits no `default`
+//     marker; the primary must be selected explicitly by name
+//     (e.g. `opencode --agent lore`).
+//   - The orchestrator model fallback path is exercised when the
+//     definition is empty (a zero-value `Definition{}` MUST
+//     resolve to `agentpack.DefaultSDDModel` via the fallback in
+//     `opencodeOrchestratorModel`).
+func TestOpenCodeNativeConfigDeclaresLorePrimaryOrchestratorAgent(t *testing.T) {
+	data, err := renderOpenCodeNativeConfig(agentpack.DefaultDefinition(), agentconfig.Config{})
+	if err != nil {
+		t.Fatalf("renderOpenCodeNativeConfig error = %v, want nil", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+
+	agent, ok := payload["agent"].(map[string]any)
+	if !ok {
+		t.Fatalf("payload missing top-level `agent` overlay: %v", payload)
+	}
+
+	// Primary `lore` orchestrator entry: present, with the
+	// expected model, prompt reference, and description.
+	loreEntry, ok := agent[opencodePrimaryAgentName].(map[string]any)
+	if !ok {
+		t.Fatalf("agent overlay missing primary %q entry; got keys %v", opencodePrimaryAgentName, keysOfMapForOverlay(agent))
+	}
+	wantModel := expectedOrchestratorModelForDefaultDefinition()
+	if got := loreEntry["model"]; got != wantModel {
+		t.Fatalf("agent.%s.model = %v, want %q (from ProfileBalanced.RoleModels[orchestrator])", opencodePrimaryAgentName, got, wantModel)
+	}
+	wantPrompt := "{file:./" + opencodePrimaryAgentPromptFile + "}"
+	if got, _ := loreEntry["prompt"].(string); got != wantPrompt {
+		t.Fatalf("agent.%s.prompt = %q, want %q (native {file:...} reference to the managed AGENTS.md)", opencodePrimaryAgentName, got, wantPrompt)
+	}
+	description, _ := loreEntry["description"].(string)
+	if !strings.Contains(strings.ToLower(description), "orchestrator") {
+		t.Fatalf("agent.%s.description = %q, want substring \"orchestrator\"", opencodePrimaryAgentName, description)
+	}
+
+	// Sanity: the 9 sdd-* phase agent entries are still present.
+	for _, phaseAgent := range agentpack.SDDPhaseAgentNames() {
+		if _, ok := agent[phaseAgent].(map[string]any); !ok {
+			t.Fatalf("agent overlay missing sdd-* phase agent %q; got keys %v", phaseAgent, keysOfMapForOverlay(agent))
+		}
+	}
+
+	// Sanity: the primary `lore` key is NOT one of the sdd-*
+	// phase agents (canonical phase list is unchanged).
+	for _, phaseAgent := range agentpack.SDDPhaseAgentNames() {
+		if opencodePrimaryAgentName == phaseAgent {
+			t.Fatalf("primary agent name %q collides with SDD phase agent %q; cannot coexist", opencodePrimaryAgentName, phaseAgent)
+		}
+	}
+
+	// Sanity: the `agent` overlay is the only top-level block
+	// that contains a `lore` key. There is no top-level `lore`
+	// metadata block; the `lore` identity lives under `agent.lore`.
+	if _, ok := payload["lore"]; ok {
+		t.Fatalf("payload carries top-level `lore` object; want only `agent.lore` (no metadata blob); got keys %v", keysOfMapForOverlay(payload))
+	}
+	if _, ok := agent["default"]; ok {
+		t.Fatalf("agent overlay carries a `default` key; the local contract does not document a default field and the installer must not emit one")
+	}
+}
+
+// TestOpenCodeOrchestratorModelUsesBalancedProfileRoleMapping is
+// the focused regression gate for the orchestrator model lookup.
+// The `ProfileBalanced.RoleModels["orchestrator"]` mapping is the
+// source of truth for the primary agent's model; an empty
+// definition MUST fall back to `agentpack.DefaultSDDModel` rather
+// than producing an empty model string.
+func TestOpenCodeOrchestratorModelUsesBalancedProfileRoleMapping(t *testing.T) {
+	definition := agentpack.DefaultDefinition()
+	profile, err := definition.Profile(agentpack.ProfileBalanced)
+	if err != nil {
+		t.Fatalf("DefaultDefinition().Profile(balanced) error = %v, want nil", err)
+	}
+	want := profile.ModelForRole(agentpack.RoleOrchestrator)
+	if got := opencodeOrchestratorModel(definition); got != want {
+		t.Fatalf("opencodeOrchestratorModel(DefaultDefinition) = %q, want %q", got, want)
+	}
+	if got := opencodeOrchestratorModel(agentpack.Definition{}); got != agentpack.DefaultSDDModel {
+		t.Fatalf("opencodeOrchestratorModel(empty) = %q, want fallback %q", got, agentpack.DefaultSDDModel)
+	}
+}
+
+// TestOpenCodeAgentOverlayPrimaryIsLayeredOnTopOfSddPhases is the
+// focused regression gate for the additive layering of the primary
+// `lore` orchestrator entry on top of the 9 sdd-* phase agent
+// entries. The test asserts:
+//
+//   - The overlay contains 10 entries (1 primary + 9 sdd-*).
+//   - The primary `lore` entry uses the `ProfileBalanced` orchestrator
+//     model and references the managed AGENTS.md file.
+//   - Each sdd-* entry uses the per-agent model from agent-config
+//     when present, otherwise the agentpack default, and references
+//     the corresponding `skills/<name>/SKILL.md` file.
+//   - The overlay is compatible with the documented OpenCode
+//     `agent` block contract: `{description, model, prompt}` for the
+//     primary, `{model, prompt}` for the sdd-* entries.
+func TestOpenCodeAgentOverlayPrimaryIsLayeredOnTopOfSddPhases(t *testing.T) {
+	cfg := agentconfig.Config{
+		SchemaVersion: agentconfig.SchemaVersion,
+		SDDAgents: map[string]agentconfig.Agent{
+			"sdd-apply": {Model: "gpt-5-custom-apply"},
+		},
+	}
+	overlay := opencodeAgentOverlay(agentpack.DefaultDefinition(), cfg)
+	if got, want := len(overlay), 1+len(agentpack.SDDPhaseAgentNames()); got != want {
+		t.Fatalf("opencodeAgentOverlay size = %d, want %d (1 primary + %d sdd-*)", got, want, len(agentpack.SDDPhaseAgentNames()))
+	}
+	loreEntry, ok := overlay[opencodePrimaryAgentName].(map[string]any)
+	if !ok {
+		t.Fatalf("overlay missing primary %q entry; got keys %v", opencodePrimaryAgentName, keysOfMapForOverlay(overlay))
+	}
+	if _, ok := loreEntry["description"]; !ok {
+		t.Fatalf("primary %s entry missing description: %v", opencodePrimaryAgentName, loreEntry)
+	}
+	if _, ok := loreEntry["model"]; !ok {
+		t.Fatalf("primary %s entry missing model: %v", opencodePrimaryAgentName, loreEntry)
+	}
+	if _, ok := loreEntry["prompt"]; !ok {
+		t.Fatalf("primary %s entry missing prompt: %v", opencodePrimaryAgentName, loreEntry)
+	}
+	for _, name := range agentpack.SDDPhaseAgentNames() {
+		entry, ok := overlay[name].(map[string]any)
+		if !ok {
+			t.Fatalf("overlay missing %q entry; got keys %v", name, keysOfMapForOverlay(overlay))
+		}
+		model, _ := entry["model"].(string)
+		wantModel := agentpack.DefaultSDDModel
+		if name == "sdd-apply" {
+			wantModel = "gpt-5-custom-apply"
+		}
+		if model != wantModel {
+			t.Fatalf("overlay.%s.model = %q, want %q (per-agent override or default)", name, model, wantModel)
+		}
+		wantPrompt := "{file:./skills/" + name + "/SKILL.md}"
+		if got, _ := entry["prompt"].(string); got != wantPrompt {
+			t.Fatalf("overlay.%s.prompt = %q, want %q", name, got, wantPrompt)
+		}
+	}
+}
+
+// TestOpenCodeAgentsMDDocumentsPrimaryLoreOrchestratorAgent
+// verifies the AGENTS.md managed surface copy documents the
+// primary `lore` orchestrator entry: the managed surface section
+// MUST mention the `agent.lore` entry, the ProfileBalanced model
+// source, the AGENTS.md prompt reference, the explicit-selector
+// instruction (so users know to run `opencode --agent lore`), and
+// the lack of a documented `default` field in the local contract.
+func TestOpenCodeAgentsMDDocumentsPrimaryLoreOrchestratorAgent(t *testing.T) {
+	adapter := defaultOpenCodeAdapter()
+	definition := agentpack.DefaultDefinition()
+	rendered, err := adapter.Render(context.Background(), RenderRequest{
+		Target:     TargetOpenCode,
+		Definition: definition,
+		Components: []ComponentID{ComponentCorePack},
+	})
+	if err != nil {
+		t.Fatalf("Render error = %v, want nil", err)
+	}
+	files := map[string]RenderedFile{}
+	for _, file := range rendered {
+		files[file.RelativePath] = file
+	}
+	agents, ok := files["AGENTS.md"]
+	if !ok {
+		t.Fatal("rendered files missing AGENTS.md")
+	}
+	text := string(agents.Content)
+	for _, want := range []string{
+		"Primary `lore` orchestrator",
+		"`agent.lore`",
+		"ProfileBalanced.RoleModels[\"orchestrator\"]",
+		"{file:./AGENTS.md}",
+		"opencode --agent lore",
+		"no supported `default` field",
+		// The managed SDD model declarations section now also lists
+		// the primary `lore` orchestrator model at the top.
+		"- " + opencodePrimaryAgentName + " (primary orchestrator): ",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("AGENTS.md = %q, want substring %q", text, want)
+		}
+	}
+}
+
+// keysOfMapForOverlay returns the keys of m for diagnostic output.
+// It is a local helper kept in this file so the new tests do not
+// depend on helpers in opencode_install_test.go.
+func keysOfMapForOverlay(m map[string]any) []string {
+	out := make([]string, 0, len(m))
+	for key := range m {
+		out = append(out, key)
+	}
+	return out
 }
 
 // TestOpenCodeAdapterRenderExtendedSkillsProducesBoundedBundle verifies

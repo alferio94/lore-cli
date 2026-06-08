@@ -16,7 +16,7 @@ import (
 // the additive merge treats a missing or empty file as a fresh
 // write: the merged output is byte-equal to the desired payload.
 func TestOpenCodeConfigJSONMergeFreshWriteProducesManagedBlock(t *testing.T) {
-	desired, err := renderOpenCodeNativeConfig(agentconfig.Config{})
+	desired, err := renderOpenCodeNativeConfig(agentpack.DefaultDefinition(), agentconfig.Config{})
 	if err != nil {
 		t.Fatalf("renderOpenCodeNativeConfig() error = %v, want nil", err)
 	}
@@ -43,7 +43,7 @@ func TestOpenCodeConfigJSONMergeFreshWriteProducesManagedBlock(t *testing.T) {
 // `mcp.lore` block from the desired payload. The post-repair
 // shape MUST NOT contain a top-level `lore` block.
 func TestOpenCodeConfigJSONMergePreservesExistingUserContent(t *testing.T) {
-	desired, err := renderOpenCodeMCPConfig(agentconfig.Config{}, "https://lore.example", "secret-token")
+	desired, err := renderOpenCodeMCPConfig(agentpack.DefaultDefinition(), agentconfig.Config{}, "https://lore.example", "secret-token")
 	if err != nil {
 		t.Fatalf("renderOpenCodeMCPConfig() error = %v, want nil", err)
 	}
@@ -68,6 +68,27 @@ func TestOpenCodeConfigJSONMergePreservesExistingUserContent(t *testing.T) {
 	// appear in the merged result.
 	if _, ok := payload["lore"]; ok {
 		t.Fatalf("merged payload unexpectedly carries top-level `lore` object after repair: %v", payload)
+	}
+	// Primary `lore` orchestrator entry MUST be present in the
+	// merged `agent` overlay so OpenCode can boot into the global
+	// Lore orchestrator. The entry is sourced from
+	// `ProfileBalanced.RoleModels["orchestrator"]` of the active
+	// agentpack definition and references the managed AGENTS.md
+	// file via `{file:./AGENTS.md}`.
+	agentOverlay, ok := payload["agent"].(map[string]any)
+	if !ok {
+		t.Fatalf("merged payload missing top-level `agent` overlay; got keys %v", keysOfMap(payload))
+	}
+	loreAgent, ok := agentOverlay[opencodePrimaryAgentName].(map[string]any)
+	if !ok {
+		t.Fatalf("merged agent overlay missing primary %q entry; got keys %v", opencodePrimaryAgentName, keysOfMap(agentOverlay))
+	}
+	wantOrchestratorModel := expectedOrchestratorModelForDefaultDefinition()
+	if got := loreAgent["model"]; got != wantOrchestratorModel {
+		t.Fatalf("merged agent.%s.model = %v, want %q", opencodePrimaryAgentName, got, wantOrchestratorModel)
+	}
+	if got, _ := loreAgent["prompt"].(string); got != "{file:./"+opencodePrimaryAgentPromptFile+"}" {
+		t.Fatalf("merged agent.%s.prompt = %q, want %q", opencodePrimaryAgentName, got, "{file:./"+opencodePrimaryAgentPromptFile+"}")
 	}
 	// Native `$schema` and `agent` overlay must be present.
 	if got := payload["$schema"]; got != opencodeConfigSchemaURL {
@@ -110,7 +131,7 @@ func TestOpenCodeConfigJSONMergePreservesExistingUserContent(t *testing.T) {
 // produces byte-identical results. This is the safety gate that
 // keeps reruns safe.
 func TestOpenCodeConfigJSONMergeIsIdempotent(t *testing.T) {
-	desired, err := renderOpenCodeMCPConfig(agentconfig.Config{}, "https://lore.example", "secret-token")
+	desired, err := renderOpenCodeMCPConfig(agentpack.DefaultDefinition(), agentconfig.Config{}, "https://lore.example", "secret-token")
 	if err != nil {
 		t.Fatalf("renderOpenCodeMCPConfig() error = %v, want nil", err)
 	}
@@ -141,7 +162,7 @@ func TestOpenCodeConfigJSONMergeIsIdempotent(t *testing.T) {
 // merge returns an error rather than silently dropping user content
 // when the existing file is not valid JSON.
 func TestOpenCodeConfigJSONMergeRejectsInvalidExistingJSON(t *testing.T) {
-	desired, err := renderOpenCodeNativeConfig(agentconfig.Config{})
+	desired, err := renderOpenCodeNativeConfig(agentpack.DefaultDefinition(), agentconfig.Config{})
 	if err != nil {
 		t.Fatalf("renderOpenCodeNativeConfig() error = %v, want nil", err)
 	}
@@ -159,7 +180,7 @@ func TestOpenCodeConfigJSONMergeRejectsInvalidExistingJSON(t *testing.T) {
 // path. This is the safety gate that prevents the installer from
 // silently clobbering a user-owned or third-party MCP configuration.
 func TestOpenCodeConfigJSONMergeFailsClosedOnForeignMcpLoreBlock(t *testing.T) {
-	desired, err := renderOpenCodeMCPConfig(agentconfig.Config{}, "https://lore.example", "ultra-secret-token")
+	desired, err := renderOpenCodeMCPConfig(agentpack.DefaultDefinition(), agentconfig.Config{}, "https://lore.example", "ultra-secret-token")
 	if err != nil {
 		t.Fatalf("renderOpenCodeMCPConfig() error = %v, want nil", err)
 	}
@@ -237,7 +258,7 @@ func TestOpenCodeConfigJSONMergeFailsClosedOnForeignMcpLoreBlock(t *testing.T) {
 // replaces the Lore-owned subtree from the overlay, preserving all
 // other top-level keys.
 func TestOpenCodeConfigJSONMergeAllowsLoreOwnedMcpLoreBlock(t *testing.T) {
-	desired, err := renderOpenCodeMCPConfig(agentconfig.Config{}, "https://lore.example", "new-token")
+	desired, err := renderOpenCodeMCPConfig(agentpack.DefaultDefinition(), agentconfig.Config{}, "https://lore.example", "new-token")
 	if err != nil {
 		t.Fatalf("renderOpenCodeMCPConfig() error = %v, want nil", err)
 	}
@@ -404,8 +425,25 @@ func TestOpenCodePlanOpenCodeInstallBacksUpAndUpdatesExistingOpenCodeJSON(t *tes
 	if got := merged["$schema"]; got != opencodeConfigSchemaURL {
 		t.Fatalf("merged opencode.json $schema = %v, want %q", got, opencodeConfigSchemaURL)
 	}
-	if _, ok := merged["agent"].(map[string]any); !ok {
+	agentOverlay, ok := merged["agent"].(map[string]any)
+	if !ok {
 		t.Fatalf("merged opencode.json missing top-level `agent` overlay; got keys %v", keysOfMap(merged))
+	}
+	// Primary `lore` orchestrator entry MUST be installed on
+	// disk: the model is sourced from
+	// `ProfileBalanced.RoleModels["orchestrator"]` of the active
+	// agentpack definition, and the prompt references the
+	// managed AGENTS.md file.
+	loreAgent, ok := agentOverlay[opencodePrimaryAgentName].(map[string]any)
+	if !ok {
+		t.Fatalf("merged opencode.json agent overlay missing primary %q entry; got keys %v", opencodePrimaryAgentName, keysOfMap(agentOverlay))
+	}
+	wantOrchestratorModel := expectedOrchestratorModelForDefaultDefinition()
+	if got := loreAgent["model"]; got != wantOrchestratorModel {
+		t.Fatalf("merged opencode.json agent.%s.model = %v, want %q", opencodePrimaryAgentName, got, wantOrchestratorModel)
+	}
+	if got, _ := loreAgent["prompt"].(string); got != "{file:./"+opencodePrimaryAgentPromptFile+"}" {
+		t.Fatalf("merged opencode.json agent.%s.prompt = %q, want %q", opencodePrimaryAgentName, got, "{file:./"+opencodePrimaryAgentPromptFile+"}")
 	}
 	mcp, ok := merged["mcp"].(map[string]any)
 	if !ok {
@@ -669,7 +707,7 @@ func TestOpenCodePlanOpenCodeInstallIsIdempotent(t *testing.T) {
 // `agent` overlay shape on the next merge. The legacy `lore`
 // block is silently dropped; the user's `theme` key is preserved.
 func TestOpenCodeConfigJSONMergeMigratesLegacyTopLevelLoreBlock(t *testing.T) {
-	desired, err := renderOpenCodeNativeConfig(agentconfig.Config{})
+	desired, err := renderOpenCodeNativeConfig(agentpack.DefaultDefinition(), agentconfig.Config{})
 	if err != nil {
 		t.Fatalf("renderOpenCodeNativeConfig() error = %v, want nil", err)
 	}
@@ -859,6 +897,27 @@ func TestOpenCodePlanOpenCodeInstallMigratesLegacyStaleShape(t *testing.T) {
 	}
 	if got := merged["customTopLevel"]; got != float64(42) {
 		t.Fatalf("merged opencode.json customTopLevel = %v, want 42 (user content preserved)", got)
+	}
+	// The migration from the legacy `lore`-shaped renderer
+	// MUST also install the primary `lore` orchestrator entry
+	// (under `agent.lore`, NOT under a top-level `lore` block)
+	// so the post-migration opencode.json boots into the global
+	// Lore orchestrator instead of falling back to the built-in
+	// `build` agent.
+	agentOverlay, ok := merged["agent"].(map[string]any)
+	if !ok {
+		t.Fatalf("merged opencode.json missing native `agent` overlay; got keys %v", keysOfMap(merged))
+	}
+	loreAgent, ok := agentOverlay[opencodePrimaryAgentName].(map[string]any)
+	if !ok {
+		t.Fatalf("merged opencode.json agent overlay missing primary %q entry; got keys %v", opencodePrimaryAgentName, keysOfMap(agentOverlay))
+	}
+	wantOrchestratorModel := expectedOrchestratorModelForDefaultDefinition()
+	if got := loreAgent["model"]; got != wantOrchestratorModel {
+		t.Fatalf("merged opencode.json agent.%s.model = %v, want %q", opencodePrimaryAgentName, got, wantOrchestratorModel)
+	}
+	if got, _ := loreAgent["prompt"].(string); got != "{file:./"+opencodePrimaryAgentPromptFile+"}" {
+		t.Fatalf("merged opencode.json agent.%s.prompt = %q, want %q", opencodePrimaryAgentName, got, "{file:./"+opencodePrimaryAgentPromptFile+"}")
 	}
 	mcp, ok := merged["mcp"].(map[string]any)
 	if !ok || mcp["lore"] == nil {

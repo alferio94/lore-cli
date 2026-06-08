@@ -73,6 +73,44 @@ const (
 	opencodeMCPLoreKey       = "lore"
 )
 
+// opencodePrimaryAgentName is the canonical name of the primary
+// orchestrator agent declared in the native `opencode.json`
+// `agent` overlay. The name mirrors the Antigravity agent profile
+// convention (`antigravityAgentProfile.ID = "lore"`) so the same
+// `lore` identity is the primary orchestrator across every
+// Lore-managed harness. Selecting this agent is the documented way
+// to run OpenCode with the global Lore orchestrator (which owns
+// decisions, pacing, user-facing synthesis, and SDD phase
+// delegation) rather than letting OpenCode fall back to the
+// built-in `build` agent.
+const opencodePrimaryAgentName = "lore"
+
+// opencodePrimaryAgentPromptFile is the relative path of the
+// managed prompt body for the primary orchestrator agent. The
+// managed AGENTS.md file already contains the canonical
+// orchestrator system instruction rendered by
+// `agentpack.RenderOrchestratorSystemInstruction`, so the primary
+// agent reuses that file via a `{file:./<path>}` reference instead
+// of duplicating the instruction into a separate SKILL.md. The
+// reference is resolved relative to the opencode.json file
+// (i.e. `~/.config/opencode/`).
+const opencodePrimaryAgentPromptFile = "AGENTS.md"
+
+// opencodePrimaryAgentDescription is the human-readable description
+// for the primary orchestrator agent entry. It is rendered into the
+// native `agent` overlay so OpenCode tooling (CLI help, picker UIs)
+// can show the primary agent's intent. The description is
+// intentionally short and self-contained so the opencode.json file
+// stays compact.
+const opencodePrimaryAgentDescription = "Global Lore orchestrator. Owns decisions, pacing, user-facing synthesis, and SDD phase delegation. Loads ~/.config/opencode/AGENTS.md (rendered from agentpack.RenderOrchestratorSystemInstruction)."
+
+// opencodePrimaryAgentModelFallback is the model used for the
+// primary orchestrator agent when the `ProfileBalanced.RoleModels["orchestrator"]`
+// lookup fails or returns an empty string. The fallback aliases
+// `agentpack.DefaultSDDModel` to avoid a hard dependency on a
+// specific model name in the additive-merge regression gates.
+const opencodePrimaryAgentModelFallback = agentpack.DefaultSDDModel
+
 // opencodeManagedPluginNames is the bounded set of plugin names
 // the OpenCode installer registers in the native `tui.json` file.
 // The OpenCode TUI native shape uses a singular `plugin` string
@@ -300,7 +338,12 @@ func (a opencodeAdapter) RenderExtendedSkills(_ context.Context, req RenderReque
 func renderOpenCodeAgentsMD(req RenderRequest) ([]byte, error) {
 	definition := req.effectiveDefinition()
 	models := openCodeAgentModels(req.AgentConfig)
-	modelLines := make([]string, 0, len(models))
+	modelLines := make([]string, 0, len(models)+1)
+	// Primary orchestrator model is documented in the managed
+	// SDD model declarations section so the user can see which
+	// model the `agent.lore` entry uses at a glance, alongside
+	// the per-phase SDD agents.
+	modelLines = append(modelLines, "- "+opencodePrimaryAgentName+" (primary orchestrator): "+opencodeOrchestratorModel(definition))
 	for _, name := range agentpack.SDDPhaseAgentNames() {
 		modelLines = append(modelLines, "- "+name+": "+models[name])
 	}
@@ -313,7 +356,8 @@ func renderOpenCodeAgentsMD(req RenderRequest) ([]byte, error) {
 		"",
 		"## OpenCode managed surface",
 		"- Managed skills directory: `~/.config/opencode/skills`",
-		"- Managed settings merge target: `~/.config/opencode/opencode.json` (native OpenCode shape: `$schema: https://opencode.ai/config.json`, the native `agent` overlay wiring every SDD phase agent to its `~/.config/opencode/skills/<name>/SKILL.md` prompt via `{file:...}` references, and — when lore-server-mcp is selected — the documented `mcp.lore` remote entry). The installer never writes a top-level Lore-only `lore` metadata block into opencode.json.",
+		"- Managed settings merge target: `~/.config/opencode/opencode.json` (native OpenCode shape: `$schema: https://opencode.ai/config.json`, the native `agent` overlay wiring the primary `lore` orchestrator (model from `ProfileBalanced.RoleModels[\"orchestrator\"]`, prompt reference `{file:./AGENTS.md}` resolved against the managed orchestrator system instruction below) plus every SDD phase agent to its `~/.config/opencode/skills/<name>/SKILL.md` prompt via `{file:...}` references, and — when lore-server-mcp is selected — the documented `mcp.lore` remote entry). The installer never writes a top-level Lore-only `lore` metadata block into opencode.json.",
+		"- Primary `lore` orchestrator: the native `agent.lore` entry is the documented way to run OpenCode with the global Lore orchestrator instead of letting OpenCode fall back to the built-in `build` agent. Select it explicitly (e.g. `opencode --agent lore`, or the picker UI) on first run. The documented local contract for the `agent` block is `{model, prompt}` per entry; there is no supported `default` field in the local contract, so the installer does not emit one. The `agent.lore` entry is owned by the installer (the additive merge replaces it on every render); users who want a custom primary add a sibling entry under a different key (e.g. `agent.lore-custom`) instead of editing `agent.lore` directly.",
 		"- Managed plugin bundle: `~/.config/opencode/plugins/` (default component: `opencode-plugins`). Bundled assets: `background-agents.ts`, `model-variants.ts`, and the community `opencode-subagent-statusline`. The native `tui.json` registers ONLY the community statusline in its singular `plugin` string array; local plugin .ts files are picked up automatically from the plugins/ directory and are not registered in tui.json.",
 		"- Explicit exclusions: the installer NEVER bundles, renders, or registers `sdd-engram` or `logo`. The exclusion list is enforced at the embed.FS static guard, the plugin asset reader, and the tui.json plugin allowlist.",
 		"- Managed manifest: `~/.config/opencode/lore-install.json`",
@@ -419,18 +463,54 @@ func canonicalOpenCodePhaseName(phase agentpack.PhaseID) string {
 
 // opencodeAgentOverlay returns the native `agent` overlay object
 // that wires each canonical SDD phase agent into OpenCode's native
-// `opencode.json` config. The overlay is shaped like the
-// documented OpenCode `agent` block: each agent maps to a
-// `{model, prompt}` pair, and the `prompt` is a `{file:./path}`
-// reference to the corresponding managed SKILL.md file. The
+// `opencode.json` config, plus the primary `lore` orchestrator
+// agent that lets OpenCode boot into the global Lore orchestrator
+// instead of falling back to the built-in `build` agent. The
+// overlay is shaped like the documented OpenCode `agent` block:
+// each agent maps to a `{description, model, prompt}` entry, and
+// the `prompt` is a `{file:./path}` reference to the
+// corresponding managed file (AGENTS.md for the primary
+// orchestrator, the per-phase SKILL.md for the SDD agents). The
 // overlay is intentionally a NATIVE OpenCode config artifact, not
-// a Lore metadata block; OpenCode consumes it without any
-// adapter layer. The model values come from the per-agent
+// a Lore metadata block; OpenCode consumes it without any adapter
+// layer. The per-phase model values come from the per-agent
 // agent-config.json overrides when present and fall back to the
-// agentpack default model otherwise.
-func opencodeAgentOverlay(cfg agentconfig.Config) map[string]any {
+// agentpack default model otherwise. The primary orchestrator's
+// model is derived from the `ProfileBalanced.RoleModels["orchestrator"]`
+// mapping of the active agentpack definition (with a safe
+// fallback to `agentpack.DefaultSDDModel`).
+//
+// The primary `lore` entry is intentionally NOT part of the
+// sdd_agents keys in agent-config.json: that map is scoped to the
+// nine canonical SDD phase agents and adding an orchestrator key
+// there would break the agent-config.json contract (see
+// `agentconfig.Config.Validate`). The primary orchestrator is
+// owned by the installer and is layered into the `agent` overlay
+// additively alongside the SDD phase agents.
+//
+// The overlay is intentionally the SOLE source of truth for the
+// Lore-managed primary identity: the additive merge in
+// `mergeOpenCodeConfigJSON` replaces the `agent` subtree
+// recursively (via `mergeMaps`), so any user customization under
+// `agent.lore` is overwritten on the next install. The installer's
+// managed surface copy (rendered into AGENTS.md) documents this
+// ownership contract so users who want a custom primary add it
+// under a different key (e.g. `agent.lore-custom`) instead of
+// editing `agent.lore` directly.
+func opencodeAgentOverlay(definition agentpack.Definition, cfg agentconfig.Config) map[string]any {
 	models := openCodeAgentModels(cfg)
-	overlay := make(map[string]any, len(models))
+	overlay := make(map[string]any, len(models)+1)
+	// Primary orchestrator agent: declared first so the
+	// `agent.lore` entry is the canonical primary the user
+	// selects. The prompt references the managed AGENTS.md file
+	// (which already contains the orchestrator system
+	// instruction), and the model is derived from the
+	// `ProfileBalanced.RoleModels["orchestrator"]` mapping.
+	overlay[opencodePrimaryAgentName] = map[string]any{
+		"description": opencodePrimaryAgentDescription,
+		"model":       opencodeOrchestratorModel(definition),
+		"prompt":      "{file:./" + opencodePrimaryAgentPromptFile + "}",
+	}
 	for _, name := range agentpack.SDDPhaseAgentNames() {
 		overlay[name] = map[string]any{
 			"model":  models[name],
@@ -438,6 +518,47 @@ func opencodeAgentOverlay(cfg agentconfig.Config) map[string]any {
 		}
 	}
 	return overlay
+}
+
+// opencodeOrchestratorModel returns the model the primary Lore
+// orchestrator agent should be declared with. The model is
+// derived from the `RoleOrchestrator` role in the
+// `ProfileBalanced` profile of the active agentpack definition,
+// with a safe fallback to `agentpack.DefaultSDDModel` when:
+//
+//   - the definition is empty (zero-value `Definition{}`),
+//   - the `ProfileBalanced` profile is missing from the
+//     definition, or
+//   - the profile lookup returns an empty model string.
+//
+// An empty definition is intentionally NOT auto-resolved to
+// `agentpack.DefaultDefinition()`: the orchestrator model is
+// allowed to differ from the default profile's role mapping, and
+// the installer's default-definition substitution happens at a
+// higher layer (see `renderOpenCodeFiles`). The fallback to
+// `agentpack.DefaultSDDModel` is a safety net so the orchestrator
+// entry is always declared with a non-empty model.
+//
+// The orchestrator model is intentionally NOT read from
+// `agentconfig.Config.SDDAgents` because that map is scoped to
+// the canonical SDD phase agents and does not yet carry an
+// orchestrator key. Adding an orchestrator key to
+// `agentconfig.Config` is a larger contract change tracked
+// outside this slice; for now the installer is the sole owner
+// of the primary orchestrator's model.
+func opencodeOrchestratorModel(definition agentpack.Definition) string {
+	if definition.SchemaVersion == 0 {
+		return opencodePrimaryAgentModelFallback
+	}
+	profile, err := definition.Profile(agentpack.ProfileBalanced)
+	if err != nil || strings.TrimSpace(profile.ID) == "" {
+		return opencodePrimaryAgentModelFallback
+	}
+	model := strings.TrimSpace(profile.ModelForRole(agentpack.RoleOrchestrator))
+	if model == "" {
+		return opencodePrimaryAgentModelFallback
+	}
+	return model
 }
 
 // opencodeSkillsBlock returns the native `skills` block for the
@@ -456,11 +577,22 @@ func opencodeSkillsBlock() map[string]any {
 // renderOpenCodeNativeConfig returns the opencode.json payload in
 // the native OpenCode shape, with NO top-level `lore` metadata
 // block. The shape is: `$schema`, `theme`, the native `agent`
-// overlay (model + `{file:./skills/<name>/SKILL.md}` prompt
-// reference per SDD phase), and a `skills.path` declaration.
-// When the caller wants the MCP-enabled variant they should call
+// overlay (primary `lore` orchestrator + one entry per SDD phase
+// agent with `model` + `{file:./skills/<name>/SKILL.md}` prompt
+// reference), and a `skills.path` declaration. When the caller
+// wants the MCP-enabled variant they should call
 // `renderOpenCodeMCPConfig` instead, which extends this shape
 // with the documented top-level `mcp.lore` remote entry.
+//
+// The primary `lore` orchestrator entry is the contract the
+// installer relies on so OpenCode boots into the global Lore
+// orchestrator instead of falling back to the built-in `build`
+// agent. The entry is sourced from
+// `opencodeOrchestratorModel(definition)` (the
+// `ProfileBalanced.RoleModels["orchestrator"]` mapping) and
+// references the managed AGENTS.md file via a `{file:./AGENTS.md}`
+// prompt reference. The entry is documented in the AGENTS.md
+// managed surface copy so users can find it.
 //
 // The function is the bounded post-repair replacement for the
 // legacy `renderOpenCodeLoreBlock` helper, which produced a
@@ -468,11 +600,11 @@ func opencodeSkillsBlock() map[string]any {
 // OpenCode-native config contract expects and is the source of
 // truth for the user-owned `~/.config/opencode/opencode.json`
 // file.
-func renderOpenCodeNativeConfig(cfg agentconfig.Config) ([]byte, error) {
+func renderOpenCodeNativeConfig(definition agentpack.Definition, cfg agentconfig.Config) ([]byte, error) {
 	payload := map[string]any{
 		opencodeSchemaKey():       opencodeConfigSchemaURL,
 		opencodeThemeKey:          opencodeThemeValue,
-		opencodeAgentsKey:         opencodeAgentOverlay(cfg),
+		opencodeAgentsKey:         opencodeAgentOverlay(definition, cfg),
 		opencodeSkillsDirKey:      opencodeSkillsBlock(),
 	}
 
@@ -495,7 +627,8 @@ func opencodeSchemaKey() string { return "$schema" }
 // native OpenCode shape with the documented top-level `mcp.lore`
 // remote entry appended. The shape is identical to
 // `renderOpenCodeNativeConfig` (no top-level `lore` block,
-// native `agent` overlay, native `skills` block) plus the
+// native `agent` overlay with the primary `lore` orchestrator +
+// the per-phase SDD agents, native `skills` block) plus the
 // `mcp.lore` remote entry. Shaped like the documented OpenCode
 // remote MCP contract: `type: remote`, normalized server URL, and
 // a Bearer Authorization header.
@@ -509,7 +642,7 @@ func opencodeSchemaKey() string { return "$schema" }
 // conflict error so the installer never silently clobbers a
 // user-owned or third-party MCP configuration. The token is
 // intentionally NOT surfaced in the conflict error.
-func renderOpenCodeMCPConfig(cfg agentconfig.Config, serverURL, token string) ([]byte, error) {
+func renderOpenCodeMCPConfig(definition agentpack.Definition, cfg agentconfig.Config, serverURL, token string) ([]byte, error) {
 	normalizedServerURL := strings.TrimRight(strings.TrimSpace(serverURL), "/")
 	if normalizedServerURL == "" {
 		return nil, fmt.Errorf("server-url is required for OpenCode MCP config")
@@ -532,7 +665,7 @@ func renderOpenCodeMCPConfig(cfg agentconfig.Config, serverURL, token string) ([
 	payload := map[string]any{
 		opencodeSchemaKey():  opencodeConfigSchemaURL,
 		opencodeThemeKey:     opencodeThemeValue,
-		opencodeAgentsKey:    opencodeAgentOverlay(cfg),
+		opencodeAgentsKey:    opencodeAgentOverlay(definition, cfg),
 		opencodeSkillsDirKey: opencodeSkillsBlock(),
 		opencodeMCPBlockKey:  map[string]any{opencodeMCPLoreKey: mcpPayload},
 	}

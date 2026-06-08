@@ -186,11 +186,17 @@ func renderOpenCodeFiles(req InstallRequest) ([]RenderedFile, error) {
 	}
 
 	hasMCPEffective := containsComponent(req.Components, ComponentLoreServerMCP) && strings.TrimSpace(req.ServerURL) != "" && strings.TrimSpace(req.SavedToken) != ""
+	// The agent overlay is sourced from the effective definition
+	// (already resolved by the earlier `if req.Definition.SchemaVersion == 0`
+	// block). Threading the definition through the renderer lets
+	// the primary `lore` orchestrator entry use the
+	// `ProfileBalanced.RoleModels["orchestrator"]` model mapping.
+	effectiveDefinition := renderReq.effectiveDefinition()
 	var configBytes []byte
 	if hasMCPEffective {
-		configBytes, err = renderOpenCodeMCPConfig(agentCfg, req.ServerURL, req.SavedToken)
+		configBytes, err = renderOpenCodeMCPConfig(effectiveDefinition, agentCfg, req.ServerURL, req.SavedToken)
 	} else {
-		configBytes, err = renderOpenCodeNativeConfig(agentCfg)
+		configBytes, err = renderOpenCodeNativeConfig(effectiveDefinition, agentCfg)
 	}
 	if err != nil {
 		return nil, err
