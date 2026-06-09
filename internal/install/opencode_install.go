@@ -2,6 +2,7 @@ package install
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -61,6 +62,19 @@ func (s Service) PlanOpenCodeInstall(req InstallRequest) (InstallPlan, error) {
 		return InstallPlan{}, err
 	}
 	manifest.ManagedFiles = buildOpenCodeManifestManagedFileRecords(rendered, desiredContents, managedPaths)
+	// Manifest-scoped stale managed-file cleanup (e.g. the
+	// `plugins/model-variants.ts` → `plugins/lore-models.ts`
+	// rename introduced by the `add-opencode-lore-models-plugin`
+	// change). The cleanup is bounded to the previous manifest's
+	// `managed_files` records: user-owned plugin files without
+	// prior manifest ownership are never deleted.
+	staleAction, err := planOpenCodeStaleManagedPluginCleanup(layout, managedPaths, backupRoot)
+	if err != nil {
+		return InstallPlan{}, err
+	}
+	if staleAction != nil {
+		plannedFiles = append(plannedFiles, *staleAction)
+	}
 	manifestAction, err := planOpenCodeManifestAction(layout.ManifestPath, backupRoot, manifest)
 	if err != nil {
 		return InstallPlan{}, err
@@ -95,6 +109,18 @@ func (s Service) ExecuteOpenCodeInstall(plan InstallPlan, opts InstallCommandOpt
 		return InstallResult{}, err
 	}
 	manifest.ManagedFiles = buildOpenCodeManifestManagedFileRecords(rendered, desiredContents, managedPaths)
+	// Manifest-scoped stale managed-file cleanup (e.g. the
+	// `plugins/model-variants.ts` → `plugins/lore-models.ts`
+	// rename). See `PlanOpenCodeInstall` for the planning
+	// contract; the same function is reused here so the dry-run
+	// plan and the live apply see identical actions.
+	staleAction, err := planOpenCodeStaleManagedPluginCleanup(plan.Layout, managedPaths, backupRoot)
+	if err != nil {
+		return InstallResult{}, err
+	}
+	if staleAction != nil {
+		plannedFiles = append(plannedFiles, *staleAction)
+	}
 	manifestAction, err := planOpenCodeManifestAction(plan.Layout.ManifestPath, backupRoot, manifest)
 	if err != nil {
 		return InstallResult{}, err
@@ -118,6 +144,23 @@ func (s Service) ExecuteOpenCodeInstall(plan InstallPlan, opts InstallCommandOpt
 			continue
 		}
 		appendInstallSummaryAction(&result.Summary, action.RelativePath, action.Action)
+	}
+	// Apply the manifest-scoped stale managed-file cleanup
+	// (e.g. removing the previous `plugins/model-variants.ts`
+	// after the `add-opencode-lore-models-plugin` rename). The
+	// apply is bounded to actions in `plannedFiles` with
+	// `Action == "delete"` and `Component == ComponentOpenCodePlugins`
+	// so unrelated surfaces are unaffected.
+	for _, action := range plannedFiles {
+		if action.Action != "delete" || action.Component != ComponentOpenCodePlugins {
+			continue
+		}
+		if err := applyOpenCodePlannedDelete(action); err != nil {
+			result.Summary.Failed = append(result.Summary.Failed, fmt.Sprintf("%s: %v", action.RelativePath, err))
+			continue
+		}
+		appendInstallSummaryAction(&result.Summary, action.RelativePath, action.Action)
+		result.Summary.BackedUp = append(result.Summary.BackedUp, action.RelativePath)
 	}
 
 	manifestBytes, err := marshalManifest(manifest)
@@ -192,11 +235,25 @@ func renderOpenCodeFiles(req InstallRequest) ([]RenderedFile, error) {
 	// the primary `lore` orchestrator entry use the
 	// `ProfileBalanced.RoleModels["orchestrator"]` model mapping.
 	effectiveDefinition := renderReq.effectiveDefinition()
+	// Reinstall preservation: read the on-disk `opencode.json`
+	// (when present and valid JSON) for the per-agent
+	// `model`/`variant` values the user may have set via the
+	// in-OpenCode `lore-models` configuration flow. The values
+	// flow into the managed `agent` overlay before merge so
+	// user-chosen model/variant values are NOT reset to managed
+	// defaults on the next install. The read is best-effort: a
+	// missing, empty, or malformed file falls back to managed
+	// defaults and the install pipeline proceeds normally
+	// (the additive merge in `mergeOpenCodeConfigJSON` still
+	// rejects malformed `opencode.json` upstream with a
+	// JSON-decode error).
+	layoutForExisting := ResolveOpenCodeLayout(req.HomeDir)
+	existingAgent := effectiveOpenCodeExistingAgent(layoutForExisting)
 	var configBytes []byte
 	if hasMCPEffective {
-		configBytes, err = renderOpenCodeMCPConfig(effectiveDefinition, agentCfg, req.ServerURL, req.SavedToken)
+		configBytes, err = renderOpenCodeMCPConfigWithExisting(effectiveDefinition, agentCfg, req.ServerURL, req.SavedToken, existingAgent)
 	} else {
-		configBytes, err = renderOpenCodeNativeConfig(effectiveDefinition, agentCfg)
+		configBytes, err = renderOpenCodeNativeConfigWithExisting(effectiveDefinition, agentCfg, existingAgent)
 	}
 	if err != nil {
 		return nil, err
@@ -406,6 +463,9 @@ func applyOpenCodePlannedContent(action PlanFileAction, desired []byte) error {
 	if action.Action == "unchanged" {
 		return nil
 	}
+	if action.Action == "delete" {
+		return applyOpenCodePlannedDelete(action)
+	}
 	if action.Action == "update" {
 		existing, err := os.ReadFile(action.AbsolutePath)
 		if err != nil {
@@ -419,6 +479,35 @@ func applyOpenCodePlannedContent(action PlanFileAction, desired []byte) error {
 		}
 	}
 	return writeFileAtomic(action.AbsolutePath, desired, 0o600)
+}
+
+// applyOpenCodePlannedDelete is the manifest-scoped stale-cleanup
+// apply path. It backs up the existing file to `action.BackupPath`
+// (using the standard 0o600 permission) and then removes the file
+// from disk. The backup is written BEFORE the delete so a failure
+// in the backup step leaves the original file untouched. A
+// non-existent file is a no-op (the cleanup is idempotent across
+// reruns once a prior cleanup has already removed the file).
+func applyOpenCodePlannedDelete(action PlanFileAction) error {
+	existing, err := os.ReadFile(action.AbsolutePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("read existing file: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(action.BackupPath), 0o755); err != nil {
+		return fmt.Errorf("create backup dir: %w", err)
+	}
+	if err := writeFileAtomic(action.BackupPath, existing, 0o600); err != nil {
+		return fmt.Errorf("write backup: %w", err)
+	}
+	if err := os.Remove(action.AbsolutePath); err != nil {
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("delete stale managed file: %w", err)
+		}
+	}
+	return nil
 }
 
 func openCodeAbsolutePath(layout HarnessLayout, relativePath string) string {
@@ -437,4 +526,123 @@ func openCodeAbsolutePath(layout HarnessLayout, relativePath string) string {
 
 func openCodeBackupRelativePath(relativePath string) string {
 	return filepath.ToSlash(strings.TrimPrefix(filepath.ToSlash(relativePath), "./"))
+}
+
+// planOpenCodeStaleManagedPluginCleanup compares the previous
+// `lore-install.json` manifest's `managed_files` to the newly
+// rendered managed plugin set and emits a backup-first delete
+// action for any path that was previously Lore-managed but is no
+// longer rendered. The function is the manifest-scoped safety gate
+// for the `add-opencode-lore-models-plugin` rename: the old
+// `plugins/model-variants.ts` file is removed on upgrade when the
+// previous manifest proves Lore owned it, but a similarly named
+// file with no prior manifest ownership is left untouched.
+//
+// Implementation notes:
+//
+//   - The function ONLY inspects the previous manifest. It does
+//     NOT scan the on-disk plugins directory, so a user-owned
+//     `plugins/model-variants.ts` that was never Lore-managed
+//     is never deleted.
+//   - The previous manifest is loaded with `LoadManifest`, which
+//     returns an empty `Manifest` (and a nil error) when the file
+//     is missing or unreadable. A fresh install therefore emits
+//     no cleanup action, even when `plugins/model-variants.ts`
+//     happens to exist on disk.
+//   - The backup path is rooted at `backupRoot` (the install-time
+//     timestamped backup directory) so the deleted file is
+//     recoverable from the install summary.
+//   - Non-regular files (symlinks, directories) at the stale path
+//     are NOT deleted: the cleanup is a no-op and the function
+//     returns a nil action. This avoids accidentally removing a
+//     directory the user happened to place at the same path.
+//
+// The returned action uses the same `PlanFileAction` shape as the
+// rest of the OpenCode install plan and is appended to the
+// `plannedFiles` slice in `PlanOpenCodeInstall` and
+// `ExecuteOpenCodeInstall`.
+func planOpenCodeStaleManagedPluginCleanup(layout HarnessLayout, newManagedPaths []string, backupRoot string) (*PlanFileAction, error) {
+	if layout.Target != TargetOpenCode {
+		return nil, nil
+	}
+	// A missing or unreadable previous manifest is the
+	// fresh-install path: no Lore-owned files to clean up. The
+	// function returns a nil action and a nil error so the
+	// install pipeline proceeds normally.
+	previous, err := LoadManifest(layout.ManifestPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("load previous manifest: %w", err)
+	}
+	if len(previous.ManagedFiles) == 0 {
+		return nil, nil
+	}
+	// Build the set of newly rendered managed absolute paths so
+	// stale paths can be detected in O(N+M) instead of O(N*M).
+	newPathSet := make(map[string]struct{}, len(newManagedPaths))
+	for _, p := range newManagedPaths {
+		newPathSet[filepath.Clean(p)] = struct{}{}
+	}
+	// Only the plugin component's managed paths are eligible for
+	// stale-cleanup via this pass. Other managed surfaces
+	// (AGENTS.md, opencode.json, tui.json) are owned by the
+	// additive merge in `mergeOpenCodeConfigJSON` and never
+	// become stale via the manifest-scoped path.
+	for _, record := range previous.ManagedFiles {
+		if record.Component != ComponentOpenCodePlugins {
+			continue
+		}
+		absolutePath := filepath.Clean(record.Path)
+		if _, kept := newPathSet[absolutePath]; kept {
+			continue
+		}
+		// Stale path: only act on a regular file that still
+		// exists. A non-regular file is left alone (and the
+		// action is skipped) to avoid accidentally clobbering
+		// user content.
+		info, err := os.Lstat(absolutePath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("inspect stale managed plugin %s: %w", absolutePath, err)
+		}
+		if !info.Mode().IsRegular() {
+			continue
+		}
+		relativePath := openCodeStaleManagedPluginRelativePath(layout, absolutePath)
+		if relativePath == "" {
+			continue
+		}
+		action := PlanFileAction{
+			Component:    ComponentOpenCodePlugins,
+			RelativePath: filepath.ToSlash(relativePath),
+			AbsolutePath: absolutePath,
+			MergeMode:    MergeModeReplace,
+			Action:       "delete",
+			BackupPath:   filepath.Join(backupRoot, openCodeBackupRelativePath(relativePath)),
+		}
+		return &action, nil
+	}
+	return nil, nil
+}
+
+// openCodeStaleManagedPluginRelativePath returns the install-pipeline
+// relative path for a stale managed plugin file. The function
+// rejects paths that escape the OpenCode harness root
+// (defense-in-depth: a corrupted manifest could in theory record a
+// path outside the layout).
+func openCodeStaleManagedPluginRelativePath(layout HarnessLayout, absolutePath string) string {
+	root := filepath.Clean(layout.RootDir)
+	cleaned := filepath.Clean(absolutePath)
+	if !strings.HasPrefix(cleaned, root+string(filepath.Separator)) && cleaned != root {
+		return ""
+	}
+	rel, err := filepath.Rel(root, cleaned)
+	if err != nil {
+		return ""
+	}
+	return filepath.ToSlash(rel)
 }

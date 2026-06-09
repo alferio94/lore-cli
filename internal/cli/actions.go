@@ -1131,12 +1131,12 @@ func formatOpenCodeInstallSummary(result install.InstallResult) string {
 	parts = append(parts, formatManagedFileSummaryParts(result.Summary.Unchanged, "unchanged")...)
 	parts = append(parts, formatManagedFileSummaryParts(result.Summary.Conflicted, "conflicted")...)
 	parts = append(parts,
-		"mcp=remote-when-selected",
+		"mcp=remote",
 		"mcp_lore_ownership=fail-closed-on-foreign",
 		"runner=none",
 		"bootstrap=none",
-		"plugins=bundled:background-agents,model-variants,opencode-subagent-statusline",
-		"plugins_location=~/.config/opencode/plugins/ (background-agents.ts, model-variants.ts); tui.json registers only opencode-subagent-statusline",
+		"plugins=bundled:background-agents,lore-models,opencode-subagent-statusline",
+		"plugins_location=~/.config/opencode/plugins/ (background-agents.ts, lore-models.ts); tui.json registers only opencode-subagent-statusline",
 		"excluded_plugins=sdd-engram,logo",
 	)
 	if len(result.Summary.Failed) > 0 {
@@ -1162,12 +1162,12 @@ func formatOpenCodeInstallPlanSummary(plan install.InstallPlan, dryRun bool) str
 		fmt.Sprintf("components=%s", formatComponentIDs(plan.Components)),
 		fmt.Sprintf("target=%s", plan.Layout.RootDir),
 		fmt.Sprintf("manifest=%s", plan.Layout.ManifestPath),
-		"mcp=remote-when-selected",
+		"mcp=remote",
 		"mcp_lore_ownership=fail-closed-on-foreign",
 		"runner=none",
 		"bootstrap=none",
-		"plugins=bundled:background-agents,model-variants,opencode-subagent-statusline",
-		"plugins_location=~/.config/opencode/plugins/ (background-agents.ts, model-variants.ts); tui.json registers only opencode-subagent-statusline",
+		"plugins=bundled:background-agents,lore-models,opencode-subagent-statusline",
+		"plugins_location=~/.config/opencode/plugins/ (background-agents.ts, lore-models.ts); tui.json registers only opencode-subagent-statusline",
 		"excluded_plugins=sdd-engram,logo",
 	}
 	if dryRun {

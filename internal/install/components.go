@@ -13,8 +13,10 @@ const (
 	ComponentExtendedSkills   ComponentID = "extended-skills"
 	ComponentCodexAgentConfig ComponentID = "codex-agent-config"
 	// ComponentOpenCodePlugins is the bounded OpenCode plugin asset bundle
-	// (background-agents.ts, model-variants.ts, opencode-subagent-statusline,
-	// and the tui.json referencing the community statusline). The excluded
+	// (background-agents.ts, lore-models.ts, opencode-subagent-statusline,
+	// and the tui.json referencing the community statusline). The
+	// previous `model-variants.ts` asset was renamed to `lore-models.ts`
+	// by the `add-opencode-lore-models-plugin` change. The excluded
 	// plugins `sdd-engram` and `logo` are explicitly NEVER bundled; see
 	// `excludedOpenCodePluginNames` and the static guard in
 	// `static_guards_test.go` for the explicit rejection invariant.
@@ -67,6 +69,7 @@ func ComponentCatalog() map[ComponentID]Component {
 				TargetPi:          true,
 				TargetAntigravity: true,
 				TargetCodex:       true,
+				TargetOpenCode:    true,
 			},
 		},
 		ComponentPiExtensions: {
@@ -98,7 +101,7 @@ func ComponentCatalog() map[ComponentID]Component {
 		ComponentOpenCodePlugins: {
 			ID:          ComponentOpenCodePlugins,
 			Title:       "OpenCode Plugins",
-			Description: "Bounded OpenCode plugin asset bundle: background-agents.ts, model-variants.ts, and the community opencode-subagent-statusline (tui.json reference). Excludes sdd-engram and logo.",
+			Description: "Bounded OpenCode plugin asset bundle: background-agents.ts, lore-models.ts, and the community opencode-subagent-statusline (tui.json reference). The previous `model-variants.ts` asset was renamed to `lore-models.ts`; the `lore-models.ts` plugin keeps the provider/model/variant discovery cache behavior of the previous asset and additionally exposes a safe opencode.json hot-edit entrypoint for in-OpenCode model/variant configuration. Excludes sdd-engram and logo.",
 			Optional:    true,
 			DefaultForTarget: map[TargetID]bool{
 				TargetOpenCode: true,

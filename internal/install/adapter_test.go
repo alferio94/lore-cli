@@ -21,12 +21,11 @@ func TestDefaultComponentSelectionUsesHostedMCPForPiCodexAndAntigravity(t *testi
 	if got := DefaultComponentSelection(TargetCodex); !equalComponentIDs(got, []ComponentID{ComponentCorePack, ComponentLoreServerMCP, ComponentExtendedSkills}) {
 		t.Fatalf("DefaultComponentSelection(codex) = %v, want core-pack + lore-server-mcp + extended-skills", got)
 	}
-	// OpenCode: core-pack + opencode-plugins by default (MCP remains
-	// opt-in; the bounded plugin asset bundle is on by default in
-	// the 1.3/2.x slice so the re-add ships the documented plugin
-	// set plus the tui.json reference).
-	if got := DefaultComponentSelection(TargetOpenCode); !equalComponentIDs(got, []ComponentID{ComponentCorePack, ComponentOpenCodePlugins}) {
-		t.Fatalf("DefaultComponentSelection(opencode) = %v, want core-pack + opencode-plugins (MCP is opt-in for the foundation slice)", got)
+	// OpenCode: core-pack + hosted Lore MCP + opencode-plugins by
+	// default, matching the hosted-MCP default behavior used by Pi,
+	// Codex, and Antigravity.
+	if got := DefaultComponentSelection(TargetOpenCode); !equalComponentIDs(got, []ComponentID{ComponentCorePack, ComponentLoreServerMCP, ComponentOpenCodePlugins}) {
+		t.Fatalf("DefaultComponentSelection(opencode) = %v, want core-pack + lore-server-mcp + opencode-plugins", got)
 	}
 	// Other bounded targets: core-pack only.
 	for _, target := range []TargetID{TargetClaudeCode} {

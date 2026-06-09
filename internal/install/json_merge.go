@@ -55,11 +55,11 @@ func mergeAntigravityMCPConfig(existing, desired []byte) ([]byte, error) {
 // URL, the backup path, and the resolution guidance; it never embeds
 // the saved token.
 type OpenCodeMCPConfigOwnershipError struct {
-	Path             string
+	Path              string
 	ExistingManagedBy string
-	ExistingType     string
-	ExistingURL      string
-	BackupPath       string
+	ExistingType      string
+	ExistingURL       string
+	BackupPath        string
 }
 
 func (e *OpenCodeMCPConfigOwnershipError) Error() string {
@@ -82,11 +82,11 @@ func (e *OpenCodeMCPConfigOwnershipError) Error() string {
 	}
 	return fmt.Sprintf(
 		"refusing to overwrite non-Lore-owned `mcp.lore` block in %s: existing managed_by=%q type=%q url=%q."+
-			" The installer only overwrites the mcp.lore subtree when it is already Lore-owned (managed_by=lore-cli)."+
-			" Resolution: edit %s and either set mcp.lore.managed_by to %q (only when the existing block is your own Lore-managed config)"+
+			" The installer only overwrites the mcp.lore subtree when it is already recognizably Lore-owned (legacy managed_by=lore-cli, or remote /v1/mcp with Authorization)."+
+			" Resolution: edit %s and either point mcp.lore at your Lore /v1/mcp endpoint with an Authorization header"+
 			" or remove the mcp.lore subtree, then rerun `lore install --target opencode`.%s",
 		e.Path, owner, existingType, existingURL,
-		e.Path, "lore-cli",
+		e.Path,
 		backupClause,
 	)
 }
@@ -113,40 +113,52 @@ func AsOpenCodeMCPConfigOwnershipConflict(err error) *OpenCodeMCPConfigOwnership
 }
 
 // opencodeMCPLoreOwnership reports whether the given mcp-lore block is
-// Lore-owned. A block is Lore-owned when it is a JSON object and
-// carries a `managed_by` field whose trimmed value equals
-// "lore-cli". Any other shape (missing, non-object, different
-// managed_by) is treated as foreign and must fail closed.
-func opencodeMCPLoreOwnership(block any) bool {
+// recognizably Lore-owned. Legacy installs carried a `managed_by:
+// lore-cli` marker, but the current OpenCode MCP schema rejects
+// additional fields inside remote MCP blocks. The native-schema-safe
+// ownership signal is therefore a remote `/v1/mcp` endpoint with an
+// Authorization header; foreign URLs or missing auth still fail closed.
+func opencodeMCPLoreOwnership(block any, desiredURL string) bool {
 	object, ok := block.(map[string]any)
 	if !ok {
 		return false
 	}
-	raw, present := object["managed_by"]
-	if !present {
+	if raw, present := object["managed_by"]; present {
+		value, ok := raw.(string)
+		return ok && strings.TrimSpace(value) == "lore-cli"
+	}
+	blockType, _ := object["type"].(string)
+	if strings.TrimSpace(blockType) != "remote" {
 		return false
 	}
-	value, ok := raw.(string)
+	url, _ := object["url"].(string)
+	normalizedURL := strings.TrimRight(strings.TrimSpace(url), "/")
+	normalizedDesiredURL := strings.TrimRight(strings.TrimSpace(desiredURL), "/")
+	if normalizedDesiredURL == "" || normalizedURL != normalizedDesiredURL || !strings.HasSuffix(normalizedURL, "/v1/mcp") {
+		return false
+	}
+	headers, ok := object["headers"].(map[string]any)
 	if !ok {
 		return false
 	}
-	return strings.TrimSpace(value) == "lore-cli"
+	authorization, _ := headers["Authorization"].(string)
+	return strings.HasPrefix(strings.TrimSpace(authorization), "Bearer ")
 }
 
 // inspectOpenCodeMCPConfigOwnership inspects the existing file for
 // the opencode.json mcp.lore ownership marker. It returns:
 //
 //   - loreOwned:    true when the existing file has no mcp.lore block, OR
-//                   the mcp.lore block is Lore-owned.
+//     the mcp.lore block is Lore-owned.
 //   - conflict:     a non-nil *OpenCodeMCPConfigOwnershipError when the
-//                   existing file carries a non-Lore-owned mcp.lore
-//                   block. The error is safe to surface in CLI output.
+//     existing file carries a non-Lore-owned mcp.lore
+//     block. The error is safe to surface in CLI output.
 //   - err:          a JSON decode error when the existing file is not
-//                   valid JSON.
+//     valid JSON.
 //
 // The token (Authorization header) is never extracted into the
 // returned struct, so the conflict is safe to log.
-func inspectOpenCodeMCPConfigOwnership(existing []byte, relativePath string) (loreOwned bool, conflict *OpenCodeMCPConfigOwnershipError, err error) {
+func inspectOpenCodeMCPConfigOwnership(existing []byte, relativePath string, desiredLoreMCPURL string) (loreOwned bool, conflict *OpenCodeMCPConfigOwnershipError, err error) {
 	trimmed := strings.TrimSpace(string(existing))
 	if trimmed == "" {
 		return true, nil, nil
@@ -163,7 +175,7 @@ func inspectOpenCodeMCPConfigOwnership(existing []byte, relativePath string) (lo
 	if !present {
 		return true, nil, nil
 	}
-	if opencodeMCPLoreOwnership(raw) {
+	if opencodeMCPLoreOwnership(raw, desiredLoreMCPURL) {
 		return true, nil, nil
 	}
 	// Foreign mcp.lore block: extract the redacted conflict details.
@@ -241,6 +253,16 @@ func migrateOpenCodeLegacyStaleShape(payload map[string]any, relativePath string
 			changed = true
 		}
 	}
+	if normalized == "opencode.json" {
+		if mcp, ok := payload["mcp"].(map[string]any); ok {
+			if lore, ok := mcp["lore"].(map[string]any); ok {
+				if value, ok := lore["managed_by"].(string); ok && strings.TrimSpace(value) == opencodeManagedByValue {
+					delete(lore, "managed_by")
+					changed = true
+				}
+			}
+		}
+	}
 	return payload, changed
 }
 
@@ -290,7 +312,7 @@ func mergeOpenCodeConfigJSON(existing, desired []byte, relativePath string) ([]b
 	// carry an mcp.lore block and is always fully Lore-owned, so
 	// the conflict path is unreachable for tui.json in practice.
 	if filepathToSlash(relativePath) == "opencode.json" {
-		loreOwned, conflict, inspectErr := inspectOpenCodeMCPConfigOwnership(existing, relativePath)
+		loreOwned, conflict, inspectErr := inspectOpenCodeMCPConfigOwnership(existing, relativePath, desiredOpenCodeLoreMCPURL(desired))
 		if inspectErr != nil {
 			return nil, inspectErr
 		}
@@ -318,6 +340,23 @@ func mergeOpenCodeConfigJSON(existing, desired []byte, relativePath string) ([]b
 	}
 	existing = append(data, '\n')
 	return mergeJSONObject(existing, desired, relativePath, relativePath, relativePath)
+}
+
+func desiredOpenCodeLoreMCPURL(desired []byte) string {
+	payload := map[string]any{}
+	if err := json.Unmarshal(desired, &payload); err != nil {
+		return ""
+	}
+	mcp, ok := payload["mcp"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	lore, ok := mcp["lore"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	url, _ := lore["url"].(string)
+	return strings.TrimSpace(url)
 }
 
 // filepathToSlash is a tiny helper that mirrors path/filepath.ToSlash

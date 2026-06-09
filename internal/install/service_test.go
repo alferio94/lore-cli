@@ -47,12 +47,21 @@ func TestDefaultTargetsPreferPiAndMarkOthersComingSoon(t *testing.T) {
 	// to plugins/, only the community statusline in tui.json).
 	opencodeDescription := findTarget(targets, TargetOpenCode).Description
 	for _, want := range []string{
-		"managed_by: lore-cli",
+		"default_agent=lore",
+		"`mode: \"primary\"`",
+		"`mode: \"subagent\"`",
+		"lore-worker",
+		"no `permission: \"allow\"` bypass",
+		"without Lore-only marker fields",
 		"fails closed",
 		"opencode-subagent-statusline",
 		"tui.json",
 		"sdd-engram",
 		"logo",
+		// The add-opencode-lore-models-plugin change renamed the
+		// model-variants plugin to lore-models; the description
+		// must reference the new managed bundle.
+		"lore-models.ts",
 	} {
 		if !strings.Contains(opencodeDescription, want) {
 			t.Fatalf("opencode description missing %q; got %q", want, opencodeDescription)

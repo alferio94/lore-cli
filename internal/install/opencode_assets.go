@@ -19,13 +19,20 @@ const opencodeTUISettingsAssetPath = "assets/opencode/tui.json"
 
 // managedOpenCodePluginAssetNames is the bounded set of plugin .ts
 // files the OpenCode installer bundles. The list is intentionally
-// small and explicit: `background-agents`, `model-variants`, and the
-// community `opencode-subagent-statusline`. Excluded plugins such as
-// `sdd-engram` and `logo` are NOT in this list; see the static guard
-// in `static_guards_test.go` for the explicit rejection invariant.
+// small and explicit: `background-agents`, `lore-models`, and the
+// community `opencode-subagent-statusline`. The previous
+// `model-variants.ts` asset was renamed to `lore-models.ts` by the
+// `add-opencode-lore-models-plugin` change; the stale file is
+// cleaned up by the OpenCode install pipeline's manifest-scoped
+// stale-file pass when prior manifest ownership is proven, so
+// upgraded installs that still carry the old file see it backed up
+// and removed on the next reinstall. Excluded plugins such as
+// `sdd-engram` and `logo` are NOT in this list; see the static
+// guard in `static_guards_test.go` for the explicit rejection
+// invariant.
 var managedOpenCodePluginAssetNames = []string{
 	"background-agents.ts",
-	"model-variants.ts",
+	"lore-models.ts",
 	"opencode-subagent-statusline.ts",
 }
 

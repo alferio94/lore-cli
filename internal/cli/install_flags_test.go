@@ -86,9 +86,10 @@ func TestInstallCommandAcceptsOpenCodeTarget(t *testing.T) {
 	for _, want := range []string{
 		"install_target=opencode",
 		"runtime=opencode-config-only",
-		"components=core-pack,opencode-plugins",
-		"plugins=bundled:background-agents,model-variants,opencode-subagent-statusline",
-		"plugins_location=~/.config/opencode/plugins/ (background-agents.ts, model-variants.ts); tui.json registers only opencode-subagent-statusline",
+		"components=core-pack,lore-server-mcp,opencode-plugins",
+		"mcp=remote",
+		"plugins=bundled:background-agents,lore-models,opencode-subagent-statusline",
+		"plugins_location=~/.config/opencode/plugins/ (background-agents.ts, lore-models.ts); tui.json registers only opencode-subagent-statusline",
 		"mcp_lore_ownership=fail-closed-on-foreign",
 		"excluded_plugins=sdd-engram,logo",
 		"mode=dry-run",
@@ -96,7 +97,7 @@ func TestInstallCommandAcceptsOpenCodeTarget(t *testing.T) {
 		"managed_action=create:lore-install.json",
 		"managed_action=create:opencode.json",
 		"managed_action=create:plugins/background-agents.ts",
-		"managed_action=create:plugins/model-variants.ts",
+		"managed_action=create:plugins/lore-models.ts",
 		"managed_action=create:plugins/opencode-subagent-statusline.ts",
 		"managed_action=create:tui.json",
 	} {
@@ -117,12 +118,12 @@ func TestInstallCommandAcceptsOpenCodeTarget(t *testing.T) {
 	}
 	// Defensive: the local plugin .ts files are copied to plugins/ and
 	// are NOT registered in tui.json. The summary must not say the
-	// background-agents / model-variants assets are in tui.json.
+	// background-agents / lore-models assets are in tui.json.
 	for _, forbidden := range []string{
 		"tui.json:background-agents",
-		"tui.json:model-variants",
+		"tui.json:lore-models",
 		"plugins/background-agents.ts:tui.json",
-		"plugins/model-variants.ts:tui.json",
+		"plugins/lore-models.ts:tui.json",
 	} {
 		if strings.Contains(out, forbidden) {
 			t.Fatalf("stdout = %q, want %q to be absent (local plugin .ts files are copied to plugins/, not registered in tui.json)", out, forbidden)
@@ -135,7 +136,7 @@ func TestInstallCommandAcceptsOpenCodeTarget(t *testing.T) {
 		filepath.Join(homeDir, ".config", "opencode", "lore-install.json"),
 		filepath.Join(homeDir, ".config", "opencode", "skills", "sdd-apply", "SKILL.md"),
 		filepath.Join(homeDir, ".config", "opencode", "plugins", "background-agents.ts"),
-		filepath.Join(homeDir, ".config", "opencode", "plugins", "model-variants.ts"),
+		filepath.Join(homeDir, ".config", "opencode", "plugins", "lore-models.ts"),
 		filepath.Join(homeDir, ".config", "opencode", "plugins", "opencode-subagent-statusline.ts"),
 		filepath.Join(homeDir, ".config", "opencode", "tui.json"),
 	} {
@@ -308,13 +309,18 @@ func TestInstallUsageIncludesTargetAndComponentFlags(t *testing.T) {
 		"OpenCode",
 		"opencode-plugins",
 		"background-agents.ts",
-		"model-variants.ts",
+		"lore-models.ts",
 		"opencode-subagent-statusline",
 		"sdd-engram",
 		"logo",
 		"plaintext-token warning",
 		"Ownership contract",
-		"managed_by: lore-cli",
+		"default_agent=lore",
+		"`mode: \"primary\"`",
+		"`mode: \"subagent\"`",
+		"lore-worker",
+		"never grants a `permission: \"allow\"`",
+		"legacy managed_by marker",
 		"fails closed with a typed conflict error",
 		"non-Lore-owned mcp.lore block",
 		// Cleanup slice: the install usage short target list AND the
@@ -324,7 +330,7 @@ func TestInstallUsageIncludesTargetAndComponentFlags(t *testing.T) {
 		// resolution in the test surface).
 		"Usage: lore install [--dry-run] [--yes] [--target pi|opencode|codex|antigravity] [--component <id>]",
 		"Pi stays the default recommended target; OpenCode, Codex, and Antigravity are supported managed targets",
-		"Pi, OpenCode, Codex, and Antigravity support core-pack; Pi/Codex/Antigravity also support lore-server-mcp; OpenCode also supports opencode-plugins",
+		"Pi, OpenCode, Codex, and Antigravity support core-pack; Pi/Codex/Antigravity/OpenCode also support lore-server-mcp; OpenCode also supports opencode-plugins",
 	} {
 		if !strings.Contains(stderr.String(), want) {
 			t.Fatalf("stderr = %q, want substring %q", stderr.String(), want)

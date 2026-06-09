@@ -12,8 +12,11 @@ import (
 
 // TestOpenCodePluginAssetsAreBoundedToManagedSet verifies the bounded
 // plugin asset list: only the three documented plugin .ts files
-// (background-agents, model-variants, opencode-subagent-statusline)
+// (background-agents, lore-models, opencode-subagent-statusline)
 // are rendered, in stable order, and no other plugin name appears.
+// The `add-opencode-lore-models-plugin` change renamed the
+// `model-variants` asset to `lore-models`; the new managed set
+// must NOT include the legacy `model-variants.ts` path.
 func TestOpenCodePluginAssetsAreBoundedToManagedSet(t *testing.T) {
 	pluginFiles, err := renderOpenCodePluginAssets()
 	if err != nil {
@@ -25,15 +28,21 @@ func TestOpenCodePluginAssetsAreBoundedToManagedSet(t *testing.T) {
 	}
 	wantPluginPaths := map[string]bool{
 		"plugins/background-agents.ts":            false,
-		"plugins/model-variants.ts":               false,
+		"plugins/lore-models.ts":                  false,
 		"plugins/opencode-subagent-statusline.ts": false,
-		"tui.json":                                false,
+		"tui.json": false,
+	}
+	forbidden := map[string]bool{
+		"plugins/model-variants.ts": true,
 	}
 	for _, file := range pluginFiles {
 		relative := filepath.ToSlash(file.RelativePath)
 		if _, ok := wantPluginPaths[relative]; !ok {
 			t.Fatalf("renderOpenCodePluginAssets() emitted unexpected file %q (component=%q merge_mode=%q)",
 				relative, file.Component, file.MergeMode)
+		}
+		if forbidden[relative] {
+			t.Fatalf("renderOpenCodePluginAssets() emitted legacy %q; the add-opencode-lore-models-plugin change renamed the asset to lore-models.ts and the legacy path must be removed from the managed set", relative)
 		}
 		wantPluginPaths[relative] = true
 		if file.Component != ComponentOpenCodePlugins {
@@ -209,6 +218,81 @@ func TestOpenCodePluginAssetsNoGentleWordingLeakage(t *testing.T) {
 	}
 }
 
+// TestOpenCodeBundledPluginsContainRuntimeHooks verifies the local
+// plugin files are functional plugin assets, not inert identity stubs.
+// The install path relies on OpenCode auto-discovering these .ts files
+// from ~/.config/opencode/plugins/ rather than registering them in
+// tui.json.
+func TestOpenCodeBundledPluginsContainRuntimeHooks(t *testing.T) {
+	background, err := readOpenCodePluginAsset("background-agents.ts")
+	if err != nil {
+		t.Fatalf("read background-agents asset: %v", err)
+	}
+	backgroundText := string(background)
+	for _, want := range []string{
+		"export const BackgroundAgents",
+		"tool: {",
+		"delegate:",
+		"delegation_read:",
+		"delegation_list:",
+		"experimental.chat.system.transform",
+		"session.idle",
+		".local", "share", "opencode", "delegations",
+	} {
+		if !strings.Contains(backgroundText, want) {
+			t.Fatalf("background-agents.ts missing runtime substring %q; content=%q", want, backgroundText)
+		}
+	}
+	for _, forbidden := range []string{
+		"minimal stub",
+		"intentionally does nothing",
+		"LORE_BACKGROUND_AGENTS_PLUGIN",
+	} {
+		if strings.Contains(backgroundText, forbidden) {
+			t.Fatalf("background-agents.ts still contains inert stub marker %q", forbidden)
+		}
+	}
+
+	variants, err := readOpenCodePluginAsset("lore-models.ts")
+	if err != nil {
+		t.Fatalf("read lore-models asset: %v", err)
+	}
+	variantsText := string(variants)
+	for _, want := range []string{
+		"export const LoreModelsPlugin",
+		"client.provider.list()",
+		"opencode-model-variants.json",
+		"rename(tmpPath, finalPath)",
+		"hotEditAgentModelVariant",
+		"lore_models_set_agent",
+		"lore_models_list_agents",
+		"redactSecretLike",
+	} {
+		if !strings.Contains(variantsText, want) {
+			t.Fatalf("lore-models.ts missing runtime substring %q; content=%q", want, variantsText)
+		}
+	}
+	for _, forbidden := range []string{
+		"minimal stub",
+		"intentionally does nothing",
+		"LORE_MODEL_VARIANTS_PLUGIN",
+		"ModelVariantsPlugin",
+	} {
+		if strings.Contains(variantsText, forbidden) {
+			t.Fatalf("lore-models.ts still contains legacy/stub marker %q", forbidden)
+		}
+	}
+	// The previous `model-variants.ts` asset is no longer bundled
+	// (the add-opencode-lore-models-plugin change renamed the
+	// asset to lore-models.ts). Reading the old path MUST fail
+	// with the explicit not-in-managed-list error.
+	if _, err := readOpenCodePluginAsset("model-variants.ts"); err == nil {
+		t.Fatal("readOpenCodePluginAsset(model-variants.ts) error = nil, want explicit not-in-managed-list rejection after rename")
+	} else if !strings.Contains(err.Error(), "not in the managed plugin asset list") {
+		t.Fatalf("readOpenCodePluginAsset(model-variants.ts) error = %v, want explicit not-in-managed-list rejection", err)
+	}
+}
+
 // TestOpenCodeAdapterRenderWithPluginsIncludesTUISettingsAndPluginFiles
 // verifies that when the `opencode-plugins` component is selected,
 // the adapter's `Render()` output includes the three managed plugin
@@ -230,13 +314,16 @@ func TestOpenCodeAdapterRenderWithPluginsIncludesTUISettingsAndPluginFiles(t *te
 	}
 	for _, want := range []string{
 		"plugins/background-agents.ts",
-		"plugins/model-variants.ts",
+		"plugins/lore-models.ts",
 		"plugins/opencode-subagent-statusline.ts",
 		"tui.json",
 	} {
 		if _, ok := byPath[want]; !ok {
 			t.Fatalf("Render(core-pack+plugins) missing %q; got %v", want, keysOfRendered(byPath))
 		}
+	}
+	if _, ok := byPath["plugins/model-variants.ts"]; ok {
+		t.Fatalf("Render(core-pack+plugins) unexpectedly emits legacy %q; the add-opencode-lore-models-plugin change renamed the asset to lore-models.ts and the legacy path must not be in the managed set", "plugins/model-variants.ts")
 	}
 }
 
@@ -281,7 +368,7 @@ func TestOpenCodeRenderFullSurfaceNoGentleLeakageAcrossAllRenderedFiles(t *testi
 		"/opencode.json",
 		"/tui.json",
 		"/plugins/background-agents.ts",
-		"/plugins/model-variants.ts",
+		"/plugins/lore-models.ts",
 		"/plugins/opencode-subagent-statusline.ts",
 	}
 	for _, file := range rendered {

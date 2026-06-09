@@ -135,7 +135,7 @@ func TestDefaultOpenCodeAdapterRenderProducesAGENTSAndSkills(t *testing.T) {
 	for _, want := range []string{
 		"Managed plugin bundle",
 		"background-agents.ts",
-		"model-variants.ts",
+		"lore-models.ts",
 		"opencode-subagent-statusline",
 		"tui.json",
 		"opencode-plugins",
@@ -323,17 +323,19 @@ func TestOpenCodeMCPConfigRendersRemoteMCPBlock(t *testing.T) {
 	if got := loreMCP["url"]; got != "https://lore.example/v1/mcp" {
 		t.Fatalf("mcp.lore.url = %v, want https://lore.example/v1/mcp", got)
 	}
-	// Ownership contract: the rendered mcp.lore block must carry the
-	// `managed_by: lore-cli` marker so the additive merge in
-	// mergeOpenCodeConfigJSON can detect when an existing mcp.lore
-	// block is Lore-owned vs foreign. A missing or mismatched
-	// marker is what triggers the fail-closed ownership error.
-	if got := loreMCP["managed_by"]; got != "lore-cli" {
-		t.Fatalf("mcp.lore.managed_by = %v, want lore-cli (ownership marker for additive merge)", got)
+	// Native OpenCode MCP schema rejects Lore-only marker fields, so
+	// the renderer must not put managed_by inside mcp.lore. Ownership
+	// is inferred during merge from legacy markers or the remote
+	// /v1/mcp + Authorization shape.
+	if _, present := loreMCP["managed_by"]; present {
+		t.Fatalf("mcp.lore unexpectedly carries managed_by marker; rendered block must stay native-schema-valid: %v", loreMCP)
 	}
 	headers, _ := loreMCP["headers"].(map[string]any)
 	if got := headers["Authorization"]; got != "Bearer secret-token" {
 		t.Fatalf("mcp.lore.headers.Authorization = %v, want Bearer secret-token", got)
+	}
+	if got := payload[opencodeDefaultAgentKey]; got != opencodePrimaryAgentName {
+		t.Fatalf("payload default_agent = %v, want %q", got, opencodePrimaryAgentName)
 	}
 }
 
@@ -370,10 +372,10 @@ func TestOpenCodeMCPConfigRequiresServerURLAndToken(t *testing.T) {
 //   - The `agent` overlay is the only top-level block that
 //     contains a `lore` key (no top-level `lore` metadata block;
 //     the `lore` identity lives under `agent.lore`).
-//   - The local contract for the `agent` block does not include a
-//     documented `default` field. The installer emits no `default`
-//     marker; the primary must be selected explicitly by name
-//     (e.g. `opencode --agent lore`).
+//   - The top-level `default_agent` is `lore` so OpenCode boots into
+//     the managed Lore orchestrator by default.
+//   - The `agent.lore` bypass-style permission is scoped to that
+//     agent only via `permission: "allow"`.
 //   - The orchestrator model fallback path is exercised when the
 //     definition is empty (a zero-value `Definition{}` MUST
 //     resolve to `agentpack.DefaultSDDModel` via the fallback in
@@ -433,8 +435,52 @@ func TestOpenCodeNativeConfigDeclaresLorePrimaryOrchestratorAgent(t *testing.T) 
 	if _, ok := payload["lore"]; ok {
 		t.Fatalf("payload carries top-level `lore` object; want only `agent.lore` (no metadata blob); got keys %v", keysOfMapForOverlay(payload))
 	}
-	if _, ok := agent["default"]; ok {
-		t.Fatalf("agent overlay carries a `default` key; the local contract does not document a default field and the installer must not emit one")
+	if got := payload[opencodeDefaultAgentKey]; got != opencodePrimaryAgentName {
+		t.Fatalf("payload default_agent = %v, want %q", got, opencodePrimaryAgentName)
+	}
+	if got := loreEntry[opencodeAgentModeKey]; got != opencodePrimaryModeValue {
+		t.Fatalf("agent.%s.mode = %v, want %q", opencodePrimaryAgentName, got, opencodePrimaryModeValue)
+	}
+	// The previous `permission: "allow"` bypass on `agent.lore`
+	// was removed by the `add-opencode-lore-models-plugin`
+	// change: the installer must NOT render any `permission`
+	// field on the primary Lore orchestrator. The rendered
+	// `agent` overlay stays inside the documented OpenCode
+	// surface; users who need elevated permissions configure
+	// them out-of-band on a sibling agent.
+	if _, present := loreEntry[opencodePermissionKey]; present {
+		t.Fatalf("agent.%s unexpectedly carries %q; the permission bypass is no longer rendered: %v", opencodePrimaryAgentName, opencodePermissionKey, loreEntry)
+	}
+	if _, ok := payload[opencodePermissionKey]; ok {
+		t.Fatalf("payload unexpectedly carries top-level permission; permission must never be rendered: %v", payload)
+	}
+	// The `lore-worker` repository worker introduced by the
+	// `add-opencode-lore-models-plugin` change MUST be present
+	// in the `agent` overlay with `mode: "subagent"` and no
+	// `permission` field.
+	workerEntry, ok := agent[opencodeLoreWorkerAgentName].(map[string]any)
+	if !ok {
+		t.Fatalf("agent overlay missing %q entry; got keys %v", opencodeLoreWorkerAgentName, keysOfMapForOverlay(agent))
+	}
+	if _, ok := workerEntry["model"]; !ok {
+		t.Fatalf("agent.%s missing model: %v", opencodeLoreWorkerAgentName, workerEntry)
+	}
+	if got, want := workerEntry[opencodeAgentModeKey], opencodeSubagentModeValue; got != want {
+		t.Fatalf("agent.%s.mode = %v, want %q", opencodeLoreWorkerAgentName, got, want)
+	}
+	if _, present := workerEntry[opencodePermissionKey]; present {
+		t.Fatalf("agent.%s unexpectedly carries %q; permission field must NOT be rendered: %v", opencodeLoreWorkerAgentName, opencodePermissionKey, workerEntry)
+	}
+	// Non-lore Lore-managed agents (sdd-* and lore-worker) MUST
+	// render `mode: "subagent"`.
+	for _, phaseAgent := range agentpack.SDDPhaseAgentNames() {
+		entry, ok := agent[phaseAgent].(map[string]any)
+		if !ok {
+			t.Fatalf("agent overlay missing %q entry", phaseAgent)
+		}
+		if got, want := entry[opencodeAgentModeKey], opencodeSubagentModeValue; got != want {
+			t.Fatalf("agent.%s.mode = %v, want %q", phaseAgent, got, want)
+		}
 	}
 }
 
@@ -462,17 +508,25 @@ func TestOpenCodeOrchestratorModelUsesBalancedProfileRoleMapping(t *testing.T) {
 // TestOpenCodeAgentOverlayPrimaryIsLayeredOnTopOfSddPhases is the
 // focused regression gate for the additive layering of the primary
 // `lore` orchestrator entry on top of the 9 sdd-* phase agent
-// entries. The test asserts:
+// entries and the `lore-worker` repository worker introduced by
+// the `add-opencode-lore-models-plugin` change. The test asserts:
 //
-//   - The overlay contains 10 entries (1 primary + 9 sdd-*).
+//   - The overlay contains 11 entries (1 primary + `lore-worker` +
+//     9 sdd-*).
 //   - The primary `lore` entry uses the `ProfileBalanced` orchestrator
-//     model and references the managed AGENTS.md file.
+//     model, renders `mode: "primary"`, and references the managed
+//     AGENTS.md file. The `permission` field MUST NOT be present
+//     (the previous `permission: "allow"` bypass was removed).
+//   - The `lore-worker` entry is present, renders `mode: "subagent"`,
+//     and references the managed `skills/lore-worker/SKILL.md` file.
 //   - Each sdd-* entry uses the per-agent model from agent-config
-//     when present, otherwise the agentpack default, and references
-//     the corresponding `skills/<name>/SKILL.md` file.
+//     when present, otherwise the agentpack default, renders
+//     `mode: "subagent"`, and references the corresponding
+//     `skills/<name>/SKILL.md` file.
 //   - The overlay is compatible with the documented OpenCode
-//     `agent` block contract: `{description, model, prompt}` for the
-//     primary, `{model, prompt}` for the sdd-* entries.
+//     `agent` block contract: `{description, model, mode, prompt}`
+//     for the primary, `{model, mode, prompt}` for the non-lore
+//     Lore-managed agents.
 func TestOpenCodeAgentOverlayPrimaryIsLayeredOnTopOfSddPhases(t *testing.T) {
 	cfg := agentconfig.Config{
 		SchemaVersion: agentconfig.SchemaVersion,
@@ -480,9 +534,10 @@ func TestOpenCodeAgentOverlayPrimaryIsLayeredOnTopOfSddPhases(t *testing.T) {
 			"sdd-apply": {Model: "gpt-5-custom-apply"},
 		},
 	}
-	overlay := opencodeAgentOverlay(agentpack.DefaultDefinition(), cfg)
-	if got, want := len(overlay), 1+len(agentpack.SDDPhaseAgentNames()); got != want {
-		t.Fatalf("opencodeAgentOverlay size = %d, want %d (1 primary + %d sdd-*)", got, want, len(agentpack.SDDPhaseAgentNames()))
+	overlay := opencodeAgentOverlay(agentpack.DefaultDefinition(), cfg, nil)
+	wantCount := 2 + len(agentpack.SDDPhaseAgentNames()) // primary + worker + 9 sdd-*
+	if got, want := len(overlay), wantCount; got != want {
+		t.Fatalf("opencodeAgentOverlay size = %d, want %d (1 primary + 1 worker + %d sdd-*)", got, want, len(agentpack.SDDPhaseAgentNames()))
 	}
 	loreEntry, ok := overlay[opencodePrimaryAgentName].(map[string]any)
 	if !ok {
@@ -497,6 +552,29 @@ func TestOpenCodeAgentOverlayPrimaryIsLayeredOnTopOfSddPhases(t *testing.T) {
 	if _, ok := loreEntry["prompt"]; !ok {
 		t.Fatalf("primary %s entry missing prompt: %v", opencodePrimaryAgentName, loreEntry)
 	}
+	if got, want := loreEntry[opencodeAgentModeKey], opencodePrimaryModeValue; got != want {
+		t.Fatalf("primary %s.%s = %v, want %q", opencodePrimaryAgentName, opencodeAgentModeKey, got, want)
+	}
+	if _, present := loreEntry[opencodePermissionKey]; present {
+		t.Fatalf("primary %s unexpectedly carries %q; permission field must NOT be rendered: %v", opencodePrimaryAgentName, opencodePermissionKey, loreEntry)
+	}
+	workerEntry, ok := overlay[opencodeLoreWorkerAgentName].(map[string]any)
+	if !ok {
+		t.Fatalf("overlay missing %q entry; got keys %v", opencodeLoreWorkerAgentName, keysOfMapForOverlay(overlay))
+	}
+	if _, ok := workerEntry["model"]; !ok {
+		t.Fatalf("%s entry missing model: %v", opencodeLoreWorkerAgentName, workerEntry)
+	}
+	if got, want := workerEntry[opencodeAgentModeKey], opencodeSubagentModeValue; got != want {
+		t.Fatalf("%s.%s = %v, want %q", opencodeLoreWorkerAgentName, opencodeAgentModeKey, got, want)
+	}
+	wantWorkerPrompt := "{file:./" + opencodeLoreWorkerPromptFile + "}"
+	if got, _ := workerEntry["prompt"].(string); got != wantWorkerPrompt {
+		t.Fatalf("%s.prompt = %q, want %q", opencodeLoreWorkerAgentName, got, wantWorkerPrompt)
+	}
+	if _, present := workerEntry[opencodePermissionKey]; present {
+		t.Fatalf("%s unexpectedly carries %q; permission field must NOT be rendered", opencodeLoreWorkerAgentName, opencodePermissionKey)
+	}
 	for _, name := range agentpack.SDDPhaseAgentNames() {
 		entry, ok := overlay[name].(map[string]any)
 		if !ok {
@@ -510,9 +588,84 @@ func TestOpenCodeAgentOverlayPrimaryIsLayeredOnTopOfSddPhases(t *testing.T) {
 		if model != wantModel {
 			t.Fatalf("overlay.%s.model = %q, want %q (per-agent override or default)", name, model, wantModel)
 		}
+		if got, want := entry[opencodeAgentModeKey], opencodeSubagentModeValue; got != want {
+			t.Fatalf("overlay.%s.%s = %v, want %q", name, opencodeAgentModeKey, got, want)
+		}
+		if _, present := entry[opencodePermissionKey]; present {
+			t.Fatalf("overlay.%s unexpectedly carries %q; permission field must NOT be rendered", name, opencodePermissionKey)
+		}
 		wantPrompt := "{file:./skills/" + name + "/SKILL.md}"
 		if got, _ := entry["prompt"].(string); got != wantPrompt {
 			t.Fatalf("overlay.%s.prompt = %q, want %q", name, got, wantPrompt)
+		}
+	}
+}
+
+// TestOpenCodeAgentOverlayPreservesExistingModelAndVariant is the
+// focused regression gate for the `add-opencode-lore-models-plugin`
+// reinstall-preservation contract: when the existing
+// `opencode.json` carries a non-empty `agent.<name>.model` or
+// `agent.<name>.variant` for a Lore-managed agent, the renderer
+// MUST project those values into the managed overlay so the merge
+// preserves them. Agents without an effective variant MUST NOT
+// have a `variant` key invented.
+func TestOpenCodeAgentOverlayPreservesExistingModelAndVariant(t *testing.T) {
+	cfg := agentconfig.Config{SchemaVersion: agentconfig.SchemaVersion}
+	existing := map[string]openCodeExistingAgentEntry{
+		opencodePrimaryAgentName: {Model: "user-orchestrator-model", Variant: "user-orchestrator-variant"},
+		opencodeLoreWorkerAgentName: {
+			Model:   "user-worker-model",
+			Variant: "",
+		},
+		"sdd-design": {Model: "user-design-model", Variant: "user-design-variant"},
+		"sdd-apply":  {Model: "", Variant: "user-apply-variant"},
+		// Foreign agent must be ignored, not preserved.
+		"some-foreign-agent": {Model: "user-foreign-model", Variant: "user-foreign-variant"},
+	}
+	overlay := opencodeAgentOverlay(agentpack.DefaultDefinition(), cfg, existing)
+	primary := overlay[opencodePrimaryAgentName].(map[string]any)
+	if got, want := primary["model"], "user-orchestrator-model"; got != want {
+		t.Fatalf("primary model = %v, want %q (preserved from existing opencode.json)", got, want)
+	}
+	if got, want := primary["variant"], "user-orchestrator-variant"; got != want {
+		t.Fatalf("primary variant = %v, want %q (preserved from existing opencode.json)", got, want)
+	}
+	worker := overlay[opencodeLoreWorkerAgentName].(map[string]any)
+	if got, want := worker["model"], "user-worker-model"; got != want {
+		t.Fatalf("worker model = %v, want %q (preserved from existing opencode.json)", got, want)
+	}
+	if _, present := worker["variant"]; present {
+		t.Fatalf("worker unexpectedly carries variant=%v; empty effective variant must be omitted", worker["variant"])
+	}
+	design := overlay["sdd-design"].(map[string]any)
+	if got, want := design["model"], "user-design-model"; got != want {
+		t.Fatalf("sdd-design model = %v, want %q (preserved from existing opencode.json)", got, want)
+	}
+	if got, want := design["variant"], "user-design-variant"; got != want {
+		t.Fatalf("sdd-design variant = %v, want %q (preserved from existing opencode.json)", got, want)
+	}
+	apply := overlay["sdd-apply"].(map[string]any)
+	if _, present := apply["model"]; !present {
+		t.Fatalf("sdd-apply missing model; want managed default since existing entry was empty")
+	}
+	if got, want := apply["variant"], "user-apply-variant"; got != want {
+		t.Fatalf("sdd-apply variant = %v, want %q (preserved from existing opencode.json)", got, want)
+	}
+	if _, present := overlay["some-foreign-agent"]; present {
+		t.Fatalf("overlay unexpectedly includes foreign agent %q; only Lore-managed agents are rendered", "some-foreign-agent")
+	}
+	// Agents without an effective variant must not have an invented
+	// variant value in the overlay.
+	for _, name := range agentpack.SDDPhaseAgentNames() {
+		if name == "sdd-design" || name == "sdd-apply" {
+			continue
+		}
+		entry, ok := overlay[name].(map[string]any)
+		if !ok {
+			t.Fatalf("overlay missing %q entry", name)
+		}
+		if v, present := entry["variant"]; present {
+			t.Fatalf("overlay.%s.variant = %v, want field omitted (no effective variant)", name, v)
 		}
 	}
 }
@@ -522,8 +675,8 @@ func TestOpenCodeAgentOverlayPrimaryIsLayeredOnTopOfSddPhases(t *testing.T) {
 // primary `lore` orchestrator entry: the managed surface section
 // MUST mention the `agent.lore` entry, the ProfileBalanced model
 // source, the AGENTS.md prompt reference, the explicit-selector
-// instruction (so users know to run `opencode --agent lore`), and
-// the lack of a documented `default` field in the local contract.
+// instruction (so users know `opencode --agent lore` still works),
+// and the managed default_agent + scoped permission behavior.
 func TestOpenCodeAgentsMDDocumentsPrimaryLoreOrchestratorAgent(t *testing.T) {
 	adapter := defaultOpenCodeAdapter()
 	definition := agentpack.DefaultDefinition()
@@ -550,13 +703,28 @@ func TestOpenCodeAgentsMDDocumentsPrimaryLoreOrchestratorAgent(t *testing.T) {
 		"ProfileBalanced.RoleModels[\"orchestrator\"]",
 		"{file:./AGENTS.md}",
 		"opencode --agent lore",
-		"no supported `default` field",
+		"default_agent: \"lore\"",
+		// The add-opencode-lore-models-plugin change removed the
+		// `permission: "allow"` bypass; the AGENTS.md managed
+		// surface copy MUST reflect that the installer never
+		// grants a `permission: "allow"` (or any other) bypass
+		// on `agent.lore`.
+		"never grants a `permission: \"allow\"`",
 		// The managed SDD model declarations section now also lists
 		// the primary `lore` orchestrator model at the top.
 		"- " + opencodePrimaryAgentName + " (primary orchestrator): ",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("AGENTS.md = %q, want substring %q", text, want)
+		}
+	}
+	// The previous `permission: "allow"` bypass phrase MUST NOT
+	// appear anywhere in the AGENTS.md managed surface copy.
+	for _, forbidden := range []string{
+		"`permission: \"allow\"` only on `agent.lore`",
+	} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("AGENTS.md managed surface still contains the removed bypass phrase %q; the add-opencode-lore-models-plugin change removed the `permission: \"allow\"` bypass", forbidden)
 		}
 	}
 }

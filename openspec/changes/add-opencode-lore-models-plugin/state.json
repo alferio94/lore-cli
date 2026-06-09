@@ -1,0 +1,24 @@
+{
+  "change": "add-opencode-lore-models-plugin",
+  "phase": "archive",
+  "status": "completed",
+  "created_at": "2026-06-08T00:00:00Z",
+  "project_key": "lore-cli",
+  "project_id": "86836476-c996-4c1a-b21e-361caab8b8d4",
+  "persistence": {
+    "openspec": "openspec/changes/add-opencode-lore-models-plugin/archive-report.md",
+    "lore_topic_key": "sdd/add-opencode-lore-models-plugin/archive-report",
+    "lore_memory_id": "a7b2da4b-a93c-4240-858b-a363fba5668d"
+  },
+  "next_phase": null,
+  "implementation_started": true,
+  "blocked_on": null,
+  "archived_at": "2026-06-09T00:00:00Z",
+  "decision": {
+    "direct_from_opencode_required": true,
+    "preferred_ux": "floating_selector",
+    "fallback_allowed": "documented_in_opencode_plugin_ux_if_selector_requires_unsupported_internal_apis",
+    "primary_persistence": "hot_edit_opencode_json",
+    "fallback_persistence": "lore_owned_override_or_state_file_optional_only_as_safety_net"
+  }
+}

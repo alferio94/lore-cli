@@ -56,12 +56,15 @@ func TestInitialRenderShowsMenuHintsAndInstallEntry(t *testing.T) {
 	for _, want := range []string{
 		"opencode-plugins",
 		"background-agents",
-		"model-variants",
+		"lore-models",
 		"opencode-subagent-statusline",
 		"sdd-engram",
 		"logo",
 		"config-only projection",
-		"managed_by: lore-cli",
+		"default Lore MCP",
+		"default_agent=lore",
+		"`mode: \"subagent\"`",
+		"no `permission: \"allow\"` bypass",
 		"fail-closed",
 	} {
 		if !strings.Contains(installDescription, want) {
@@ -178,11 +181,14 @@ func TestInstallTargetSelectionSurfacesPiDefaultAndAntigravityMVPGuidance(t *tes
 	for _, want := range []string{
 		"opencode-plugins",
 		"background-agents.ts",
-		"model-variants.ts",
+		"lore-models.ts",
 		"opencode-subagent-statusline",
 		"sdd-engram",
 		"logo",
-		"managed_by: lore-cli",
+		"default Lore MCP",
+		"default_agent=lore",
+		"`mode: \"subagent\"`",
+		"no `permission: \"allow\"` bypass",
 		"fail-closed",
 		"NOT registered in tui.json",
 	} {

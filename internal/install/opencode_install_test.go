@@ -225,7 +225,7 @@ func TestOpenCodeConfigJSONMergeFailsClosedOnForeignMcpLoreBlock(t *testing.T) {
 		"remote",
 		"https://other.example/v1/mcp",
 		"Resolution",
-		"managed_by=lore-cli",
+		"/v1/mcp with Authorization",
 	} {
 		if !strings.Contains(errorText, want) {
 			t.Fatalf("conflict error missing %q substring; got %q", want, errorText)
@@ -254,9 +254,10 @@ func TestOpenCodeConfigJSONMergeFailsClosedOnForeignMcpLoreBlock(t *testing.T) {
 
 // TestOpenCodeConfigJSONMergeAllowsLoreOwnedMcpLoreBlock verifies the
 // additive merge PROCEEDS when the existing mcp.lore block is already
-// Lore-owned (carries the managed_by: lore-cli marker). The merge
-// replaces the Lore-owned subtree from the overlay, preserving all
-// other top-level keys.
+// Lore-owned (legacy managed_by marker or native remote /v1/mcp with
+// Authorization). The merge replaces the Lore-owned subtree from the
+// overlay, preserving all other top-level keys, and drops legacy
+// marker fields so the resulting OpenCode config remains schema-valid.
 func TestOpenCodeConfigJSONMergeAllowsLoreOwnedMcpLoreBlock(t *testing.T) {
 	desired, err := renderOpenCodeMCPConfig(agentpack.DefaultDefinition(), agentconfig.Config{}, "https://lore.example", "new-token")
 	if err != nil {
@@ -299,6 +300,14 @@ func TestOpenCodeConfigJSONMergeAllowsLoreOwnedMcpLoreBlock(t *testing.T) {
 	headers, _ := loreMCP["headers"].(map[string]any)
 	if got := headers["Authorization"]; got != "Bearer new-token" {
 		t.Fatalf("merged payload mcp.lore.headers.Authorization = %v, want Bearer new-token", got)
+	}
+	if _, present := loreMCP["managed_by"]; present {
+		t.Fatalf("merged payload mcp.lore still carries legacy managed_by marker; want native-schema-valid MCP block: %v", loreMCP)
+	}
+
+	nativeExisting := []byte(`{"mcp":{"lore":{"type":"remote","url":"https://lore.example/v1/mcp","headers":{"Authorization":"Bearer old-token"}}}}`)
+	if _, err := mergeOpenCodeConfigJSON(nativeExisting, desired, "opencode.json"); err != nil {
+		t.Fatalf("mergeOpenCodeConfigJSON(native Lore-owned mcp.lore) error = %v, want nil", err)
 	}
 }
 
@@ -954,6 +963,228 @@ func TestOpenCodePlanOpenCodeInstallMigratesLegacyStaleShape(t *testing.T) {
 		t.Fatalf("merged tui.json customTopLevel = %v, want 7 (user content preserved)", got)
 	}
 }
+// TestOpenCodeStaleManagedPluginCleanupRemovesModelVariants is the
+// focused regression gate for the manifest-scoped stale
+// managed-file cleanup introduced by the
+// `add-opencode-lore-models-plugin` change. The test:
+//
+//   - Pre-creates a previous `lore-install.json` manifest that
+//     records `plugins/model-variants.ts` as a Lore-managed plugin
+//     file (the legacy managed asset name from before the rename).
+//   - Pre-creates the on-disk `plugins/model-variants.ts` file
+//     so the stale file actually exists.
+//   - Runs `PlanOpenCodeInstall` and `ExecuteOpenCodeInstall`.
+//   - Verifies the plan records a `delete` action for the stale
+//     `plugins/model-variants.ts` path with a backup-first
+//     contract, the on-disk file is removed by the apply step,
+//     and the backup file is written under the install backup
+//     root.
+//
+// The test then asserts a subsequent install (the rerun after the
+// rename) is idempotent: the manifest-scoped cleanup pass emits
+// NO action because the previous (new) manifest does not record
+// the stale path.
+func TestOpenCodeStaleManagedPluginCleanupRemovesModelVariants(t *testing.T) {
+	homeDir := t.TempDir()
+	layout := ResolveOpenCodeLayout(homeDir)
+	if err := os.MkdirAll(filepath.Join(layout.RootDir, "plugins"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(plugins) error = %v", err)
+	}
+	// Pre-create a previous manifest that records the legacy
+	// `plugins/model-variants.ts` as Lore-managed.
+	previousManifest := Manifest{
+		SchemaVersion: PortableManifestSchemaVersion,
+		Target:        TargetOpenCode,
+		AuthMode:      "config-only",
+		Components:    []ComponentID{ComponentCorePack, ComponentOpenCodePlugins},
+		ManagedFiles: []ManagedFileRecord{
+			{
+				Path:        filepath.Join(layout.RootDir, "plugins", "model-variants.ts"),
+				Component:   ComponentOpenCodePlugins,
+				MergeMode:   MergeModeReplace,
+				ContentHash: "deadbeef",
+			},
+		},
+		BackupRoot:  filepath.Join(layout.RootDir, "backups", "previous"),
+		InstalledAt: "2026-06-01T00:00:00Z",
+	}
+	previousBytes, err := marshalManifest(previousManifest)
+	if err != nil {
+		t.Fatalf("marshalManifest(previous) error = %v", err)
+	}
+	if err := os.WriteFile(layout.ManifestPath, previousBytes, 0o600); err != nil {
+		t.Fatalf("WriteFile(previous manifest) error = %v", err)
+	}
+	// Pre-create the stale on-disk file.
+	stalePath := filepath.Join(layout.RootDir, "plugins", "model-variants.ts")
+	if err := os.WriteFile(stalePath, []byte("// stale model-variants.ts (Lore-managed, pre-rename)"), 0o600); err != nil {
+		t.Fatalf("WriteFile(stale plugin) error = %v", err)
+	}
+
+	service := Service{}
+	now := time.Date(2026, 6, 9, 12, 0, 0, 0, time.UTC)
+	plan, err := service.PlanOpenCodeInstall(InstallRequest{
+		HomeDir:        homeDir,
+		LoreBinaryPath: "/usr/local/bin/lore",
+		LoreConfigDir:  filepath.Join(homeDir, ".lore"),
+		LoreCLIVersion: "v0.1.0",
+		Target:         TargetOpenCode,
+		Components:     []ComponentID{ComponentCorePack, ComponentOpenCodePlugins},
+		Now:            now,
+	})
+	if err != nil {
+		t.Fatalf("PlanOpenCodeInstall() error = %v, want nil", err)
+	}
+	staleAction := findOpenCodePlannedFileAction(plan.Files, "plugins/model-variants.ts")
+	if staleAction == nil {
+		t.Fatalf("PlanOpenCodeInstall() missing stale delete action for plugins/model-variants.ts; got %v", plannedActionSummary(plan.Files))
+	}
+	if staleAction.Action != "delete" {
+		t.Fatalf("stale plugin action = %q, want delete", staleAction.Action)
+	}
+	if staleAction.Component != ComponentOpenCodePlugins {
+		t.Fatalf("stale plugin component = %q, want %q", staleAction.Component, ComponentOpenCodePlugins)
+	}
+	if staleAction.BackupPath == "" {
+		t.Fatal("stale plugin action missing backup path; want backup-first delete")
+	}
+
+	// Apply the plan and verify the on-disk file is removed and
+	// the backup is written.
+	result, err := service.ExecuteOpenCodeInstall(plan, InstallCommandOptions{})
+	if err != nil {
+		t.Fatalf("ExecuteOpenCodeInstall() error = %v, want nil", err)
+	}
+	if len(result.Summary.Failed) > 0 {
+		t.Fatalf("ExecuteOpenCodeInstall() failed files = %v, want none", result.Summary.Failed)
+	}
+	if _, err := os.Stat(stalePath); !os.IsNotExist(err) {
+		t.Fatalf("Stat(stale plugin) err = %v, want file removed by stale cleanup", err)
+	}
+	backupBytes, readErr := os.ReadFile(staleAction.BackupPath)
+	if readErr != nil {
+		t.Fatalf("ReadFile(backup) error = %v, want stale file backed up at %s", readErr, staleAction.BackupPath)
+	}
+	if !strings.Contains(string(backupBytes), "stale model-variants.ts") {
+		t.Fatalf("backup content = %q, want stale model-variants.ts content", string(backupBytes))
+	}
+	// The summary must surface the delete via the Deleted field
+	// and the backup via the BackedUp field.
+	foundDelete := false
+	foundBackedUp := false
+	for _, p := range result.Summary.Deleted {
+		if filepath.ToSlash(p) == "plugins/model-variants.ts" {
+			foundDelete = true
+		}
+	}
+	for _, p := range result.Summary.BackedUp {
+		if filepath.ToSlash(p) == "plugins/model-variants.ts" {
+			foundBackedUp = true
+		}
+	}
+	if !foundDelete {
+		t.Fatalf("result.Summary.Deleted missing plugins/model-variants.ts: %v", result.Summary.Deleted)
+	}
+	if !foundBackedUp {
+		t.Fatalf("result.Summary.BackedUp missing plugins/model-variants.ts: %v", result.Summary.BackedUp)
+	}
+	// The new manifest must NOT record the stale path.
+	for _, rec := range result.Manifest.ManagedFiles {
+		if filepath.Clean(rec.Path) == filepath.Clean(stalePath) {
+			t.Fatalf("new manifest unexpectedly records stale path %q; the stale cleanup must drop it from the manifest", rec.Path)
+		}
+	}
+
+	// Subsequent install: no previous-manifest ownership proof
+	// for the stale path, so the cleanup pass is a no-op.
+	plan2, err := service.PlanOpenCodeInstall(InstallRequest{
+		HomeDir:        homeDir,
+		LoreBinaryPath: "/usr/local/bin/lore",
+		LoreConfigDir:  filepath.Join(homeDir, ".lore"),
+		LoreCLIVersion: "v0.1.0",
+		Target:         TargetOpenCode,
+		Components:     []ComponentID{ComponentCorePack, ComponentOpenCodePlugins},
+		Now:            now,
+	})
+	if err != nil {
+		t.Fatalf("PlanOpenCodeInstall(second) error = %v, want nil", err)
+	}
+	if staleAction := findOpenCodePlannedFileAction(plan2.Files, "plugins/model-variants.ts"); staleAction != nil {
+		t.Fatalf("PlanOpenCodeInstall(second) unexpectedly emits stale delete action for plugins/model-variants.ts; the previous manifest no longer records the stale path: action=%+v", staleAction)
+	}
+}
+
+// TestOpenCodeStaleManagedPluginCleanupLeavesUnownedFilesAlone
+// verifies the manifest-scoped safety gate: a
+// `plugins/model-variants.ts` file that exists on disk WITHOUT
+// prior manifest ownership is left untouched by the cleanup pass.
+// The test pre-creates a stale on-disk file and an unrelated
+// previous manifest that does NOT record the path; the install
+// plan must NOT include a delete action for the file and the
+// execute step must NOT remove it.
+func TestOpenCodeStaleManagedPluginCleanupLeavesUnownedFilesAlone(t *testing.T) {
+	homeDir := t.TempDir()
+	layout := ResolveOpenCodeLayout(homeDir)
+	if err := os.MkdirAll(filepath.Join(layout.RootDir, "plugins"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(plugins) error = %v", err)
+	}
+	// Pre-create a previous manifest that does NOT record the
+	// stale path (the file is user-owned, not Lore-managed).
+	previousManifest := Manifest{
+		SchemaVersion: PortableManifestSchemaVersion,
+		Target:        TargetOpenCode,
+		AuthMode:      "config-only",
+		Components:    []ComponentID{ComponentCorePack},
+		ManagedFiles: []ManagedFileRecord{
+			{
+				Path:        filepath.Join(layout.RootDir, "AGENTS.md"),
+				Component:   ComponentCorePack,
+				MergeMode:   MergeModeReplace,
+				ContentHash: "deadbeef",
+			},
+		},
+		BackupRoot:  filepath.Join(layout.RootDir, "backups", "previous"),
+		InstalledAt: "2026-06-01T00:00:00Z",
+	}
+	previousBytes, err := marshalManifest(previousManifest)
+	if err != nil {
+		t.Fatalf("marshalManifest(previous) error = %v", err)
+	}
+	if err := os.WriteFile(layout.ManifestPath, previousBytes, 0o600); err != nil {
+		t.Fatalf("WriteFile(previous manifest) error = %v", err)
+	}
+	// Pre-create the unowned on-disk file (e.g. a user-owned
+	// `model-variants.ts` plugin that was never managed by Lore).
+	stalePath := filepath.Join(layout.RootDir, "plugins", "model-variants.ts")
+	if err := os.WriteFile(stalePath, []byte("// user-owned model-variants.ts; NOT Lore-managed"), 0o600); err != nil {
+		t.Fatalf("WriteFile(unowned plugin) error = %v", err)
+	}
+
+	service := Service{}
+	now := time.Date(2026, 6, 9, 12, 0, 0, 0, time.UTC)
+	plan, err := service.PlanOpenCodeInstall(InstallRequest{
+		HomeDir:        homeDir,
+		LoreBinaryPath: "/usr/local/bin/lore",
+		LoreConfigDir:  filepath.Join(homeDir, ".lore"),
+		LoreCLIVersion: "v0.1.0",
+		Target:         TargetOpenCode,
+		Components:     []ComponentID{ComponentCorePack, ComponentOpenCodePlugins},
+		Now:            now,
+	})
+	if err != nil {
+		t.Fatalf("PlanOpenCodeInstall() error = %v, want nil", err)
+	}
+	if staleAction := findOpenCodePlannedFileAction(plan.Files, "plugins/model-variants.ts"); staleAction != nil {
+		t.Fatalf("PlanOpenCodeInstall() unexpectedly emits stale delete action for user-owned plugins/model-variants.ts: action=%+v", staleAction)
+	}
+	if _, err := service.ExecuteOpenCodeInstall(plan, InstallCommandOptions{}); err != nil {
+		t.Fatalf("ExecuteOpenCodeInstall() error = %v, want nil", err)
+	}
+	if _, err := os.Stat(stalePath); err != nil {
+		t.Fatalf("Stat(user-owned plugin) err = %v, want user-owned file preserved by cleanup", err)
+	}
+}
+
 func TestOpenCodeInstallSummaryDoesNotEmbedSavedToken(t *testing.T) {
 	homeDir := t.TempDir()
 	service := Service{}
