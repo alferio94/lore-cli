@@ -117,6 +117,11 @@ func TestOpenCodePromptAssetsResolveManagedPaths(t *testing.T) {
 				}
 			}
 		}
+		for _, forbidden := range []string{"lore-pi-runtime", "Pi Lore delegation adapter contract", "_shared/sdd-phase-common"} {
+			if strings.Contains(content, forbidden) {
+				t.Fatalf("prompt asset %q contains forbidden Pi/shared reference %q; content=%q", relative, forbidden, content)
+			}
+		}
 	}
 	for path, seen := range wantPaths {
 		if !seen {

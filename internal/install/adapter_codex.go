@@ -202,9 +202,12 @@ func renderCodexAgentsMD(req RenderRequest) ([]byte, error) {
 		"",
 		"## Notes",
 		"- Codex receives a Lore-managed remote MCP entry pointing at your saved Lore server `/v1/mcp` endpoint.",
-		"- No `codex exec` runner, npm bootstrap, or per-harness configurators are installed by this target.",
+		"- No `codex exec` runner, npm bootstrap, Pi overlays, or plugin behavior are installed by this target.",
 		"",
 		"Load the Lore-managed skill files from `~/.codex/skills` when a task explicitly requires them.",
+		"",
+		"## Canonical Lore instruction",
+		strings.TrimRight(agentpack.RenderOrchestratorSystemInstruction(definition), "\n"),
 	}, "\n") + "\n"
 
 	return []byte(text), nil

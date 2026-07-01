@@ -54,16 +54,7 @@ func RenderOrchestratorSystemInstruction(definition Definition) string {
 		}),
 		"",
 		"Lore MCP context and memory tool selection (harness-neutral canonical guidance):",
-		bulletize([]string{
-			"Prefer MCP Lore Server tools over any deprecated harness-local memory extension (for example, the Pi-native `lore-memory.ts` extension, which is removed and not available in any install path). Tool names may be exposed with harness-specific namespace prefixes; follow the Lore MCP descriptions for the active harness.",
-			"For initial project orientation, use `lore_project_activity` first when available. It returns a bounded, metadata-first activity surface grouped by topic/change and omits full memory content by design.",
-			"Use `lore_project_context` when broader recent project context is needed. It returns compact recent-memory DTOs and omits full memory content.",
-			"Use `lore_memory_search` for targeted memory discovery. Search is filter-driven: pass `type`, `scope`, and `limit`; the `query` text field is not part of the current contract.",
-			"`lore_project_activity`, `lore_project_context`, and `lore_memory_search` accept exactly one of `project_id` or `project_key` per call. Prefer `project_key` when a stable key is known; `project_id` (UUID) is only required when no stable key exists.",
-			"Project activity, project context, and memory search return compact previews/metadata and omit full memory content. Do not assume `content` is present in those payloads.",
-			"To load the full memory body, call `lore_memory_get` with the memory `id` plus exactly one project identity: `project_id` (UUID) or `project_key`. Prefer `project_key` when available and supported by the active MCP tool description.",
-			"Harness-local or harness-native fallback tools (for example, legacy `lore_search` / `lore_save` / `lore_get_observation` Pi-extension tools) may have older schemas and MUST only be used when MCP Lore Server tools are unavailable. Do not mix the two surfaces in the same workflow.",
-		}),
+		bulletize(LoreMCPGuidance()),
 		"",
 		"SDD workflow:",
 		bulletize([]string{

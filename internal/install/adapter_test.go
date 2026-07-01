@@ -2,6 +2,7 @@ package install
 
 import (
 	"context"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -382,14 +383,11 @@ func TestDefaultPiAdapterCanonicalAssetsStayByteCompatibleWithProjectedDefinitio
 	}
 }
 
-func TestLegacyDelegationAssetIsQuarantinedAndNotPartOfCurrentInstall(t *testing.T) {
-	asset, err := installAssets.ReadFile("assets/pi/lore-delegation.ts")
-	if err != nil {
-		t.Fatalf("ReadFile lore-delegation.ts error = %v, want nil", err)
-	}
-	text := string(asset)
-	if !containsAll(text, "LEGACY QUARANTINED ASSET", "do not treat its worker envelope schema as the current contract") {
-		t.Fatalf("lore-delegation.ts = %q, want quarantine banner", text)
+func TestLegacyDelegationAssetIsRemovedFromActiveEmbed(t *testing.T) {
+	if _, err := installAssets.ReadFile("assets/pi/lore-delegation.ts"); err == nil {
+		t.Fatal("ReadFile lore-delegation.ts succeeded, want removed from active embed tree")
+	} else if !strings.Contains(err.Error(), "file does not exist") && !os.IsNotExist(err) {
+		t.Fatalf("ReadFile lore-delegation.ts error = %v, want not-exist", err)
 	}
 }
 

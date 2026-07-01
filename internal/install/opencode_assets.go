@@ -6,6 +6,8 @@ import (
 	"io/fs"
 	"path/filepath"
 	"sort"
+
+	"github.com/alferio94/lore-cli/internal/agentpack"
 )
 
 //go:embed assets/opencode/*
@@ -19,17 +21,9 @@ const opencodePluginAssetDir = "assets/opencode/plugins"
 // TUI settings JSON file bundled with the installer.
 const opencodeTUISettingsAssetPath = "assets/opencode/tui.json"
 
-// opencodePromptAssetDir is the embed.FS directory containing the
-// OpenCode-native prompt files bundled with the installer. These are
-// separate from portable `skills/<agent>/SKILL.md` assets so later
-// native OpenCode config can point agents at prompt files without
-// depending on skill layout.
-const opencodePromptAssetDir = "assets/opencode/prompts"
-
-// managedOpenCodePromptAssets maps embedded prompt asset paths to the
-// managed paths written under ~/.config/opencode. Keep this list
-// explicit so missing prompt files fail at render time instead of
-// silently producing an opencode.json prompt reference with no file.
+// managedOpenCodePromptAssets maps canonical prompt names to the managed paths
+// written under ~/.config/opencode. The content is rendered from internal/agentpack
+// at install/plan time; checked-in prompt markdown is not the source of truth.
 var managedOpenCodePromptAssets = map[string]string{
 	"lore.md":        "prompts/lore.md",
 	"lore-worker.md": "prompts/lore-worker.md",
@@ -64,27 +58,50 @@ var excludedOpenCodePluginNames = []string{
 	"logo",
 }
 
-// readOpenCodePromptAsset returns the bundled content for an
-// OpenCode-native prompt asset by its relative embedded path (for
-// example "sdd/apply.md"). It rejects paths that are not in the
-// explicit managed prompt map so callers cannot accidentally render
-// arbitrary embedded files.
+// renderOpenCodePromptAssets returns OpenCode-native prompt files rendered from
+// canonical agentpack contracts. Prompt assets are part of the core OpenCode pack
+// because native agent config points to `./prompts/...` paths rather than
+// plugin-owned runtime shims.
 func readOpenCodePromptAsset(name string) ([]byte, error) {
-	managedPath, ok := managedOpenCodePromptAssets[name]
-	if !ok || managedPath == "" {
-		return nil, fmt.Errorf("opencode prompt %q is not in the managed prompt asset list", name)
-	}
-	data, err := opencodeInstallAssets.ReadFile(filepath.ToSlash(filepath.Join(opencodePromptAssetDir, name)))
+	content, err := renderOpenCodePromptAsset(name)
 	if err != nil {
-		return nil, fmt.Errorf("read opencode prompt asset %q: %w", name, err)
+		return nil, err
 	}
-	return data, nil
+	return []byte(content), nil
 }
 
-// renderOpenCodePromptAssets returns the bundled OpenCode-native
-// prompt files as rendered managed files. Prompt assets are part of
-// the core OpenCode pack because the later native agent config points
-// to `./prompts/...` paths rather than plugin-owned runtime shims.
+func renderOpenCodePromptAsset(name string) (string, error) {
+	if _, ok := managedOpenCodePromptAssets[name]; !ok {
+		return "", fmt.Errorf("opencode prompt %q is not in the managed prompt asset list", name)
+	}
+	switch name {
+	case "lore.md":
+		return agentpack.RenderOpenCodeOrchestratorPrompt(agentpack.DefaultDefinition()), nil
+	case "lore-worker.md":
+		return agentpack.RenderOpenCodeWorkerPrompt(), nil
+	case "sdd/init.md":
+		return agentpack.RenderOpenCodeSDDPrompt(agentpack.PhaseInit)
+	case "sdd/explore.md":
+		return agentpack.RenderOpenCodeSDDPrompt(agentpack.PhaseExplore)
+	case "sdd/propose.md":
+		return agentpack.RenderOpenCodeSDDPrompt(agentpack.PhaseProposal)
+	case "sdd/spec.md":
+		return agentpack.RenderOpenCodeSDDPrompt(agentpack.PhaseSpec)
+	case "sdd/design.md":
+		return agentpack.RenderOpenCodeSDDPrompt(agentpack.PhaseDesign)
+	case "sdd/tasks.md":
+		return agentpack.RenderOpenCodeSDDPrompt(agentpack.PhaseTasks)
+	case "sdd/apply.md":
+		return agentpack.RenderOpenCodeSDDPrompt(agentpack.PhaseApply)
+	case "sdd/verify.md":
+		return agentpack.RenderOpenCodeSDDPrompt(agentpack.PhaseVerify)
+	case "sdd/archive.md":
+		return agentpack.RenderOpenCodeSDDPrompt(agentpack.PhaseArchive)
+	default:
+		return "", fmt.Errorf("unsupported opencode prompt %q", name)
+	}
+}
+
 func renderOpenCodePromptAssets() ([]RenderedFile, error) {
 	names := make([]string, 0, len(managedOpenCodePromptAssets))
 	for name := range managedOpenCodePromptAssets {
@@ -94,7 +111,7 @@ func renderOpenCodePromptAssets() ([]RenderedFile, error) {
 
 	rendered := make([]RenderedFile, 0, len(names))
 	for _, name := range names {
-		content, err := readOpenCodePromptAsset(name)
+		content, err := renderOpenCodePromptAsset(name)
 		if err != nil {
 			return nil, err
 		}
@@ -102,7 +119,7 @@ func renderOpenCodePromptAssets() ([]RenderedFile, error) {
 			Component:    ComponentCorePack,
 			RelativePath: filepath.ToSlash(managedOpenCodePromptAssets[name]),
 			MergeMode:    MergeModeReplace,
-			Content:      content,
+			Content:      []byte(content),
 		})
 	}
 	return rendered, nil

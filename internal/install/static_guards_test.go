@@ -19,14 +19,10 @@ import (
 // excluded because they may legitimately mention these patterns in negative regression
 // assertions or historical references.
 func TestNoActiveSourceTeachesStalePiEnvelopeContract(t *testing.T) {
-	repoRoot, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("os.Getwd: %v", err)
-	}
+	repoRoot, absRoot := repoInternalRoot(t)
 	// Walk only internal/ — the same scope as the opencodeready-package
 	// guard.
-	absRoot := filepath.Join(repoRoot, "internal")
-	_ = filepath.WalkDir(absRoot, func(path string, d os.DirEntry, walkErr error) error {
+	if err := filepath.WalkDir(absRoot, func(path string, d os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
@@ -40,7 +36,10 @@ func TestNoActiveSourceTeachesStalePiEnvelopeContract(t *testing.T) {
 		if strings.HasSuffix(name, "_test.go") {
 			return nil
 		}
-		rel, _ := filepath.Rel(repoRoot, path)
+		rel, err := filepath.Rel(repoRoot, path)
+		if err != nil {
+			return err
+		}
 		content, err := os.ReadFile(path)
 		if err != nil {
 			return err
@@ -64,7 +63,9 @@ func TestNoActiveSourceTeachesStalePiEnvelopeContract(t *testing.T) {
 			}
 		}
 		return nil
-	})
+	}); err != nil {
+		t.Fatalf("filepath.WalkDir(%q) error = %v", absRoot, err)
+	}
 }
 
 // TestNoActiveSourceTeachesLegacyDelegationOwnership is a focused static guard for
@@ -73,12 +74,8 @@ func TestNoActiveSourceTeachesStalePiEnvelopeContract(t *testing.T) {
 // The current owner is `lore-pi-runtime`; the legacy extension is currently
 // disabled/blocked. Test files are excluded.
 func TestNoActiveSourceTeachesLegacyDelegationOwnership(t *testing.T) {
-	repoRoot, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("os.Getwd: %v", err)
-	}
-	absRoot := filepath.Join(repoRoot, "internal")
-	_ = filepath.WalkDir(absRoot, func(path string, d os.DirEntry, walkErr error) error {
+	repoRoot, absRoot := repoInternalRoot(t)
+	if err := filepath.WalkDir(absRoot, func(path string, d os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
@@ -92,7 +89,10 @@ func TestNoActiveSourceTeachesLegacyDelegationOwnership(t *testing.T) {
 		if strings.HasSuffix(name, "_test.go") {
 			return nil
 		}
-		rel, _ := filepath.Rel(repoRoot, path)
+		rel, err := filepath.Rel(repoRoot, path)
+		if err != nil {
+			return err
+		}
 		content, err := os.ReadFile(path)
 		if err != nil {
 			return err
@@ -116,7 +116,34 @@ func TestNoActiveSourceTeachesLegacyDelegationOwnership(t *testing.T) {
 			}
 		}
 		return nil
-	})
+	}); err != nil {
+		t.Fatalf("filepath.WalkDir(%q) error = %v", absRoot, err)
+	}
+}
+
+func repoInternalRoot(t *testing.T) (string, string) {
+	t.Helper()
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("os.Getwd: %v", err)
+	}
+	for {
+		goMod := filepath.Join(dir, "go.mod")
+		if info, statErr := os.Stat(goMod); statErr == nil && !info.IsDir() {
+			internalRoot := filepath.Join(dir, "internal")
+			if info, statErr := os.Stat(internalRoot); statErr != nil {
+				t.Fatalf("stat intended internal root %q: %v", internalRoot, statErr)
+			} else if !info.IsDir() {
+				t.Fatalf("intended internal root %q is not a directory", internalRoot)
+			}
+			return dir, internalRoot
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatalf("could not locate repository root with go.mod from %q", dir)
+		}
+		dir = parent
+	}
 }
 
 // TestDeprecatedLoreMemoryAssetNotEmbedded is a focused guard for the spec
@@ -207,6 +234,58 @@ func TestOpenCodeBundledPluginAssetsExcludeSddEngramAndLogo(t *testing.T) {
 // assets MUST NOT contain any Gentle-authored copy. The test
 // inspects every byte of every bundled asset (including tui.json)
 // and rejects any of the documented forbidden tokens.
+func TestOpenCodePromptMarkdownAssetsNotEmbedded(t *testing.T) {
+	assetFS := opencodeEmbeddedAssetFS()
+	if err := fs.WalkDir(assetFS, "assets/opencode", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if strings.HasPrefix(path, "assets/opencode/prompts/") || strings.HasSuffix(path, ".md") {
+			t.Fatalf("OpenCode prompt asset %q is embedded; prompts must be rendered from internal/agentpack", path)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("fs.WalkDir(assets/opencode) error = %v", err)
+	}
+}
+
+func TestHarnessRenderedOutputsUseCanonicalContracts(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		adapter HarnessAdapter
+		target  TargetID
+	}{
+		{name: "opencode", adapter: defaultOpenCodeAdapter(), target: TargetOpenCode},
+		{name: "pi", adapter: defaultPiAdapter(), target: TargetPi},
+		{name: "codex", adapter: defaultCodexAdapter(), target: TargetCodex},
+		{name: "antigravity", adapter: defaultAntigravityAdapter(), target: TargetAntigravity},
+	} {
+		rendered, err := tc.adapter.Render(context.Background(), RenderRequest{Target: tc.target, ServerURL: "https://lore.example", SavedToken: "test-token"})
+		if err != nil {
+			t.Fatalf("%s Render error = %v", tc.name, err)
+		}
+		joined := renderedContent(rendered)
+		if !strings.Contains(joined, "Lore") {
+			t.Fatalf("%s rendered output missing Lore marker", tc.name)
+		}
+		if strings.Contains(joined, "Final output status must be one of: `completed`, `running`, `needs_user_input`, `failed`") {
+			t.Fatalf("%s rendered output contains stale final-status contract", tc.name)
+		}
+	}
+}
+
+func renderedContent(files []RenderedFile) string {
+	var b strings.Builder
+	for _, file := range files {
+		b.Write(file.Content)
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
 func TestOpenCodeBundledPluginAssetsNoGentleWordingLeakage(t *testing.T) {
 	assetFS := opencodeEmbeddedAssetFS()
 	forbidden := []string{

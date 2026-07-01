@@ -301,6 +301,44 @@ func TestOpenCodeConfigJSONMergeReplacesManagedAgentsAndRemovesLegacyRefs(t *tes
 	}
 }
 
+func TestOpenCodeConfigJSONMergePreservesCustomSkillsPaths(t *testing.T) {
+	desired, err := renderOpenCodeNativeConfig(agentpack.DefaultDefinition(), agentconfig.Config{})
+	if err != nil {
+		t.Fatalf("renderOpenCodeNativeConfig() error = %v, want nil", err)
+	}
+	existing := []byte(`{
+		"skills": {"paths":["~/work/opencode/custom-skills","~/.config/opencode/skills"]}
+	}`)
+	merged, err := mergeOpenCodeConfigJSON(existing, desired, "opencode.json")
+	if err != nil {
+		t.Fatalf("mergeOpenCodeConfigJSON(custom skills.paths) error = %v, want nil", err)
+	}
+	if err := validateOpenCodeStartupSafeConfig(merged, opencodeConfigFileName); err != nil {
+		t.Fatalf("validateOpenCodeStartupSafeConfig(custom skills.paths) error = %v, want nil", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(merged, &payload); err != nil {
+		t.Fatalf("decode merged payload: %v", err)
+	}
+	skills := payload[opencodeSkillsDirKey].(map[string]any)
+	if _, present := skills["path"]; present {
+		t.Fatalf("legacy skills.path survived custom-path merge: %v", skills)
+	}
+	paths, ok := skills["paths"].([]any)
+	if !ok {
+		t.Fatalf("skills.paths = %v, want array", skills["paths"])
+	}
+	want := []string{"~/work/opencode/custom-skills", opencodeSkillsDirPath}
+	if len(paths) != len(want) {
+		t.Fatalf("skills.paths = %v, want %v", paths, want)
+	}
+	for i, wantPath := range want {
+		if paths[i] != wantPath {
+			t.Fatalf("skills.paths[%d] = %v, want %q; full list %v", i, paths[i], wantPath, paths)
+		}
+	}
+}
+
 func TestOpenCodeTUIJSONMergePreservesUserPluginsWithoutLegacyRefs(t *testing.T) {
 	desired, err := readOpenCodeTUISettingsAsset()
 	if err != nil {

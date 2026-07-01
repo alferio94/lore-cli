@@ -233,7 +233,7 @@ func TestDefaultManagedAgentAssetsTeachCanonicalMemoryToolSelection(t *testing.T
 		"Tool names may be exposed with harness-specific namespace prefixes",
 		"use `lore_project_activity` first when available",
 		"Use `lore_project_context` when broader recent project context is needed.",
-		"Use `lore_memory_search` for targeted discovery.",
+		"Use `lore_memory_search` for targeted memory discovery.",
 		"pass `type`, `scope`, and `limit`; do not pass query text",
 		"`lore_project_activity`, `lore_project_context`, and `lore_memory_search` accept exactly one of `project_id` (UUID) or `project_key` per call.",
 		"Prefer `project_key` when a stable key is known",

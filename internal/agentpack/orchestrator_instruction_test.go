@@ -44,20 +44,20 @@ func TestRenderOrchestratorSystemInstructionTeachesCanonicalMemoryToolSelection(
 
 	for _, want := range []string{
 		"Lore MCP context and memory tool selection (harness-neutral canonical guidance):",
-		"Prefer MCP Lore Server tools over any deprecated harness-local memory extension",
+		"Prefer MCP Lore Server tools over deprecated harness-local memory extensions",
 		"Tool names may be exposed with harness-specific namespace prefixes",
 		"use `lore_project_activity` first when available",
 		"Use `lore_project_context` when broader recent project context is needed.",
 		"Use `lore_memory_search` for targeted memory discovery.",
-		"`lore_project_activity`, `lore_project_context`, and `lore_memory_search` accept exactly one of `project_id` or `project_key` per call.",
+		"`lore_project_activity`, `lore_project_context`, and `lore_memory_search` accept exactly one of `project_id` (UUID) or `project_key` per call.",
 		"Prefer `project_key` when a stable key is known",
-		"omit full memory content. Do not assume `content` is present",
+		"OMIT full `content`. Do not assume `content` is present",
 		"call `lore_memory_get` with the memory `id` plus exactly one project identity: `project_id` (UUID) or `project_key`",
 		"Harness-local or harness-native fallback tools",
 		"MUST only be used when MCP Lore Server tools are unavailable.",
 		// The deprecated Pi-native extension must be named explicitly so future
 		// readers know it was removed (not just omitted).
-		"the Pi-native `lore-memory.ts` extension, which is removed and not available in any install path",
+		"The Pi-native `lore-memory.ts` extension was removed and is not available in any install path",
 	} {
 		if !strings.Contains(instruction, want) {
 			t.Fatalf("instruction missing canonical memory-tool snippet %q", want)

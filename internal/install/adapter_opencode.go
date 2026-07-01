@@ -407,7 +407,7 @@ func renderOpenCodeManagedSkills(req RenderRequest) []RenderedFile {
 			"name: " + skillDirName,
 			"description: " + agent.Description,
 			"---",
-			agent.Body,
+			renderOpenCodeManagedSkillBody(agent),
 		}, "\n")
 		if !strings.HasSuffix(content, "\n") {
 			content += "\n"
@@ -420,6 +420,35 @@ func renderOpenCodeManagedSkills(req RenderRequest) []RenderedFile {
 		})
 	}
 	return rendered
+}
+
+func renderOpenCodeManagedSkillBody(agent agentpack.ManagedAgent) string {
+	if agent.Name == agentpack.RoleLoreWorker {
+		return strings.TrimRight(agentpack.RenderOpenCodeWorkerPrompt(), "\n")
+	}
+	if phase, ok := openCodePhaseForManagedAgent(agent); ok {
+		prompt, err := agentpack.RenderOpenCodeSDDPrompt(phase)
+		if err == nil {
+			return strings.TrimRight(prompt, "\n")
+		}
+	}
+	return strings.TrimRight(agent.Body, "\n")
+}
+
+func openCodePhaseForManagedAgent(agent agentpack.ManagedAgent) (agentpack.PhaseID, bool) {
+	if agent.Phase != "" {
+		for _, phase := range agentpack.OrderedPhaseIDs() {
+			if agent.Phase == phase {
+				return phase, true
+			}
+		}
+	}
+	for _, phase := range agentpack.OrderedPhaseIDs() {
+		if agent.Name == agentpack.PhaseAgentName(phase) {
+			return phase, true
+		}
+	}
+	return "", false
 }
 
 func renderOpenCodeExtendedSkills(req RenderRequest) []RenderedFile {
@@ -444,6 +473,9 @@ func renderOpenCodeExtendedSkills(req RenderRequest) []RenderedFile {
 // harness.
 func OpenCodeSkillPathResolver() agentpack.SkillPathResolver {
 	return agentpackSkillPathResolverFunc(func(ref agentpack.SkillRef) string {
+		if ref.Shared {
+			return filepath.ToSlash(filepath.Join("~/.config/opencode/skills", ref.Name+".md"))
+		}
 		return filepath.ToSlash(filepath.Join("~/.config/opencode/skills", ref.Name, "SKILL.md"))
 	})
 }
@@ -1091,12 +1123,12 @@ func validateOpenCodeStartupSafeConfig(data []byte, path string) error {
 		}
 	}
 	if skills, ok := payload[opencodeSkillsDirKey].(map[string]any); ok {
-		paths, ok := skills["paths"].([]any)
-		if !ok || len(paths) != 1 || paths[0] != opencodeSkillsDirPath {
-			return fmt.Errorf("validate %s startup-safe shape: skills.paths = %v, want [%q]", path, skills["paths"], opencodeSkillsDirPath)
-		}
 		if _, present := skills["path"]; present {
 			return fmt.Errorf("validate %s startup-safe shape: skills.path is not schema-safe; use skills.paths", path)
+		}
+		paths, ok := skills["paths"].([]any)
+		if !ok || !openCodeStringListContains(paths, opencodeSkillsDirPath) {
+			return fmt.Errorf("validate %s startup-safe shape: skills.paths = %v, want to include %q", path, skills["paths"], opencodeSkillsDirPath)
 		}
 	} else {
 		return fmt.Errorf("validate %s startup-safe shape: %q must be an object", path, opencodeSkillsDirKey)
@@ -1107,6 +1139,15 @@ func validateOpenCodeStartupSafeConfig(data []byte, path string) error {
 		}
 	}
 	return nil
+}
+
+func openCodeStringListContains(values []any, want string) bool {
+	for _, value := range values {
+		if got, ok := value.(string); ok && got == want {
+			return true
+		}
+	}
+	return false
 }
 
 func validateOpenCodeManagedAgentShape(path, name string, entry map[string]any) error {
