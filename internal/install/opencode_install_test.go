@@ -158,6 +158,276 @@ func TestOpenCodeConfigJSONMergeIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestOpenCodeConfigJSONMergePreservesNativeLoreMCPExactly(t *testing.T) {
+	desired, err := renderOpenCodeMCPConfig(agentpack.DefaultDefinition(), agentconfig.Config{}, "https://lore.example", "new-token")
+	if err != nil {
+		t.Fatalf("renderOpenCodeMCPConfig() error = %v, want nil", err)
+	}
+	existing := []byte(`{
+		"mcp": {
+			"lore": {
+				"type": "remote",
+				"url": "https://lore.example/v1/mcp",
+				"enabled": false,
+				"headers": {"Authorization": "Bearer existing-token", "X-User": "keep-me"}
+			},
+			"other": {"type":"stdio", "command":"keep-me"}
+		},
+		"agent": {"custom-agent": {"mode":"subagent", "model":"custom/model", "prompt":"custom"}},
+		"provider": {"custom": {"npm": "@custom/provider"}}
+	}`)
+	merged, err := mergeOpenCodeConfigJSON(existing, desired, "opencode.json")
+	if err != nil {
+		t.Fatalf("mergeOpenCodeConfigJSON(existing native mcp.lore) error = %v, want nil", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(merged, &payload); err != nil {
+		t.Fatalf("decode merged payload: %v", err)
+	}
+	mcp := payload["mcp"].(map[string]any)
+	lore := mcp["lore"].(map[string]any)
+	if got := lore["enabled"]; got != false {
+		t.Fatalf("mcp.lore.enabled = %v, want preserved false", got)
+	}
+	headers := lore["headers"].(map[string]any)
+	if got := headers["Authorization"]; got != "Bearer existing-token" {
+		t.Fatalf("mcp.lore Authorization = %v, want existing token preserved exactly", got)
+	}
+	if got := headers["X-User"]; got != "keep-me" {
+		t.Fatalf("mcp.lore X-User = %v, want custom header preserved", got)
+	}
+	if got := mcp["other"].(map[string]any)["command"]; got != "keep-me" {
+		t.Fatalf("mcp.other.command = %v, want user MCP preserved", got)
+	}
+	agents := payload[opencodeAgentsKey].(map[string]any)
+	if _, ok := agents["custom-agent"]; !ok {
+		t.Fatalf("custom user agent missing after merge; got %v", keysOfMap(agents))
+	}
+	if _, ok := payload["provider"]; !ok {
+		t.Fatalf("custom provider/settings missing after merge; got keys %v", keysOfMap(payload))
+	}
+	if err := validateOpenCodeStartupSafeConfig(merged, opencodeConfigFileName); err != nil {
+		t.Fatalf("validateOpenCodeStartupSafeConfig(merged) error = %v, want nil", err)
+	}
+}
+
+func TestOpenCodeConfigJSONMergePreservesNativeLoreMCPWhenDesiredOmitsMCP(t *testing.T) {
+	desired, err := renderOpenCodeNativeConfig(agentpack.DefaultDefinition(), agentconfig.Config{})
+	if err != nil {
+		t.Fatalf("renderOpenCodeNativeConfig() error = %v, want nil", err)
+	}
+	existing := []byte(`{"mcp":{"lore":{"type":"remote","url":"https://existing.example/v1/mcp","enabled":false,"headers":{"Authorization":"Bearer existing-token"}},"other":{"type":"stdio","command":"keep-me"}},"theme":"solarized"}`)
+	merged, err := mergeOpenCodeConfigJSON(existing, desired, "opencode.json")
+	if err != nil {
+		t.Fatalf("mergeOpenCodeConfigJSON(native mcp.lore with desired MCP omitted) error = %v, want nil", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(merged, &payload); err != nil {
+		t.Fatalf("decode merged payload: %v", err)
+	}
+	mcp := payload["mcp"].(map[string]any)
+	lore := mcp["lore"].(map[string]any)
+	if got := lore["url"]; got != "https://existing.example/v1/mcp" {
+		t.Fatalf("mcp.lore.url = %v, want existing native URL preserved", got)
+	}
+	if got := lore["enabled"]; got != false {
+		t.Fatalf("mcp.lore.enabled = %v, want existing value preserved", got)
+	}
+	if got := lore["headers"].(map[string]any)["Authorization"]; got != "Bearer existing-token" {
+		t.Fatalf("mcp.lore Authorization = %v, want existing token preserved", got)
+	}
+	if got := mcp["other"].(map[string]any)["command"]; got != "keep-me" {
+		t.Fatalf("mcp.other.command = %v, want unrelated MCP preserved", got)
+	}
+}
+
+func TestOpenCodeConfigJSONMergeReplacesManagedAgentsAndRemovesLegacyRefs(t *testing.T) {
+	desired, err := renderOpenCodeMCPConfig(agentpack.DefaultDefinition(), agentconfig.Config{}, "https://lore.example", "secret-token")
+	if err != nil {
+		t.Fatalf("renderOpenCodeMCPConfig() error = %v, want nil", err)
+	}
+	existing := []byte(`{
+		"agent": {
+			"lore": {"mode":"primary", "model":"old", "prompt":"{file:./AGENTS.md}", "tools":{"task":true}, "permission":{"task":"allow"}},
+			"lore-worker": {"mode":"subagent", "model":"old", "prompt":"{file:./skills/lore-worker/SKILL.md}", "tools":{"question":true}},
+			"sdd-apply": {"mode":"subagent", "model":"old", "prompt":"{file:./skills/sdd-apply/SKILL.md}"},
+			"user-agent": {"mode":"subagent", "model":"user/model", "prompt":"user"}
+		},
+		"plugin": ["user-plugin", "background-agents.ts"],
+		"plugins": ["lore-models.ts"],
+		"skills": {"path":"~/.config/opencode/skills"}
+	}`)
+	merged, err := mergeOpenCodeConfigJSON(existing, desired, "opencode.json")
+	if err != nil {
+		t.Fatalf("mergeOpenCodeConfigJSON(legacy managed refs) error = %v, want nil", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(merged, &payload); err != nil {
+		t.Fatalf("decode merged payload: %v", err)
+	}
+	if _, present := payload["plugins"]; present {
+		t.Fatalf("legacy plugins key survived opencode.json merge: %v", payload["plugins"])
+	}
+	plugins := payload["plugin"].([]any)
+	if len(plugins) != 1 || plugins[0] != "user-plugin" {
+		t.Fatalf("opencode.json plugin refs = %v, want only user-plugin preserved", plugins)
+	}
+	skills := payload[opencodeSkillsDirKey].(map[string]any)
+	if _, present := skills["path"]; present {
+		t.Fatalf("stale skills.path survived opencode.json merge: %v", skills)
+	}
+	paths, ok := skills["paths"].([]any)
+	if !ok || len(paths) != 1 || paths[0] != opencodeSkillsDirPath {
+		t.Fatalf("skills.paths = %v, want [%q]", skills["paths"], opencodeSkillsDirPath)
+	}
+	agents := payload[opencodeAgentsKey].(map[string]any)
+	if _, ok := agents["user-agent"]; !ok {
+		t.Fatalf("user-owned agent missing after managed-agent replacement; got %v", keysOfMap(agents))
+	}
+	for _, name := range []string{opencodePrimaryAgentName, opencodeLoreWorkerAgentName, "sdd-apply"} {
+		entry := agents[name].(map[string]any)
+		if _, present := entry["tools"]; present {
+			t.Fatalf("agent.%s retained deprecated tools block: %v", name, entry)
+		}
+		if got, _ := entry[opencodeAgentPromptKey].(string); strings.Contains(got, "./skills/") || !strings.Contains(got, "./prompts/") {
+			t.Fatalf("agent.%s.prompt = %q, want native prompt path", name, got)
+		}
+	}
+	assertOpenCodePrimaryPermission(t, agents[opencodePrimaryAgentName].(map[string]any))
+	assertOpenCodeSubagentPermission(t, opencodeLoreWorkerAgentName, agents[opencodeLoreWorkerAgentName].(map[string]any))
+	assertOpenCodeSubagentPermission(t, "sdd-apply", agents["sdd-apply"].(map[string]any))
+	if err := validateOpenCodeStartupSafeConfig(merged, opencodeConfigFileName); err != nil {
+		t.Fatalf("validateOpenCodeStartupSafeConfig(merged) error = %v, want nil", err)
+	}
+}
+
+func TestOpenCodeTUIJSONMergePreservesUserPluginsWithoutLegacyRefs(t *testing.T) {
+	desired, err := readOpenCodeTUISettingsAsset()
+	if err != nil {
+		t.Fatalf("readOpenCodeTUISettingsAsset() error = %v, want nil", err)
+	}
+	existing := []byte(`{"plugin":["user-plugin","background-agents.ts","opencode-subagent-statusline"],"theme":"solarized"}`)
+	merged, err := mergeOpenCodeConfigJSON(existing, desired, "tui.json")
+	if err != nil {
+		t.Fatalf("mergeOpenCodeConfigJSON(tui plugins) error = %v, want nil", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(merged, &payload); err != nil {
+		t.Fatalf("decode merged tui.json: %v", err)
+	}
+	plugins := payload["plugin"].([]any)
+	want := []string{"user-plugin"}
+	if len(plugins) != len(want) {
+		t.Fatalf("plugin list = %v, want %v", plugins, want)
+	}
+	for i, wantPlugin := range want {
+		if plugins[i] != wantPlugin {
+			t.Fatalf("plugin[%d] = %v, want %q; full list %v", i, plugins[i], wantPlugin, plugins)
+		}
+	}
+	for _, plugin := range plugins {
+		if isLegacyOpenCodePluginReference(plugin.(string)) {
+			t.Fatalf("legacy plugin reference survived tui merge: %v", plugins)
+		}
+	}
+	if got := payload["theme"]; got != "solarized" {
+		t.Fatalf("theme = %v, want preserved solarized", got)
+	}
+}
+
+// TestOpenCodePlanRejectsInvalidStartupShapeBeforeWrite verifies the
+// startup-safe validation gate runs after merge and before any on-disk
+// replacement can happen.
+func TestOpenCodePlanRejectsInvalidStartupShapeBeforeWrite(t *testing.T) {
+	home := t.TempDir()
+	layout := ResolveOpenCodeLayout(home)
+	if err := os.MkdirAll(layout.RootDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(opencode root) error = %v", err)
+	}
+	valid, err := renderOpenCodeNativeConfig(agentpack.DefaultDefinition(), agentconfig.Config{})
+	if err != nil {
+		t.Fatalf("renderOpenCodeNativeConfig() error = %v, want nil", err)
+	}
+	if err := os.WriteFile(layout.Paths[opencodeJSONPathKey], valid, 0o600); err != nil {
+		t.Fatalf("WriteFile(existing opencode.json) error = %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(valid, &payload); err != nil {
+		t.Fatalf("decode valid config: %v", err)
+	}
+	agents := payload[opencodeAgentsKey].(map[string]any)
+	worker := agents[opencodeLoreWorkerAgentName].(map[string]any)
+	worker[opencodeAgentPromptKey] = "{file:./skills/lore-worker/SKILL.md}"
+	invalid, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("encode invalid desired config: %v", err)
+	}
+	_, _, err = planOpenCodeRenderedFileAction(layout, RenderedFile{
+		Component:    ComponentCorePack,
+		RelativePath: opencodeConfigFileName,
+		MergeMode:    MergeModeAdditiveJSON,
+		Content:      invalid,
+	}, filepath.Join(layout.RootDir, "backups", "test"))
+	if err == nil {
+		t.Fatal("planOpenCodeRenderedFileAction(invalid startup shape) error = nil, want failure")
+	}
+	if !strings.Contains(err.Error(), "agent.lore-worker.prompt") {
+		t.Fatalf("plan error = %v, want startup-safe prompt validation failure", err)
+	}
+	after, readErr := os.ReadFile(layout.Paths[opencodeJSONPathKey])
+	if readErr != nil {
+		t.Fatalf("ReadFile(existing opencode.json) error = %v", readErr)
+	}
+	if string(after) != string(valid) {
+		t.Fatalf("existing opencode.json changed during planning; got %q want original %q", string(after), string(valid))
+	}
+}
+
+func TestOpenCodePlanRejectsDeprecatedToolsBlockBeforeWrite(t *testing.T) {
+	home := t.TempDir()
+	layout := ResolveOpenCodeLayout(home)
+	if err := os.MkdirAll(layout.RootDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(opencode root) error = %v", err)
+	}
+	valid, err := renderOpenCodeNativeConfig(agentpack.DefaultDefinition(), agentconfig.Config{})
+	if err != nil {
+		t.Fatalf("renderOpenCodeNativeConfig() error = %v, want nil", err)
+	}
+	if err := os.WriteFile(layout.Paths[opencodeJSONPathKey], valid, 0o600); err != nil {
+		t.Fatalf("WriteFile(existing opencode.json) error = %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(valid, &payload); err != nil {
+		t.Fatalf("decode valid config: %v", err)
+	}
+	agents := payload[opencodeAgentsKey].(map[string]any)
+	worker := agents[opencodeLoreWorkerAgentName].(map[string]any)
+	worker["tools"] = map[string]any{opencodePermissionTaskKey: true}
+	invalid, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("encode invalid desired config: %v", err)
+	}
+	_, _, err = planOpenCodeRenderedFileAction(layout, RenderedFile{
+		Component:    ComponentCorePack,
+		RelativePath: opencodeConfigFileName,
+		MergeMode:    MergeModeAdditiveJSON,
+		Content:      invalid,
+	}, filepath.Join(layout.RootDir, "backups", "test"))
+	if err == nil {
+		t.Fatal("planOpenCodeRenderedFileAction(deprecated tools block) error = nil, want failure")
+	}
+	if !strings.Contains(err.Error(), "agent.lore-worker.tools") || !strings.Contains(err.Error(), "deprecated") {
+		t.Fatalf("plan error = %v, want deprecated tools validation failure", err)
+	}
+	after, readErr := os.ReadFile(layout.Paths[opencodeJSONPathKey])
+	if readErr != nil {
+		t.Fatalf("ReadFile(existing opencode.json) error = %v", readErr)
+	}
+	if string(after) != string(valid) {
+		t.Fatalf("existing opencode.json changed during planning; got %q want original %q", string(after), string(valid))
+	}
+}
+
 // TestOpenCodeConfigJSONMergeRejectsInvalidExistingJSON verifies the
 // merge returns an error rather than silently dropping user content
 // when the existing file is not valid JSON.
@@ -336,21 +606,54 @@ func TestOpenCodeConfigJSONMergeIgnoresOwnershipForTUIJSON(t *testing.T) {
 	if got := payload["theme"]; got != "solarized" {
 		t.Fatalf("merged tui.json theme = %v, want solarized (user content preserved)", got)
 	}
-	// Post-repair shape: the singular `plugin` string array from
-	// the desired payload is present, and the legacy plural
-	// `plugins` array of objects is dropped.
+	// Post-repair shape: the user plugin from the legacy plural
+	// object array is converted to the singular `plugin` string
+	// array, and no Lore-managed statusline plugin is added.
 	plugin, ok := payload["plugin"].([]any)
 	if !ok {
 		t.Fatalf("merged tui.json missing singular `plugin` string array; got keys %v", keysOfMap(payload))
 	}
-	if len(plugin) != 1 || plugin[0] != opencodeCommunityStatuslinePlugin {
-		t.Fatalf("merged tui.json `plugin` = %v, want [%q]", plugin, opencodeCommunityStatuslinePlugin)
+	wantPlugins := []string{"user-plugin"}
+	if len(plugin) != len(wantPlugins) {
+		t.Fatalf("merged tui.json `plugin` = %v, want %v", plugin, wantPlugins)
+	}
+	for i, want := range wantPlugins {
+		if plugin[i] != want {
+			t.Fatalf("merged tui.json `plugin`[%d] = %v, want %q; full list %v", i, plugin[i], want, plugin)
+		}
 	}
 	if _, ok := payload["plugins"]; ok {
 		t.Fatalf("merged tui.json unexpectedly carries legacy plural `plugins` array; want native singular `plugin` string array")
 	}
 	if _, ok := payload["lore"]; ok {
 		t.Fatalf("merged tui.json unexpectedly carries top-level `lore` object after repair: %v", payload)
+	}
+}
+
+func TestOpenCodePlanOpenCodeInstallDoesNotWriteMissingAgentConfig(t *testing.T) {
+	homeDir := t.TempDir()
+	loreConfigDir := filepath.Join(t.TempDir(), "lore-config")
+	store := agentconfig.NewStore(loreConfigDir)
+	agentConfigPath, err := store.Path()
+	if err != nil {
+		t.Fatalf("agent-config Path() error = %v", err)
+	}
+
+	service := Service{AgentConfigStore: store}
+	_, err = service.PlanOpenCodeInstall(InstallRequest{
+		HomeDir:        homeDir,
+		LoreBinaryPath: "/usr/local/bin/lore",
+		LoreConfigDir:  loreConfigDir,
+		LoreCLIVersion: "v0.1.0",
+		Target:         TargetOpenCode,
+		Components:     []ComponentID{ComponentCorePack},
+		Now:            time.Date(2026, 6, 9, 12, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("PlanOpenCodeInstall() error = %v, want nil", err)
+	}
+	if _, err := os.Stat(agentConfigPath); !os.IsNotExist(err) {
+		t.Fatalf("agent-config stat err = %v, want missing after read-only planning", err)
 	}
 }
 
@@ -486,8 +789,8 @@ func TestOpenCodePlanOpenCodeInstallBacksUpAndUpdatesExistingOpenCodeJSON(t *tes
 //   - Return a *OpenCodeMCPConfigOwnershipError (no generic error).
 //   - Record the opencode.json plan action as `conflicted` (not
 //     `update` / `create` / `unchanged`).
-//   - Write the existing file to the managed backup path BEFORE
-//     surfacing the conflict (so the user can recover).
+//   - Record the managed backup path for user guidance without
+//     writing it during the pure plan phase.
 //   - Leave the on-disk opencode.json UNTOUCHED (no managed write
 //     happens on a conflict).
 //
@@ -536,7 +839,7 @@ func TestOpenCodePlanOpenCodeInstallFailsClosedOnForeignMcpLore(t *testing.T) {
 		t.Fatalf("conflict.ExistingURL = %q, want https://other.example/v1/mcp", conflict.ExistingURL)
 	}
 	if conflict.BackupPath == "" {
-		t.Fatal("conflict.BackupPath = \"\", want managed backup path written before the conflict surfaced")
+		t.Fatal("conflict.BackupPath = \"\", want managed backup path recorded for conflict guidance")
 	}
 
 	// The on-disk opencode.json MUST still hold the original
@@ -549,14 +852,10 @@ func TestOpenCodePlanOpenCodeInstallFailsClosedOnForeignMcpLore(t *testing.T) {
 		t.Fatalf("on-disk opencode.json after conflict = %q, want original foreign content %q (conflict must not write the merged file)", string(stillOnDisk), string(foreignExisting))
 	}
 
-	// The conflict backup MUST exist on disk and MUST contain the
-	// original foreign content.
-	backupBytes, backupReadErr := os.ReadFile(conflict.BackupPath)
-	if backupReadErr != nil {
-		t.Fatalf("ReadFile(conflict backup) error = %v, want backup at %s", backupReadErr, conflict.BackupPath)
-	}
-	if string(backupBytes) != string(foreignExisting) {
-		t.Fatalf("conflict backup content = %q, want original foreign content %q", string(backupBytes), string(foreignExisting))
+	// Planning is pure: the conflict backup path is reported for
+	// guidance, but no backup file is written during plan/dry-run.
+	if _, backupStatErr := os.Stat(conflict.BackupPath); !os.IsNotExist(backupStatErr) {
+		t.Fatalf("Stat(conflict backup) err = %v, want no backup file written during plan", backupStatErr)
 	}
 
 	// The conflict error message must NOT leak either the existing
@@ -799,13 +1098,14 @@ func TestOpenCodeConfigJSONMergeMigratesLegacyTuiJSONPluralPlugins(t *testing.T)
 	if got := payload["customTopLevel"]; got != float64(7) {
 		t.Fatalf("merged tui.json customTopLevel = %v, want 7 (user content preserved)", got)
 	}
-	// Native singular `plugin` string array is present.
+	// Native singular `plugin` string array is present and empty:
+	// the previous statusline registration is no longer managed.
 	plugin, ok := payload["plugin"].([]any)
 	if !ok {
 		t.Fatalf("merged tui.json missing native singular `plugin` string array; got keys %v", keysOfMap(payload))
 	}
-	if len(plugin) != 1 || plugin[0] != opencodeCommunityStatuslinePlugin {
-		t.Fatalf("merged tui.json `plugin` = %v, want [%q]", plugin, opencodeCommunityStatuslinePlugin)
+	if len(plugin) != 0 {
+		t.Fatalf("merged tui.json `plugin` = %v, want empty list", plugin)
 	}
 }
 
@@ -953,8 +1253,8 @@ func TestOpenCodePlanOpenCodeInstallMigratesLegacyStaleShape(t *testing.T) {
 	if !ok {
 		t.Fatalf("merged tui.json missing native singular `plugin` string array; got keys %v", keysOfMap(mergedTUIPayload))
 	}
-	if len(plugin) != 1 || plugin[0] != opencodeCommunityStatuslinePlugin {
-		t.Fatalf("merged tui.json `plugin` = %v, want [%q]", plugin, opencodeCommunityStatuslinePlugin)
+	if len(plugin) != 0 {
+		t.Fatalf("merged tui.json `plugin` = %v, want empty list", plugin)
 	}
 	if got := mergedTUIPayload["theme"]; got != "solarized" {
 		t.Fatalf("merged tui.json theme = %v, want solarized (user content preserved)", got)
@@ -963,6 +1263,7 @@ func TestOpenCodePlanOpenCodeInstallMigratesLegacyStaleShape(t *testing.T) {
 		t.Fatalf("merged tui.json customTopLevel = %v, want 7 (user content preserved)", got)
 	}
 }
+
 // TestOpenCodeStaleManagedPluginCleanupRemovesModelVariants is the
 // focused regression gate for the manifest-scoped stale
 // managed-file cleanup introduced by the
@@ -1182,6 +1483,64 @@ func TestOpenCodeStaleManagedPluginCleanupLeavesUnownedFilesAlone(t *testing.T) 
 	}
 	if _, err := os.Stat(stalePath); err != nil {
 		t.Fatalf("Stat(user-owned plugin) err = %v, want user-owned file preserved by cleanup", err)
+	}
+}
+
+func TestOpenCodeStaleManagedPluginCleanupDoesNotDeleteTUIOnComponentOverride(t *testing.T) {
+	homeDir := t.TempDir()
+	layout := ResolveOpenCodeLayout(homeDir)
+	if err := os.MkdirAll(layout.RootDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(rootDir) error = %v", err)
+	}
+	previousManifest := Manifest{
+		SchemaVersion: PortableManifestSchemaVersion,
+		Target:        TargetOpenCode,
+		AuthMode:      "config-only",
+		Components:    []ComponentID{ComponentCorePack, ComponentOpenCodePlugins},
+		ManagedFiles: []ManagedFileRecord{
+			{
+				Path:        filepath.Join(layout.RootDir, "tui.json"),
+				Component:   ComponentOpenCodePlugins,
+				MergeMode:   MergeModeAdditiveJSON,
+				ContentHash: "deadbeef",
+			},
+		},
+		BackupRoot:  filepath.Join(layout.RootDir, "backups", "previous"),
+		InstalledAt: "2026-06-01T00:00:00Z",
+	}
+	previousBytes, err := marshalManifest(previousManifest)
+	if err != nil {
+		t.Fatalf("marshalManifest(previous) error = %v", err)
+	}
+	if err := os.WriteFile(layout.ManifestPath, previousBytes, 0o600); err != nil {
+		t.Fatalf("WriteFile(previous manifest) error = %v", err)
+	}
+	tuiPath := filepath.Join(layout.RootDir, "tui.json")
+	if err := os.WriteFile(tuiPath, []byte(`{"theme":"solarized","plugin":[]}`), 0o600); err != nil {
+		t.Fatalf("WriteFile(tui.json) error = %v", err)
+	}
+
+	service := Service{}
+	plan, err := service.PlanOpenCodeInstall(InstallRequest{
+		HomeDir:        homeDir,
+		LoreBinaryPath: "/usr/local/bin/lore",
+		LoreConfigDir:  filepath.Join(homeDir, ".lore"),
+		LoreCLIVersion: "v0.1.0",
+		Target:         TargetOpenCode,
+		Components:     []ComponentID{ComponentCorePack},
+		Now:            time.Date(2026, 6, 9, 12, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("PlanOpenCodeInstall() error = %v, want nil", err)
+	}
+	if action := findOpenCodePlannedFileAction(plan.Files, "tui.json"); action != nil && action.Action == "delete" {
+		t.Fatalf("PlanOpenCodeInstall() emitted delete for tui.json on component override: action=%+v", action)
+	}
+	if _, err := service.ExecuteOpenCodeInstall(plan, InstallCommandOptions{}); err != nil {
+		t.Fatalf("ExecuteOpenCodeInstall() error = %v, want nil", err)
+	}
+	if _, err := os.Stat(tuiPath); err != nil {
+		t.Fatalf("Stat(tui.json) err = %v, want tui.json preserved", err)
 	}
 }
 

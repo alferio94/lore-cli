@@ -36,7 +36,7 @@ func mergeAntigravityMCPConfig(existing, desired []byte) ([]byte, error) {
 // for the install pipeline: the existing user-owned or third-party
 // MCP configuration would have been silently overwritten by an
 // additive merge, so the installer refuses the merge and the install
-// plan records a backup-before-abort action.
+// plan records a backup-path guidance.
 //
 // The error fields are intentionally narrow and redacted:
 //
@@ -46,9 +46,8 @@ func mergeAntigravityMCPConfig(existing, desired []byte) ([]byte, error) {
 //     `managed_by` field, or "" if the field is missing.
 //   - ExistingType / ExistingURL name the conflicting block's shape
 //     (e.g. "remote", "stdio", the URL). The token is never surfaced.
-//   - BackupPath is the absolute path of the backup written before
-//     the installer aborts; "" if no backup was written (no existing
-//     file or backup target could not be created).
+//   - BackupPath is the absolute managed backup path reported for
+//     conflict guidance; planning does not write this file.
 //
 // The Error() string is safe to print in CLI diagnostics: it names the
 // path, the existing managed_by value, the existing type, the existing
@@ -78,7 +77,7 @@ func (e *OpenCodeMCPConfigOwnershipError) Error() string {
 	backup := strings.TrimSpace(e.BackupPath)
 	backupClause := ""
 	if backup != "" {
-		backupClause = " A backup of the existing file is at " + backup + "."
+		backupClause = " The managed backup path for an apply-time backup is " + backup + "."
 	}
 	return fmt.Sprintf(
 		"refusing to overwrite non-Lore-owned `mcp.lore` block in %s: existing managed_by=%q type=%q url=%q."+
@@ -94,7 +93,7 @@ func (e *OpenCodeMCPConfigOwnershipError) Error() string {
 // IsOpenCodeMCPConfigOwnershipConflict reports whether err is an
 // OpenCodeMCPConfigOwnershipError. The install pipeline uses this to
 // distinguish a fail-closed ownership conflict from a generic JSON
-// decode error and to surface a backup-before-abort action in the
+// decode error and to surface a conflict action with backup-path guidance in the
 // plan.
 func IsOpenCodeMCPConfigOwnershipConflict(err error) bool {
 	var ownership *OpenCodeMCPConfigOwnershipError
@@ -117,7 +116,9 @@ func AsOpenCodeMCPConfigOwnershipConflict(err error) *OpenCodeMCPConfigOwnership
 // lore-cli` marker, but the current OpenCode MCP schema rejects
 // additional fields inside remote MCP blocks. The native-schema-safe
 // ownership signal is therefore a remote `/v1/mcp` endpoint with an
-// Authorization header; foreign URLs or missing auth still fail closed.
+// Authorization header. When the desired render also carries an MCP URL,
+// that URL must match; when the desired render omits MCP (package not
+// selected), a schema-safe existing mcp.lore block is preserved as-is.
 func opencodeMCPLoreOwnership(block any, desiredURL string) bool {
 	object, ok := block.(map[string]any)
 	if !ok {
@@ -133,8 +134,11 @@ func opencodeMCPLoreOwnership(block any, desiredURL string) bool {
 	}
 	url, _ := object["url"].(string)
 	normalizedURL := strings.TrimRight(strings.TrimSpace(url), "/")
+	if !strings.HasSuffix(normalizedURL, "/v1/mcp") {
+		return false
+	}
 	normalizedDesiredURL := strings.TrimRight(strings.TrimSpace(desiredURL), "/")
-	if normalizedDesiredURL == "" || normalizedURL != normalizedDesiredURL || !strings.HasSuffix(normalizedURL, "/v1/mcp") {
+	if normalizedDesiredURL != "" && normalizedURL != normalizedDesiredURL {
 		return false
 	}
 	headers, ok := object["headers"].(map[string]any)
@@ -204,9 +208,10 @@ func inspectOpenCodeMCPConfigOwnership(existing []byte, relativePath string, des
 // existing payload with the stale legacy shape silently removed.
 // The post-repair shape is:
 //
-//   - For `opencode.json`: drop the top-level `lore` block (the
-//     legacy `lore`-shaped renderer no longer produces this block;
-//     the new renderer emits the native `agent` overlay).
+//   - For `opencode.json`: drop the top-level `lore` block and any
+//     top-level legacy `plugins` key. The legacy `lore`-shaped renderer
+//     no longer produces this block; the new renderer emits the native
+//     `agent` overlay and rejects plugin-driven runtime emulation.
 //   - For `tui.json`: drop the top-level `lore` block AND drop the
 //     plural `plugins` (an array of objects) key. The native
 //     tui.json uses a singular `plugin` string array; the legacy
@@ -237,23 +242,42 @@ func migrateOpenCodeLegacyStaleShape(payload map[string]any, relativePath string
 		delete(payload, opencodeLoreBlockKey)
 		changed = true
 	}
-	if normalized == "tui.json" {
-		// The legacy tui.json used a plural `plugins` array of
-		// objects (e.g. `[{"id": "...", "owner": "community", ...}]`).
-		// The native OpenCode tui.json uses a singular `plugin`
-		// string array (e.g. `["opencode-subagent-statusline"]`).
-		// The plural `plugins` key is dropped during merge so the
-		// next render replaces it with the native singular form.
-		// The values are intentionally NOT preserved: the new
-		// shape uses bare plugin names with no per-entry metadata,
-		// and the legacy per-entry fields (`owner`, `source`,
-		// `enabled`) had no native equivalent in the new shape.
-		if _, present := payload["plugins"]; present {
+	if normalized == "opencode.json" || normalized == "tui.json" {
+		// Legacy installs and user hand-edits may use either plural
+		// `plugins` object arrays or singular `plugin` string arrays.
+		// Drop only Lore-managed legacy runtime-emulation references,
+		// convert schema-safe user plugin ids to the singular native
+		// shape, and let the desired tui.json render define the current
+		// managed plugin list (empty for native-agent installs).
+		if filtered, pluginChanged := filterOpenCodePluginReferences(payload["plugin"]); pluginChanged {
+			if len(filtered) == 0 {
+				delete(payload, "plugin")
+			} else {
+				payload["plugin"] = filtered
+			}
+			changed = true
+		}
+		if filtered, pluginsChanged := filterOpenCodePluginReferences(payload["plugins"]); pluginsChanged {
+			mergedPlugins := mergeOpenCodePluginStrings(payload["plugin"], filtered)
+			if len(mergedPlugins) == 0 {
+				delete(payload, "plugin")
+			} else {
+				payload["plugin"] = mergedPlugins
+			}
 			delete(payload, "plugins")
 			changed = true
 		}
 	}
 	if normalized == "opencode.json" {
+		if skills, ok := payload[opencodeSkillsDirKey].(map[string]any); ok {
+			if legacyPath, present := skills["path"]; present {
+				if _, hasPaths := skills["paths"]; !hasPaths {
+					skills["paths"] = []any{legacyPath}
+				}
+				delete(skills, "path")
+				changed = true
+			}
+		}
 		if mcp, ok := payload["mcp"].(map[string]any); ok {
 			if lore, ok := mcp["lore"].(map[string]any); ok {
 				if value, ok := lore["managed_by"].(string); ok && strings.TrimSpace(value) == opencodeManagedByValue {
@@ -288,7 +312,7 @@ func migrateOpenCodeLegacyStaleShape(payload map[string]any, relativePath string
 //   - Returns a typed *OpenCodeMCPConfigOwnershipError when the
 //     existing `opencode.json` carries a non-Lore-owned `mcp.lore`
 //     block. The conflict is detected before the merge runs so the
-//     installer can fail closed with a backup-before-abort action
+//     installer can fail closed with a backup-path guidance
 //     and never silently clobber a user-owned or third-party MCP
 //     configuration. The `tui.json` file is fully Lore-owned and
 //     does not carry an `mcp.lore` block, so the conflict path is
@@ -333,13 +357,291 @@ func mergeOpenCodeConfigJSON(existing, desired []byte, relativePath string) ([]b
 	if err := json.Unmarshal(existing, &parsed); err != nil {
 		return nil, fmt.Errorf("decode existing %s: %w", relativePath, err)
 	}
+	normalizedPath := filepathToSlash(relativePath)
 	migrated, _ := migrateOpenCodeLegacyStaleShape(parsed, relativePath)
+	var preservedLoreMCP map[string]any
+	if normalizedPath == "opencode.json" {
+		preservedLoreMCP = nativeOpenCodeLoreMCPForPreservation(migrated, desiredOpenCodeLoreMCPURL(desired))
+		removeOpenCodeManagedAgentEntries(migrated)
+	}
 	data, err := json.MarshalIndent(migrated, "", "  ")
 	if err != nil {
 		return nil, fmt.Errorf("encode migrated existing %s: %w", relativePath, err)
 	}
 	existing = append(data, '\n')
-	return mergeJSONObject(existing, desired, relativePath, relativePath, relativePath)
+	merged, err := mergeJSONObject(existing, desired, relativePath, relativePath, relativePath)
+	if err != nil {
+		return nil, err
+	}
+	if normalizedPath == "opencode.json" {
+		merged, err = preserveOpenCodeSkillsPaths(migrated, desired, merged, relativePath)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if normalizedPath == "opencode.json" && preservedLoreMCP != nil {
+		merged, err = restoreOpenCodeLoreMCP(merged, preservedLoreMCP, relativePath)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if normalizedPath == "tui.json" {
+		merged, err = preserveOpenCodeTUIPluginList(existing, merged, relativePath)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return merged, nil
+}
+
+func preserveOpenCodeSkillsPaths(existing map[string]any, desired, merged []byte, relativePath string) ([]byte, error) {
+	existingSkills, _ := existing[opencodeSkillsDirKey].(map[string]any)
+	if len(existingSkills) == 0 {
+		return merged, nil
+	}
+	desiredPayload := map[string]any{}
+	if err := json.Unmarshal(desired, &desiredPayload); err != nil {
+		return nil, fmt.Errorf("decode desired %s for skills.paths preservation: %w", relativePath, err)
+	}
+	desiredSkills, _ := desiredPayload[opencodeSkillsDirKey].(map[string]any)
+	mergedPaths := mergeOpenCodeStringListValues(existingSkills["paths"], desiredSkills["paths"])
+	if len(mergedPaths) == 0 {
+		return merged, nil
+	}
+	mergedPayload := map[string]any{}
+	if err := json.Unmarshal(merged, &mergedPayload); err != nil {
+		return nil, fmt.Errorf("decode merged %s for skills.paths preservation: %w", relativePath, err)
+	}
+	skills, _ := mergedPayload[opencodeSkillsDirKey].(map[string]any)
+	if skills == nil {
+		skills = map[string]any{}
+		mergedPayload[opencodeSkillsDirKey] = skills
+	}
+	skills["paths"] = mergedPaths
+	delete(skills, "path")
+	data, err := json.MarshalIndent(mergedPayload, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("encode merged %s after skills.paths preservation: %w", relativePath, err)
+	}
+	return append(data, '\n'), nil
+}
+
+func mergeOpenCodeStringListValues(values ...any) []any {
+	merged := make([]any, 0)
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		for _, item := range openCodeStringListValues(value) {
+			item = strings.TrimSpace(item)
+			if item == "" {
+				continue
+			}
+			if _, exists := seen[item]; exists {
+				continue
+			}
+			seen[item] = struct{}{}
+			merged = append(merged, item)
+		}
+	}
+	return merged
+}
+
+func openCodeStringListValues(value any) []string {
+	switch typed := value.(type) {
+	case string:
+		return []string{typed}
+	case []any:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if text, ok := item.(string); ok {
+				out = append(out, text)
+			}
+		}
+		return out
+	case []string:
+		return append([]string(nil), typed...)
+	default:
+		return nil
+	}
+}
+
+func nativeOpenCodeLoreMCPForPreservation(payload map[string]any, desiredURL string) map[string]any {
+	mcp, ok := payload["mcp"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	lore, ok := mcp["lore"].(map[string]any)
+	if !ok || !opencodeMCPLoreOwnership(lore, desiredURL) {
+		return nil
+	}
+	if _, hasLegacyMarker := lore["managed_by"]; hasLegacyMarker {
+		return nil
+	}
+	return cloneStringAnyMap(lore)
+}
+
+func removeOpenCodeManagedAgentEntries(payload map[string]any) {
+	agents, ok := payload[opencodeAgentsKey].(map[string]any)
+	if !ok {
+		return
+	}
+	for _, name := range expectedOpenCodeManagedAgentNames() {
+		delete(agents, name)
+	}
+	if len(agents) == 0 {
+		delete(payload, opencodeAgentsKey)
+	}
+}
+
+func restoreOpenCodeLoreMCP(merged []byte, lore map[string]any, relativePath string) ([]byte, error) {
+	payload := map[string]any{}
+	if err := json.Unmarshal(merged, &payload); err != nil {
+		return nil, fmt.Errorf("decode merged %s for mcp.lore preservation: %w", relativePath, err)
+	}
+	mcp, ok := payload["mcp"].(map[string]any)
+	if !ok {
+		mcp = map[string]any{}
+		payload["mcp"] = mcp
+	}
+	mcp["lore"] = cloneStringAnyMap(lore)
+	data, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("encode merged %s after mcp.lore preservation: %w", relativePath, err)
+	}
+	return append(data, '\n'), nil
+}
+
+func preserveOpenCodeTUIPluginList(existing, merged []byte, relativePath string) ([]byte, error) {
+	existingPayload := map[string]any{}
+	if err := json.Unmarshal(existing, &existingPayload); err != nil {
+		return nil, fmt.Errorf("decode existing %s for plugin preservation: %w", relativePath, err)
+	}
+	mergedPayload := map[string]any{}
+	if err := json.Unmarshal(merged, &mergedPayload); err != nil {
+		return nil, fmt.Errorf("decode merged %s for plugin preservation: %w", relativePath, err)
+	}
+	plugins := mergeOpenCodePluginStrings(existingPayload["plugin"], mergedPayload["plugin"])
+	if len(plugins) > 0 {
+		mergedPayload["plugin"] = plugins
+	}
+	data, err := json.MarshalIndent(mergedPayload, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("encode merged %s after plugin preservation: %w", relativePath, err)
+	}
+	return append(data, '\n'), nil
+}
+
+func mergeOpenCodePluginStrings(existing, desired any) []any {
+	merged := make([]any, 0)
+	seen := map[string]struct{}{}
+	appendPlugin := func(value any) {
+		name, ok := openCodePluginName(value)
+		name = strings.TrimSpace(name)
+		if !ok || name == "" || isLegacyOpenCodePluginReference(name) {
+			return
+		}
+		if _, exists := seen[name]; exists {
+			return
+		}
+		seen[name] = struct{}{}
+		merged = append(merged, name)
+	}
+	if list, ok := existing.([]any); ok {
+		for _, value := range list {
+			appendPlugin(value)
+		}
+	}
+	if list, ok := desired.([]any); ok {
+		for _, value := range list {
+			appendPlugin(value)
+		}
+	}
+	return merged
+}
+
+func filterOpenCodePluginReferences(value any) ([]any, bool) {
+	list, ok := value.([]any)
+	if !ok {
+		return nil, false
+	}
+	filtered := make([]any, 0, len(list))
+	changed := false
+	seen := map[string]struct{}{}
+	for _, item := range list {
+		name, ok := openCodePluginName(item)
+		name = strings.TrimSpace(name)
+		if !ok || name == "" {
+			changed = true
+			continue
+		}
+		if isLegacyOpenCodePluginReference(name) {
+			changed = true
+			continue
+		}
+		if _, exists := seen[name]; exists {
+			changed = true
+			continue
+		}
+		seen[name] = struct{}{}
+		filtered = append(filtered, name)
+		if _, wasString := item.(string); !wasString || name != item {
+			changed = true
+		}
+	}
+	if len(filtered) != len(list) {
+		changed = true
+	}
+	return filtered, changed
+}
+
+func openCodePluginName(value any) (string, bool) {
+	switch typed := value.(type) {
+	case string:
+		return typed, true
+	case map[string]any:
+		for _, key := range []string{"id", "name", "plugin", "path"} {
+			if name, ok := typed[key].(string); ok {
+				return name, true
+			}
+		}
+	}
+	return "", false
+}
+
+func isLegacyOpenCodePluginReference(name string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(name))
+	return strings.Contains(normalized, "background-agents") || strings.Contains(normalized, "lore-models") || strings.Contains(normalized, "model-variants") || strings.Contains(normalized, "opencode-subagent-statusline")
+}
+
+func cloneStringAnyMap(in map[string]any) map[string]any {
+	out := make(map[string]any, len(in))
+	for key, value := range in {
+		if child, ok := value.(map[string]any); ok {
+			out[key] = cloneStringAnyMap(child)
+			continue
+		}
+		if list, ok := value.([]any); ok {
+			out[key] = cloneAnySlice(list)
+			continue
+		}
+		out[key] = value
+	}
+	return out
+}
+
+func cloneAnySlice(in []any) []any {
+	out := make([]any, len(in))
+	for i, value := range in {
+		if child, ok := value.(map[string]any); ok {
+			out[i] = cloneStringAnyMap(child)
+			continue
+		}
+		if list, ok := value.([]any); ok {
+			out[i] = cloneAnySlice(list)
+			continue
+		}
+		out[i] = value
+	}
+	return out
 }
 
 func desiredOpenCodeLoreMCPURL(desired []byte) string {

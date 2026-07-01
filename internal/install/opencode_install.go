@@ -37,12 +37,9 @@ func (s Service) PlanOpenCodeInstall(req InstallRequest) (InstallPlan, error) {
 
 	var agentCfg agentconfig.Config
 	if s.AgentConfigStore != nil {
-		if _, _, err = s.AgentConfigStore.EnsureDefault(); err != nil {
-			return InstallPlan{}, fmt.Errorf("ensure agent-config: %w", err)
-		}
-		agentCfg, err = s.AgentConfigStore.Load()
+		agentCfg, err = loadOpenCodeAgentConfigForPlan(s.AgentConfigStore)
 		if err != nil {
-			return InstallPlan{}, fmt.Errorf("load agent-config: %w", err)
+			return InstallPlan{}, err
 		}
 	}
 	req.AgentConfig = agentCfg
@@ -68,19 +65,31 @@ func (s Service) PlanOpenCodeInstall(req InstallRequest) (InstallPlan, error) {
 	// change). The cleanup is bounded to the previous manifest's
 	// `managed_files` records: user-owned plugin files without
 	// prior manifest ownership are never deleted.
-	staleAction, err := planOpenCodeStaleManagedPluginCleanup(layout, managedPaths, backupRoot)
+	staleActions, err := planOpenCodeStaleManagedPluginCleanup(layout, managedPaths, backupRoot)
 	if err != nil {
 		return InstallPlan{}, err
 	}
-	if staleAction != nil {
-		plannedFiles = append(plannedFiles, *staleAction)
-	}
+	plannedFiles = append(plannedFiles, staleActions...)
 	manifestAction, err := planOpenCodeManifestAction(layout.ManifestPath, backupRoot, manifest)
 	if err != nil {
 		return InstallPlan{}, err
 	}
 	plannedFiles = append(plannedFiles, manifestAction)
 	return InstallPlan{Request: req, Layout: layout, Components: components, Files: plannedFiles}, nil
+}
+
+func loadOpenCodeAgentConfigForPlan(store AgentConfigStore) (agentconfig.Config, error) {
+	cfg, err := store.Load()
+	if err == nil {
+		if validateErr := cfg.Validate(); validateErr != nil {
+			return agentconfig.Config{}, fmt.Errorf("existing agent-config is invalid: %w", validateErr)
+		}
+		return cfg, nil
+	}
+	if errors.Is(err, agentconfig.ErrNotFound) {
+		return agentconfig.DefaultConfig(), nil
+	}
+	return agentconfig.Config{}, fmt.Errorf("load agent-config: %w", err)
 }
 
 // ExecuteOpenCodeInstall applies the OpenCode install plan. It is the
@@ -93,6 +102,13 @@ func (s Service) ExecuteOpenCodeInstall(plan InstallPlan, opts InstallCommandOpt
 	}
 	if opts.DryRun {
 		return InstallResult{Target: TargetOpenCode, Layout: plan.Layout}, nil
+	}
+	if s.AgentConfigStore != nil {
+		agentCfg, _, err := s.AgentConfigStore.EnsureDefault()
+		if err != nil {
+			return InstallResult{}, fmt.Errorf("ensure agent-config: %w", err)
+		}
+		plan.Request.AgentConfig = agentCfg
 	}
 
 	rendered, err := renderOpenCodeFiles(plan.Request)
@@ -114,13 +130,11 @@ func (s Service) ExecuteOpenCodeInstall(plan InstallPlan, opts InstallCommandOpt
 	// rename). See `PlanOpenCodeInstall` for the planning
 	// contract; the same function is reused here so the dry-run
 	// plan and the live apply see identical actions.
-	staleAction, err := planOpenCodeStaleManagedPluginCleanup(plan.Layout, managedPaths, backupRoot)
+	staleActions, err := planOpenCodeStaleManagedPluginCleanup(plan.Layout, managedPaths, backupRoot)
 	if err != nil {
 		return InstallResult{}, err
 	}
-	if staleAction != nil {
-		plannedFiles = append(plannedFiles, *staleAction)
-	}
+	plannedFiles = append(plannedFiles, staleActions...)
 	manifestAction, err := planOpenCodeManifestAction(plan.Layout.ManifestPath, backupRoot, manifest)
 	if err != nil {
 		return InstallResult{}, err
@@ -258,6 +272,9 @@ func renderOpenCodeFiles(req InstallRequest) ([]RenderedFile, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := validateOpenCodeStartupSafeConfig(configBytes, opencodeConfigFileName); err != nil {
+		return nil, err
+	}
 	rendered = append(rendered, RenderedFile{
 		Component:    ComponentCorePack,
 		RelativePath: opencodeConfigFileName,
@@ -299,17 +316,11 @@ func planOpenCodeRenderedFileAction(layout HarnessLayout, file RenderedFile, bac
 		if err != nil {
 			// Fail-closed mcp.lore ownership conflict: the existing
 			// opencode.json carries a non-Lore-owned mcp.lore block.
-			// The installer backs up the existing file BEFORE
-			// surfacing the conflict so the user can recover without
-			// losing their original configuration. The plan records
-			// the conflict as a `conflicted` action with the
-			// backup path so dry-run output is honest about the
-			// state on disk.
+			// Planning must remain pure, so this path records the
+			// managed backup path for user guidance but does not write
+			// a backup or mutate the filesystem during plan/dry-run.
 			if conflict := AsOpenCodeMCPConfigOwnershipConflict(err); conflict != nil && exists {
 				conflict.BackupPath = filepath.Join(backupRoot, openCodeBackupRelativePath(file.RelativePath))
-				if backupErr := writeOpenCodeConflictBackup(conflict.BackupPath, absolutePath, existing); backupErr != nil {
-					return nil, PlanFileAction{}, fmt.Errorf("%w (and failed to back up the existing file: %v)", conflict, backupErr)
-				}
 				return nil, PlanFileAction{
 					Component:    file.Component,
 					RelativePath: filepath.ToSlash(file.RelativePath),
@@ -320,6 +331,11 @@ func planOpenCodeRenderedFileAction(layout HarnessLayout, file RenderedFile, bac
 				}, conflict
 			}
 			return nil, PlanFileAction{}, err
+		}
+		if filepath.ToSlash(file.RelativePath) == opencodeConfigFileName {
+			if err := validateOpenCodeStartupSafeConfig(desired, file.RelativePath); err != nil {
+				return nil, PlanFileAction{}, err
+			}
 		}
 	}
 	action := PlanFileAction{Component: file.Component, RelativePath: filepath.ToSlash(file.RelativePath), AbsolutePath: absolutePath, MergeMode: file.MergeMode}
@@ -334,22 +350,6 @@ func planOpenCodeRenderedFileAction(layout HarnessLayout, file RenderedFile, bac
 	}
 	action.Action = "create"
 	return desired, action, nil
-}
-
-// writeOpenCodeConflictBackup writes the existing on-disk file to the
-// conflict backup path. It is called from the fail-closed mcp.lore
-// ownership path so the user can recover the original
-// configuration after the installer aborts. The backup is owned by
-// the installer's managed backup root and uses the standard 0o600
-// permissions to match the rest of the installer's backup surface.
-func writeOpenCodeConflictBackup(backupPath, absolutePath string, existing []byte) error {
-	if err := os.MkdirAll(filepath.Dir(backupPath), 0o755); err != nil {
-		return fmt.Errorf("create conflict backup dir: %w", err)
-	}
-	if err := writeFileAtomic(backupPath, existing, 0o600); err != nil {
-		return fmt.Errorf("write conflict backup: %w", err)
-	}
-	return nil
 }
 
 func planOpenCodeManifestAction(manifestPath, backupRoot string, manifest Manifest) (PlanFileAction, error) {
@@ -561,7 +561,7 @@ func openCodeBackupRelativePath(relativePath string) string {
 // rest of the OpenCode install plan and is appended to the
 // `plannedFiles` slice in `PlanOpenCodeInstall` and
 // `ExecuteOpenCodeInstall`.
-func planOpenCodeStaleManagedPluginCleanup(layout HarnessLayout, newManagedPaths []string, backupRoot string) (*PlanFileAction, error) {
+func planOpenCodeStaleManagedPluginCleanup(layout HarnessLayout, newManagedPaths []string, backupRoot string) ([]PlanFileAction, error) {
 	if layout.Target != TargetOpenCode {
 		return nil, nil
 	}
@@ -590,6 +590,7 @@ func planOpenCodeStaleManagedPluginCleanup(layout HarnessLayout, newManagedPaths
 	// (AGENTS.md, opencode.json, tui.json) are owned by the
 	// additive merge in `mergeOpenCodeConfigJSON` and never
 	// become stale via the manifest-scoped path.
+	actions := make([]PlanFileAction, 0)
 	for _, record := range previous.ManagedFiles {
 		if record.Component != ComponentOpenCodePlugins {
 			continue
@@ -613,7 +614,7 @@ func planOpenCodeStaleManagedPluginCleanup(layout HarnessLayout, newManagedPaths
 			continue
 		}
 		relativePath := openCodeStaleManagedPluginRelativePath(layout, absolutePath)
-		if relativePath == "" {
+		if relativePath == "" || !isLegacyOpenCodeManagedPluginPath(relativePath) {
 			continue
 		}
 		action := PlanFileAction{
@@ -624,9 +625,9 @@ func planOpenCodeStaleManagedPluginCleanup(layout HarnessLayout, newManagedPaths
 			Action:       "delete",
 			BackupPath:   filepath.Join(backupRoot, openCodeBackupRelativePath(relativePath)),
 		}
-		return &action, nil
+		actions = append(actions, action)
 	}
-	return nil, nil
+	return actions, nil
 }
 
 // openCodeStaleManagedPluginRelativePath returns the install-pipeline
@@ -645,4 +646,9 @@ func openCodeStaleManagedPluginRelativePath(layout HarnessLayout, absolutePath s
 		return ""
 	}
 	return filepath.ToSlash(rel)
+}
+
+func isLegacyOpenCodeManagedPluginPath(relativePath string) bool {
+	relativePath = filepath.ToSlash(strings.TrimSpace(relativePath))
+	return strings.HasPrefix(relativePath, "plugins/") && isLegacyOpenCodePluginReference(relativePath)
 }

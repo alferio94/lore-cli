@@ -903,6 +903,7 @@ func (a *App) collectChecks(ctx context.Context, includePi bool) ([]output.Check
 		checks := []output.Check{{Name: "config-path", Status: output.StatusFail, Detail: pathErr.Error(), Action: "Fix the local config directory permissions or override LORE_CONFIG_DIR."}}
 		if includePi {
 			checks = append(checks, a.piCheck())
+			checks = append(checks, a.openCodeDoctorChecks()...)
 		}
 		return checks, 1
 	}
@@ -913,12 +914,14 @@ func (a *App) collectChecks(ctx context.Context, includePi bool) ([]output.Check
 			checks := []output.Check{{Name: "config", Status: output.StatusWarn, Detail: fmt.Sprintf("no-config at %s", path), Action: "Run lore login --server <url> --email <email> for password login, or use --token for compatibility mode."}}
 			if includePi {
 				checks = append(checks, a.piCheck())
+				checks = append(checks, a.openCodeDoctorChecks()...)
 			}
 			return checks, 1
 		}
 		checks := []output.Check{{Name: "config", Status: output.StatusFail, Detail: err.Error(), Action: "Inspect or remove the local config file and log in again."}}
 		if includePi {
 			checks = append(checks, a.piCheck())
+			checks = append(checks, a.openCodeDoctorChecks()...)
 		}
 		return checks, 1
 	}
@@ -935,6 +938,7 @@ func (a *App) collectChecks(ctx context.Context, includePi bool) ([]output.Check
 		checks = append(checks, output.Check{Name: "auth", Status: output.StatusFail, Detail: err.Error(), Action: action})
 		if includePi {
 			checks = append(checks, a.piCheck())
+			checks = append(checks, a.openCodeDoctorChecks()...)
 		}
 		return checks, 1
 	}
@@ -944,6 +948,7 @@ func (a *App) collectChecks(ctx context.Context, includePi bool) ([]output.Check
 		checks = append(checks, output.Check{Name: "server-url", Status: output.StatusFail, Detail: err.Error(), Action: "Fix the server URL with lore login --server <http(s)://host> --email <email> for password login, or use --token for compatibility mode."})
 		if includePi {
 			checks = append(checks, a.piCheck())
+			checks = append(checks, a.openCodeDoctorChecks()...)
 		}
 		return checks, 1
 	}
@@ -974,6 +979,11 @@ func (a *App) collectChecks(ctx context.Context, includePi bool) ([]output.Check
 		pi := a.piCheck()
 		checks = append(checks, pi)
 		if pi.Status == output.StatusWarn && exitCode == 0 {
+			exitCode = 1
+		}
+		opencodeChecks := a.openCodeDoctorChecks()
+		checks = append(checks, opencodeChecks...)
+		if checksContainActionableOpenCodeFinding(opencodeChecks) {
 			exitCode = 1
 		}
 	}
@@ -1135,8 +1145,13 @@ func formatOpenCodeInstallSummary(result install.InstallResult) string {
 		"mcp_lore_ownership=fail-closed-on-foreign",
 		"runner=none",
 		"bootstrap=none",
-		"plugins=bundled:background-agents,lore-models,opencode-subagent-statusline",
-		"plugins_location=~/.config/opencode/plugins/ (background-agents.ts, lore-models.ts); tui.json registers only opencode-subagent-statusline",
+		"opencode_background_subagents_env=OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true",
+		"prompts=~/.config/opencode/prompts",
+		"plugins=bundled:none",
+		"legacy_plugins=absent:background-agents,lore-models,model-variants,opencode-subagent-statusline",
+		"plugins_location=~/.config/opencode/plugins/ (no Lore-managed plugin files); tui.json registers no Lore-managed plugins",
+		"migration=legacy-managed-plugins-to-native-agents",
+		"rollback=restore-from-managed-backup-root-then-rerun-install",
 		"excluded_plugins=sdd-engram,logo",
 	)
 	if len(result.Summary.Failed) > 0 {
@@ -1166,8 +1181,13 @@ func formatOpenCodeInstallPlanSummary(plan install.InstallPlan, dryRun bool) str
 		"mcp_lore_ownership=fail-closed-on-foreign",
 		"runner=none",
 		"bootstrap=none",
-		"plugins=bundled:background-agents,lore-models,opencode-subagent-statusline",
-		"plugins_location=~/.config/opencode/plugins/ (background-agents.ts, lore-models.ts); tui.json registers only opencode-subagent-statusline",
+		"opencode_background_subagents_env=OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true",
+		"prompts=~/.config/opencode/prompts",
+		"plugins=bundled:none",
+		"legacy_plugins=absent:background-agents,lore-models,model-variants,opencode-subagent-statusline",
+		"plugins_location=~/.config/opencode/plugins/ (no Lore-managed plugin files); tui.json registers no Lore-managed plugins",
+		"migration=legacy-managed-plugins-to-native-agents",
+		"rollback=restore-from-managed-backup-root-then-rerun-install",
 		"excluded_plugins=sdd-engram,logo",
 	}
 	if dryRun {
@@ -1361,6 +1381,296 @@ func (a *App) piCheck() output.Check {
 		return output.Check{Name: "pi", Status: output.StatusWarn, Detail: "pi binary not found on PATH", Action: "Install Pi or add it to PATH if Pi automation is expected on this machine."}
 	}
 	return output.Check{Name: "pi", Status: output.StatusOK, Detail: "pi binary available on PATH"}
+}
+
+func (a *App) openCodeDoctorChecks() []output.Check {
+	checks := []output.Check{openCodeBackgroundSubagentsEnvCheck()}
+
+	homeDir, err := a.resolveUserHomeDir()
+	if err != nil {
+		return append(checks, output.Check{Name: "opencode-config", Status: output.StatusWarn, Detail: fmt.Sprintf("OpenCode config path could not be resolved: %v", err), Action: "Fix HOME/user directory resolution, then rerun lore doctor."})
+	}
+	rootDir := filepath.Join(homeDir, ".config", "opencode")
+	configPath := filepath.Join(rootDir, "opencode.json")
+	tuiPath := filepath.Join(rootDir, "tui.json")
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			checks = append(checks, output.Check{Name: "opencode-config", Status: output.StatusOK, Detail: fmt.Sprintf("OpenCode config not found at %s (optional); run lore install --target opencode to install native Lore agents", configPath)})
+			checks = append(checks, inspectOpenCodeTUIPluginRefs(tuiPath))
+			return checks
+		}
+		checks = append(checks, output.Check{Name: "opencode-config", Status: output.StatusFail, Detail: fmt.Sprintf("read %s failed: %v", configPath, err), Action: "Fix file permissions or move the broken file aside, then rerun lore install --target opencode."})
+		checks = append(checks, inspectOpenCodeTUIPluginRefs(tuiPath))
+		return checks
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		checks = append(checks, output.Check{Name: "opencode-config", Status: output.StatusFail, Detail: fmt.Sprintf("%s is not valid JSON: %v", configPath, err), Action: "Restore the latest backup from ~/.config/opencode/backups or move opencode.json aside, then rerun lore install --target opencode."})
+		checks = append(checks, inspectOpenCodeTUIPluginRefs(tuiPath))
+		return checks
+	}
+
+	checks = append(checks, inspectOpenCodeConfigPayload(rootDir, configPath, payload)...)
+	checks = append(checks, inspectOpenCodeTUIPluginRefs(tuiPath))
+	return checks
+}
+
+func openCodeBackgroundSubagentsEnvCheck() output.Check {
+	if os.Getenv("OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS") == "true" {
+		return output.Check{Name: "opencode-background-subagents", Status: output.StatusOK, Detail: "OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true; OpenCode owns native background subagent execution"}
+	}
+	return output.Check{Name: "opencode-background-subagents", Status: output.StatusWarn, Detail: "OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS is not true; OpenCode native subagents may not run in the background", Action: "Start OpenCode with OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true when background subagent behavior is expected; Lore cannot enable it from opencode.json."}
+}
+
+func inspectOpenCodeConfigPayload(rootDir, configPath string, payload map[string]any) []output.Check {
+	checks := make([]output.Check, 0, 3)
+	issues := make([]string, 0)
+	if _, present := payload["lore"]; present {
+		issues = append(issues, "top-level lore block")
+	}
+	if legacyOpenCodePluginReference(payload["plugins"]) {
+		issues = append(issues, "legacy plugins reference")
+	}
+	if legacyOpenCodePluginReference(payload["plugin"]) {
+		issues = append(issues, "legacy plugin reference")
+	}
+	if hasLegacyOpenCodeSkillsPath(payload) {
+		issues = append(issues, "skills.path is obsolete; use schema-safe skills.paths")
+	}
+
+	agents, hasAgentObject := payload["agent"].(map[string]any)
+	hasManagedAgents := hasAgentObject && hasAnyOpenCodeManagedAgent(agents)
+	hasLoreMCP := false
+	if mcp, ok := payload["mcp"].(map[string]any); ok {
+		_, hasLoreMCP = mcp["lore"]
+	}
+	if !hasManagedAgents && len(issues) == 0 {
+		checks = append(checks, output.Check{Name: "opencode-config", Status: output.StatusOK, Detail: fmt.Sprintf("OpenCode config at %s is not Lore-managed or has no native Lore agent overlay; optional OpenCode install checks are informational", configPath)})
+		if hasLoreMCP {
+			checks = append(checks, inspectOpenCodeLoreMCP(payload))
+		}
+		return checks
+	}
+
+	if !hasAgentObject {
+		issues = append(issues, "missing native agent object")
+	} else {
+		issues = append(issues, inspectOpenCodePromptRefs(rootDir, agents)...)
+		issues = append(issues, inspectOpenCodeManagedAgentModels(agents)...)
+	}
+	if len(issues) > 0 {
+		checks = append(checks, output.Check{Name: "opencode-config", Status: output.StatusFail, Detail: fmt.Sprintf("startup-risky %s: %s", configPath, strings.Join(issues, "; ")), Action: "Do not hand-edit the risky shape in place. Back up opencode.json, then run lore install --target opencode so Lore can render native prompt refs and remove legacy plugin references safely."})
+	} else {
+		checks = append(checks, output.Check{Name: "opencode-config", Status: output.StatusOK, Detail: fmt.Sprintf("native OpenCode config is startup-safe: agent prompts resolve under %s and no legacy managed plugin refs were found", rootDir)})
+	}
+
+	checks = append(checks, inspectOpenCodeLoreMCP(payload))
+	return checks
+}
+
+func hasAnyOpenCodeManagedAgent(agents map[string]any) bool {
+	for _, name := range []string{"lore", "lore-worker", "sdd-init", "sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive"} {
+		entry, ok := agents[name].(map[string]any)
+		if !ok {
+			continue
+		}
+		if isOpenCodeLoreManagedAgentEntry(name, entry) {
+			return true
+		}
+	}
+	return false
+}
+
+func isOpenCodeLoreManagedAgentEntry(name string, entry map[string]any) bool {
+	prompt, _ := entry["prompt"].(string)
+	if isLegacyOpenCodeLoreManagedPromptRef(name, prompt) {
+		return true
+	}
+	promptPath, hasManagedPrompt := openCodePromptFilePath(prompt)
+	if hasManagedPrompt {
+		if name == "lore" && promptPath == "prompts/lore.md" {
+			return true
+		}
+		if name == "lore-worker" && promptPath == "prompts/lore-worker.md" {
+			return true
+		}
+		if strings.HasPrefix(name, "sdd-") && promptPath == filepath.ToSlash(filepath.Join("prompts", "sdd", strings.TrimPrefix(name, "sdd-")+".md")) {
+			return true
+		}
+	}
+	permission, _ := entry["permission"].(map[string]any)
+	task, _ := permission["task"].(map[string]any)
+	if name == "lore" && task["sdd-*"] == "allow" && task["lore-worker"] == "allow" {
+		return true
+	}
+	return false
+}
+
+func hasLegacyOpenCodeSkillsPath(payload map[string]any) bool {
+	skills, ok := payload["skills"].(map[string]any)
+	if !ok {
+		return false
+	}
+	_, present := skills["path"]
+	return present
+}
+
+func isLegacyOpenCodeLoreManagedPromptRef(name, prompt string) bool {
+	prompt = strings.TrimSpace(prompt)
+	if name == "lore" && prompt == "{file:./AGENTS.md}" {
+		return true
+	}
+	if name == "lore-worker" && prompt == "{file:./skills/lore-worker/SKILL.md}" {
+		return true
+	}
+	if strings.HasPrefix(name, "sdd-") {
+		phase := strings.TrimPrefix(name, "sdd-")
+		return prompt == "{file:./skills/sdd-"+phase+"/SKILL.md}"
+	}
+	return false
+}
+
+func inspectOpenCodeManagedAgentModels(agents map[string]any) []string {
+	issues := make([]string, 0)
+	for _, name := range []string{"lore", "lore-worker", "sdd-init", "sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive"} {
+		entry, ok := agents[name].(map[string]any)
+		if !ok {
+			continue
+		}
+		model, _ := entry["model"].(string)
+		if !isOpenCodeProviderModelIdentifier(model) {
+			issues = append(issues, fmt.Sprintf("agent.%s.model must use provider/model form", name))
+		}
+	}
+	return issues
+}
+
+func isOpenCodeProviderModelIdentifier(model string) bool {
+	model = strings.TrimSpace(model)
+	if model == "" || !strings.Contains(model, "/") {
+		return false
+	}
+	parts := strings.SplitN(model, "/", 2)
+	return strings.TrimSpace(parts[0]) != "" && strings.TrimSpace(parts[1]) != ""
+}
+
+func inspectOpenCodePromptRefs(rootDir string, agents map[string]any) []string {
+	issues := make([]string, 0)
+	for _, name := range []string{"lore", "lore-worker", "sdd-init", "sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive"} {
+		entry, ok := agents[name].(map[string]any)
+		if !ok {
+			issues = append(issues, fmt.Sprintf("missing agent.%s", name))
+			continue
+		}
+		prompt, _ := entry["prompt"].(string)
+		promptPath, ok := openCodePromptFilePath(prompt)
+		if !ok {
+			issues = append(issues, fmt.Sprintf("agent.%s.prompt is not a native ./prompts file ref", name))
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(rootDir, promptPath)); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				issues = append(issues, fmt.Sprintf("agent.%s.prompt target missing (%s)", name, promptPath))
+			} else {
+				issues = append(issues, fmt.Sprintf("agent.%s.prompt target unreadable (%s: %v)", name, promptPath, err))
+			}
+		}
+	}
+	return issues
+}
+
+func openCodePromptFilePath(prompt string) (string, bool) {
+	prompt = strings.TrimSpace(prompt)
+	if !strings.HasPrefix(prompt, "{file:./") || !strings.HasSuffix(prompt, "}") {
+		return "", false
+	}
+	rel := strings.TrimSuffix(strings.TrimPrefix(prompt, "{file:./"), "}")
+	if !strings.HasPrefix(rel, "prompts/") || strings.Contains(rel, "..") || filepath.IsAbs(rel) {
+		return "", false
+	}
+	return filepath.Clean(rel), true
+}
+
+func inspectOpenCodeTUIPluginRefs(tuiPath string) output.Check {
+	data, err := os.ReadFile(tuiPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return output.Check{Name: "opencode-tui", Status: output.StatusOK, Detail: fmt.Sprintf("tui.json not found at %s (optional)", tuiPath)}
+		}
+		return output.Check{Name: "opencode-tui", Status: output.StatusFail, Detail: fmt.Sprintf("read %s failed: %v", tuiPath, err), Action: "Fix file permissions or move tui.json aside, then rerun lore install --target opencode."}
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return output.Check{Name: "opencode-tui", Status: output.StatusFail, Detail: fmt.Sprintf("%s is not valid JSON: %v", tuiPath, err), Action: "Restore the latest backup from ~/.config/opencode/backups or move tui.json aside, then rerun lore install --target opencode."}
+	}
+	if _, present := payload["lore"]; present {
+		return output.Check{Name: "opencode-tui", Status: output.StatusFail, Detail: "tui.json carries stale top-level Lore runtime metadata", Action: "Run lore install --target opencode so Lore can render native tui.json settings and remove legacy runtime metadata."}
+	}
+	if legacyOpenCodePluginReference(payload["plugin"]) || legacyOpenCodePluginReference(payload["plugins"]) {
+		return output.Check{Name: "opencode-tui", Status: output.StatusFail, Detail: "tui.json references legacy OpenCode runtime-emulation plugins", Action: "Run lore install --target opencode so Lore can render native tui.json with no Lore-managed plugin registrations."}
+	}
+	return output.Check{Name: "opencode-tui", Status: output.StatusOK, Detail: "tui.json has no legacy managed plugin refs"}
+}
+
+func inspectOpenCodeLoreMCP(payload map[string]any) output.Check {
+	mcp, ok := payload["mcp"].(map[string]any)
+	if !ok {
+		return output.Check{Name: "opencode-mcp", Status: output.StatusWarn, Detail: "mcp.lore is not configured in opencode.json", Action: "Run lore install --target opencode with saved Lore auth if OpenCode should use Lore MCP."}
+	}
+	lore, ok := mcp["lore"].(map[string]any)
+	if !ok {
+		return output.Check{Name: "opencode-mcp", Status: output.StatusWarn, Detail: "mcp block exists but mcp.lore is absent", Action: "Run lore install --target opencode to add the managed Lore MCP entry without changing unrelated MCP servers."}
+	}
+	urlValue, _ := lore["url"].(string)
+	enabled := "unspecified"
+	if value, ok := lore["enabled"].(bool); ok {
+		enabled = fmt.Sprintf("%t", value)
+	}
+	if headers, ok := lore["headers"].(map[string]any); ok {
+		if _, hasAuth := headers["Authorization"]; hasAuth {
+			return output.Check{Name: "opencode-mcp", Status: output.StatusOK, Detail: fmt.Sprintf("mcp.lore present url=%s enabled=%s Authorization=<redacted>", safeOpenCodeMCPURL(urlValue), enabled)}
+		}
+	}
+	return output.Check{Name: "opencode-mcp", Status: output.StatusWarn, Detail: fmt.Sprintf("mcp.lore present url=%s enabled=%s but Authorization header is missing", safeOpenCodeMCPURL(urlValue), enabled), Action: "Run lore install --target opencode after login so the managed MCP entry includes an Authorization bearer token."}
+}
+
+func legacyOpenCodePluginReference(value any) bool {
+	switch typed := value.(type) {
+	case []any:
+		for _, item := range typed {
+			if legacyOpenCodePluginReference(item) {
+				return true
+			}
+		}
+	case map[string]any:
+		for _, key := range []string{"id", "name", "path", "plugin"} {
+			if legacyOpenCodePluginReference(typed[key]) {
+				return true
+			}
+		}
+	case string:
+		normalized := strings.ToLower(strings.TrimSpace(typed))
+		return strings.Contains(normalized, "background-agents") || strings.Contains(normalized, "lore-models") || strings.Contains(normalized, "model-variants") || strings.Contains(normalized, "opencode-subagent-statusline")
+	}
+	return false
+}
+
+func safeOpenCodeMCPURL(raw string) string {
+	if strings.TrimSpace(raw) == "" {
+		return "<missing>"
+	}
+	return strings.TrimSpace(raw)
+}
+
+func checksContainActionableOpenCodeFinding(checks []output.Check) bool {
+	for _, check := range checks {
+		if check.Status == output.StatusFail {
+			return true
+		}
+	}
+	return false
 }
 
 func localUpdateSafetyReason(currentVersion, execPath, pathPath string) (string, bool) {

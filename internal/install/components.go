@@ -12,12 +12,13 @@ const (
 	ComponentPiExtensions     ComponentID = "pi-extensions"
 	ComponentExtendedSkills   ComponentID = "extended-skills"
 	ComponentCodexAgentConfig ComponentID = "codex-agent-config"
-	// ComponentOpenCodePlugins is the bounded OpenCode plugin asset bundle
-	// (background-agents.ts, lore-models.ts, opencode-subagent-statusline,
-	// and the tui.json referencing the community statusline). The
-	// previous `model-variants.ts` asset was renamed to `lore-models.ts`
-	// by the `add-opencode-lore-models-plugin` change. The excluded
-	// plugins `sdd-engram` and `logo` are explicitly NEVER bundled; see
+	// ComponentOpenCodePlugins is the bounded OpenCode TUI settings bundle.
+	// Native-agent installs copy no Lore-managed plugin .ts files and render
+	// tui.json with an empty native plugin list. Legacy Lore-owned runtime
+	// emulation/statusline plugins (background-agents.ts, lore-models.ts,
+	// model-variants.ts, and opencode-subagent-statusline.ts) are not
+	// installed. The excluded plugins
+	// `sdd-engram` and `logo` are explicitly NEVER bundled; see
 	// `excludedOpenCodePluginNames` and the static guard in
 	// `static_guards_test.go` for the explicit rejection invariant.
 	ComponentOpenCodePlugins ComponentID = "opencode-plugins"
@@ -100,8 +101,8 @@ func ComponentCatalog() map[ComponentID]Component {
 		},
 		ComponentOpenCodePlugins: {
 			ID:          ComponentOpenCodePlugins,
-			Title:       "OpenCode Plugins",
-			Description: "Bounded OpenCode plugin asset bundle: background-agents.ts, lore-models.ts, and the community opencode-subagent-statusline (tui.json reference). The previous `model-variants.ts` asset was renamed to `lore-models.ts`; the `lore-models.ts` plugin keeps the provider/model/variant discovery cache behavior of the previous asset and additionally exposes a safe opencode.json hot-edit entrypoint for in-OpenCode model/variant configuration. Excludes sdd-engram and logo.",
+			Title:       "OpenCode TUI Settings",
+			Description: "Bounded OpenCode native-safe TUI settings bundle: no Lore-managed plugin files are copied or registered. Legacy Lore-owned runtime emulation/statusline plugins are not installed; prior Lore-managed copies are backup-deleted. Excludes sdd-engram and logo.",
 			Optional:    true,
 			DefaultForTarget: map[TargetID]bool{
 				TargetOpenCode: true,

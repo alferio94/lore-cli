@@ -309,8 +309,300 @@ func TestStatusAndDoctorActionsPreserveDiagnosticSemantics(t *testing.T) {
 	if doctor.Title != "Lore doctor" || doctor.ExitCode != 1 {
 		t.Fatalf("doctorAction() = %+v, want failing Lore doctor report", doctor)
 	}
-	assertCheckNames(t, doctor.Checks, "config", "healthz", "readyz", "auth", "pi", "agent-config")
+	assertCheckNames(t, doctor.Checks, "config", "healthz", "readyz", "auth", "pi", "opencode-background-subagents", "opencode-config", "opencode-mcp", "opencode-tui", "agent-config")
 	assertNoTokenLeak(t, output.RenderChecks(doctor.Title, doctor.Checks), "", "secret-token")
+}
+
+func TestDoctorReportsOpenCodeNativeAgentGuidanceAndRedactsMCPToken(t *testing.T) {
+	t.Setenv("OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS", "")
+	homeDir := t.TempDir()
+	root := filepath.Join(homeDir, ".config", "opencode")
+	for _, rel := range []string{"prompts/lore.md", "prompts/lore-worker.md", "prompts/sdd/init.md", "prompts/sdd/explore.md", "prompts/sdd/propose.md", "prompts/sdd/spec.md", "prompts/sdd/design.md", "prompts/sdd/tasks.md", "prompts/sdd/apply.md", "prompts/sdd/verify.md", "prompts/sdd/archive.md"} {
+		path := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s) error = %v", filepath.Dir(path), err)
+		}
+		if err := os.WriteFile(path, []byte("prompt"), 0o644); err != nil {
+			t.Fatalf("WriteFile(%s) error = %v", path, err)
+		}
+	}
+	configJSON := `{"agent":{"lore":{"prompt":"{file:./prompts/lore.md}","model":"openai/gpt-4o"},"lore-worker":{"prompt":"{file:./prompts/lore-worker.md}","model":"openai/gpt-4o"},"sdd-init":{"prompt":"{file:./prompts/sdd/init.md}","model":"openai/gpt-4o"},"sdd-explore":{"prompt":"{file:./prompts/sdd/explore.md}","model":"openai/gpt-4o"},"sdd-propose":{"prompt":"{file:./prompts/sdd/propose.md}","model":"openai/gpt-4o"},"sdd-spec":{"prompt":"{file:./prompts/sdd/spec.md}","model":"openai/gpt-4o"},"sdd-design":{"prompt":"{file:./prompts/sdd/design.md}","model":"openai/gpt-4o"},"sdd-tasks":{"prompt":"{file:./prompts/sdd/tasks.md}","model":"openai/gpt-4o"},"sdd-apply":{"prompt":"{file:./prompts/sdd/apply.md}","model":"openai/gpt-4o"},"sdd-verify":{"prompt":"{file:./prompts/sdd/verify.md}","model":"openai/gpt-4o"},"sdd-archive":{"prompt":"{file:./prompts/sdd/archive.md}","model":"openai/gpt-4o"}},"mcp":{"lore":{"type":"remote","url":"https://lore.example/v1/mcp","enabled":true,"headers":{"Authorization":"Bearer secret-token"}}}}`
+	if err := os.WriteFile(filepath.Join(root, "opencode.json"), []byte(configJSON), 0o600); err != nil {
+		t.Fatalf("WriteFile(opencode.json) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "tui.json"), []byte(`{"plugin":[]}`), 0o600); err != nil {
+		t.Fatalf("WriteFile(tui.json) error = %v", err)
+	}
+
+	store := &fakeStore{path: "/tmp/lore/config.json", loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token"}}
+	app, _, _ := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return &fakeClient{}, nil })
+	app.UserHomeDir = func() (string, error) { return homeDir, nil }
+	app.LookPath = func(name string) (string, error) { return "/usr/bin/pi", nil }
+
+	report := app.doctorAction(context.Background())
+	if report.ExitCode != 0 {
+		t.Fatalf("doctorAction() exitCode = %d, want 0 for optional OpenCode background env warning", report.ExitCode)
+	}
+	out := output.RenderChecks(report.Title, report.Checks)
+	for _, want := range []string{"opencode-background-subagents", "OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS", "Lore cannot enable it", "[OK] opencode-config", "agent prompts resolve", "[OK] opencode-mcp", "Authorization=<redacted>", "[OK] opencode-tui"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("doctor output = %q, want substring %q", out, want)
+		}
+	}
+	assertNoTokenLeak(t, out, "", "secret-token")
+}
+
+func TestDoctorFlagsInvalidOpenCodeManagedAgentModel(t *testing.T) {
+	t.Setenv("OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS", "true")
+	homeDir := t.TempDir()
+	root := filepath.Join(homeDir, ".config", "opencode")
+	prompts := map[string]string{
+		"lore":        "prompts/lore.md",
+		"lore-worker": "prompts/lore-worker.md",
+		"sdd-init":    "prompts/sdd/init.md",
+		"sdd-explore": "prompts/sdd/explore.md",
+		"sdd-propose": "prompts/sdd/propose.md",
+		"sdd-spec":    "prompts/sdd/spec.md",
+		"sdd-design":  "prompts/sdd/design.md",
+		"sdd-tasks":   "prompts/sdd/tasks.md",
+		"sdd-apply":   "prompts/sdd/apply.md",
+		"sdd-verify":  "prompts/sdd/verify.md",
+		"sdd-archive": "prompts/sdd/archive.md",
+	}
+	agents := make(map[string]any, len(prompts))
+	for name, rel := range prompts {
+		path := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s) error = %v", filepath.Dir(path), err)
+		}
+		if err := os.WriteFile(path, []byte("prompt"), 0o644); err != nil {
+			t.Fatalf("WriteFile(%s) error = %v", path, err)
+		}
+		agents[name] = map[string]any{"prompt": "{file:./" + filepath.ToSlash(rel) + "}", "model": "openai/gpt-4o"}
+	}
+	agents["sdd-apply"].(map[string]any)["model"] = "not-a-known-model"
+	configJSON, err := json.Marshal(map[string]any{"agent": agents})
+	if err != nil {
+		t.Fatalf("Marshal(opencode config) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "opencode.json"), configJSON, 0o600); err != nil {
+		t.Fatalf("WriteFile(opencode.json) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "tui.json"), []byte(`{"plugin":[]}`), 0o600); err != nil {
+		t.Fatalf("WriteFile(tui.json) error = %v", err)
+	}
+
+	store := &fakeStore{path: "/tmp/lore/config.json", loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token"}}
+	app, _, _ := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return &fakeClient{}, nil })
+	app.UserHomeDir = func() (string, error) { return homeDir, nil }
+	app.LookPath = func(name string) (string, error) { return "/usr/bin/pi", nil }
+
+	report := app.doctorAction(context.Background())
+	if report.ExitCode != 1 {
+		t.Fatalf("doctorAction() exitCode = %d, want 1 for invalid managed OpenCode model", report.ExitCode)
+	}
+	out := output.RenderChecks(report.Title, report.Checks)
+	for _, want := range []string{"[FAIL] opencode-config", "agent.sdd-apply.model", "provider/model", "lore install --target opencode"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("doctor output = %q, want substring %q", out, want)
+		}
+	}
+}
+
+func TestDoctorReportsOpenCodeStartupRiskRecovery(t *testing.T) {
+	t.Setenv("OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS", "true")
+	homeDir := t.TempDir()
+	root := filepath.Join(homeDir, ".config", "opencode")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s) error = %v", root, err)
+	}
+	configJSON := `{"plugins":["background-agents.ts"],"agent":{"lore":{"prompt":"{file:./AGENTS.md}"}},"mcp":{"lore":{"url":"https://lore.example/v1/mcp","headers":{"Authorization":"Bearer secret-token"}}}}`
+	if err := os.WriteFile(filepath.Join(root, "opencode.json"), []byte(configJSON), 0o600); err != nil {
+		t.Fatalf("WriteFile(opencode.json) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "tui.json"), []byte(`{"plugin":["background-agents.ts"]}`), 0o600); err != nil {
+		t.Fatalf("WriteFile(tui.json) error = %v", err)
+	}
+
+	store := &fakeStore{path: "/tmp/lore/config.json", loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token"}}
+	app, _, _ := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return &fakeClient{}, nil })
+	app.UserHomeDir = func() (string, error) { return homeDir, nil }
+	app.LookPath = func(name string) (string, error) { return "/usr/bin/pi", nil }
+
+	report := app.doctorAction(context.Background())
+	out := output.RenderChecks(report.Title, report.Checks)
+	for _, want := range []string{"[FAIL] opencode-config", "startup-risky", "legacy plugins reference", "agent.lore.prompt is not a native ./prompts file ref", "Back up opencode.json", "lore install --target opencode", "[OK] opencode-mcp", "[FAIL] opencode-tui", "legacy OpenCode runtime-emulation plugins"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("doctor output = %q, want substring %q", out, want)
+		}
+	}
+	assertNoTokenLeak(t, out, "", "secret-token")
+}
+
+func TestDoctorFlagsStaleManagedOpenCodeJSONWithoutLegacyPlugins(t *testing.T) {
+	t.Setenv("OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS", "true")
+	homeDir := t.TempDir()
+	root := filepath.Join(homeDir, ".config", "opencode")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s) error = %v", root, err)
+	}
+	configJSON := `{
+		"skills":{"path":"~/.config/opencode/skills"},
+		"agent":{
+			"lore":{"mode":"primary","model":"openai/gpt-4o","prompt":"{file:./AGENTS.md}"},
+			"lore-worker":{"mode":"subagent","model":{"provider":"openai","model":"gpt-4o"},"prompt":"{file:./skills/lore-worker/SKILL.md}"},
+			"sdd-apply":{"mode":"subagent","model":"openai/gpt-4o","prompt":"{file:./skills/sdd-apply/SKILL.md}"}
+		},
+		"mcp":{"lore":{"type":"remote","url":"https://lore.example/v1/mcp","headers":{"Authorization":"Bearer secret-token"}}}
+	}`
+	if err := os.WriteFile(filepath.Join(root, "opencode.json"), []byte(configJSON), 0o600); err != nil {
+		t.Fatalf("WriteFile(opencode.json) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "tui.json"), []byte(`{"plugin":[]}`), 0o600); err != nil {
+		t.Fatalf("WriteFile(tui.json) error = %v", err)
+	}
+
+	store := &fakeStore{path: "/tmp/lore/config.json", loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token"}}
+	app, _, _ := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return &fakeClient{}, nil })
+	app.UserHomeDir = func() (string, error) { return homeDir, nil }
+	app.LookPath = func(name string) (string, error) { return "/usr/bin/pi", nil }
+
+	report := app.doctorAction(context.Background())
+	if report.ExitCode != 1 {
+		t.Fatalf("doctorAction() exitCode = %d, want 1 for stale managed OpenCode config", report.ExitCode)
+	}
+	out := output.RenderChecks(report.Title, report.Checks)
+	for _, want := range []string{"[FAIL] opencode-config", "skills.path is obsolete", "agent.lore.prompt is not a native ./prompts file ref", "agent.lore-worker.model", "provider/model", "lore install --target opencode", "[OK] opencode-mcp", "[OK] opencode-tui"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("doctor output = %q, want substring %q", out, want)
+		}
+	}
+	assertNoTokenLeak(t, out, "", "secret-token")
+}
+
+func TestDoctorTreatsForeignOpenCodeConfigAsInformational(t *testing.T) {
+	t.Setenv("OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS", "")
+	homeDir := t.TempDir()
+	root := filepath.Join(homeDir, ".config", "opencode")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s) error = %v", root, err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "opencode.json"), []byte(`{"theme":"system","agent":{"build":{"prompt":"foreign"}},"mcp":{"other":{"type":"stdio","command":"keep"}}}`), 0o600); err != nil {
+		t.Fatalf("WriteFile(opencode.json) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "tui.json"), []byte(`{"plugins":[{"id":"user-plugin","owner":"user"}]}`), 0o600); err != nil {
+		t.Fatalf("WriteFile(tui.json) error = %v", err)
+	}
+
+	store := &fakeStore{path: "/tmp/lore/config.json", loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token"}}
+	app, _, _ := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return &fakeClient{}, nil })
+	app.UserHomeDir = func() (string, error) { return homeDir, nil }
+	app.LookPath = func(name string) (string, error) { return "/usr/bin/pi", nil }
+
+	report := app.doctorAction(context.Background())
+	if report.ExitCode != 0 {
+		t.Fatalf("doctorAction() exitCode = %d, want 0 for foreign optional OpenCode config", report.ExitCode)
+	}
+	out := output.RenderChecks(report.Title, report.Checks)
+	for _, want := range []string{"[OK] opencode-config", "not Lore-managed", "[OK] opencode-tui"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("doctor output = %q, want substring %q", out, want)
+		}
+	}
+	if strings.Contains(out, "opencode-mcp") || strings.Contains(out, "[FAIL] opencode-config") {
+		t.Fatalf("doctor output = %q, want no Lore MCP warning or config failure for foreign OpenCode config", out)
+	}
+}
+
+func TestDoctorChecksLegacyOpenCodeTUIWhenOpenCodeJSONMissing(t *testing.T) {
+	homeDir := t.TempDir()
+	root := filepath.Join(homeDir, ".config", "opencode")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s) error = %v", root, err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "tui.json"), []byte(`{"plugin":["opencode-subagent-statusline"]}`), 0o600); err != nil {
+		t.Fatalf("WriteFile(tui.json) error = %v", err)
+	}
+
+	store := &fakeStore{path: "/tmp/lore/config.json", loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token"}}
+	app, _, _ := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return &fakeClient{}, nil })
+	app.UserHomeDir = func() (string, error) { return homeDir, nil }
+	app.LookPath = func(name string) (string, error) { return "/usr/bin/pi", nil }
+
+	report := app.doctorAction(context.Background())
+	if report.ExitCode != 1 {
+		t.Fatalf("doctorAction() exitCode = %d, want 1 for stale tui.json even when opencode.json is missing", report.ExitCode)
+	}
+	out := output.RenderChecks(report.Title, report.Checks)
+	for _, want := range []string{"[OK] opencode-config", "config not found", "[FAIL] opencode-tui", "legacy OpenCode runtime-emulation plugins"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("doctor output = %q, want substring %q", out, want)
+		}
+	}
+}
+
+func TestDoctorTreatsForeignAgentsNamedLoreAsInformational(t *testing.T) {
+	homeDir := t.TempDir()
+	root := filepath.Join(homeDir, ".config", "opencode")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s) error = %v", root, err)
+	}
+	foreign := `{"agent":{"lore":{"prompt":"foreign prompt","model":"some/model"},"sdd-apply":{"prompt":"also foreign","model":"other/model"}},"tui":{"enabled":true}}`
+	if err := os.WriteFile(filepath.Join(root, "opencode.json"), []byte(foreign), 0o600); err != nil {
+		t.Fatalf("WriteFile(opencode.json) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "tui.json"), []byte(`{"plugin":[]}`), 0o600); err != nil {
+		t.Fatalf("WriteFile(tui.json) error = %v", err)
+	}
+
+	store := &fakeStore{path: "/tmp/lore/config.json", loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token"}}
+	app, _, _ := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return &fakeClient{}, nil })
+	app.UserHomeDir = func() (string, error) { return homeDir, nil }
+	app.LookPath = func(name string) (string, error) { return "/usr/bin/pi", nil }
+
+	report := app.doctorAction(context.Background())
+	if report.ExitCode != 0 {
+		t.Fatalf("doctorAction() exitCode = %d, want 0 for foreign agents named lore/sdd-*", report.ExitCode)
+	}
+	out := output.RenderChecks(report.Title, report.Checks)
+	for _, want := range []string{"[OK] opencode-config", "not Lore-managed", "[OK] opencode-tui"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("doctor output = %q, want substring %q", out, want)
+		}
+	}
+	if strings.Contains(out, "missing agent.sdd-init") || strings.Contains(out, "startup-risky") {
+		t.Fatalf("doctor output = %q, want no Lore-managed startup failure for foreign agent names", out)
+	}
+}
+
+func TestDoctorFlagsLegacyOpenCodeTUIObjectPluginShape(t *testing.T) {
+	homeDir := t.TempDir()
+	root := filepath.Join(homeDir, ".config", "opencode")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s) error = %v", root, err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "opencode.json"), []byte(`{"theme":"system"}`), 0o600); err != nil {
+		t.Fatalf("WriteFile(opencode.json) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "tui.json"), []byte(`{"plugins":[{"id":"background-agents.ts","owner":"lore-cli"}]}`), 0o600); err != nil {
+		t.Fatalf("WriteFile(tui.json) error = %v", err)
+	}
+
+	store := &fakeStore{path: "/tmp/lore/config.json", loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token"}}
+	app, _, _ := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return &fakeClient{}, nil })
+	app.UserHomeDir = func() (string, error) { return homeDir, nil }
+	app.LookPath = func(name string) (string, error) { return "/usr/bin/pi", nil }
+
+	report := app.doctorAction(context.Background())
+	if report.ExitCode != 1 {
+		t.Fatalf("doctorAction() exitCode = %d, want 1 for stale Lore-managed TUI plugin shape", report.ExitCode)
+	}
+	out := output.RenderChecks(report.Title, report.Checks)
+	for _, want := range []string{"[FAIL] opencode-tui", "legacy OpenCode runtime-emulation plugins", "lore install --target opencode"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("doctor output = %q, want substring %q", out, want)
+		}
+	}
 }
 
 func TestRunAPIRequestUsesSavedAuthAndReturnsSuccessEnvelope(t *testing.T) {

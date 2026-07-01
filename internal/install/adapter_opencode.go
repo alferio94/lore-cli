@@ -71,25 +71,32 @@ const (
 // `opencodeLoreWorkerAgentName` is the canonical worker agent name
 // rendered into the `agent` overlay alongside the SDD phase agents.
 const (
-	opencodeLoreBlockKey         = "lore"
-	opencodeManagedByKey         = "managed_by"
-	opencodeManagedByValue       = "lore-cli"
-	opencodeSchemaVersionKey     = "schema_version"
-	opencodeAgentsKey            = "agent"
-	opencodeSkillsDirKey         = "skills"
-	opencodeSkillsDirPath        = "~/.config/opencode/skills"
-	opencodeThemeKey             = "theme"
-	opencodeThemeValue           = "system"
-	opencodeMCPLoreKey           = "lore"
-	opencodeDefaultAgentKey      = "default_agent"
-	opencodePermissionKey        = "permission"
-	opencodeAgentModeKey         = "mode"
-	opencodePrimaryModeValue     = "primary"
-	opencodeSubagentModeValue    = "subagent"
-	opencodeAgentModelKey        = "model"
-	opencodeAgentVariantKey      = "variant"
-	opencodeLoreWorkerAgentName  = "lore-worker"
-	opencodeLoreWorkerPromptFile = "skills/lore-worker/SKILL.md"
+	opencodeLoreBlockKey           = "lore"
+	opencodeManagedByKey           = "managed_by"
+	opencodeManagedByValue         = "lore-cli"
+	opencodeSchemaVersionKey       = "schema_version"
+	opencodeAgentsKey              = "agent"
+	opencodeSkillsDirKey           = "skills"
+	opencodeSkillsDirPath          = "~/.config/opencode/skills"
+	opencodeThemeKey               = "theme"
+	opencodeThemeValue             = "system"
+	opencodeMCPLoreKey             = "lore"
+	opencodeDefaultAgentKey        = "default_agent"
+	opencodePermissionKey          = "permission"
+	opencodePermissionTaskKey      = "task"
+	opencodePermissionQuestionKey  = "question"
+	opencodePermissionAllowValue   = "allow"
+	opencodePermissionAskValue     = "ask"
+	opencodePermissionDenyValue    = "deny"
+	opencodeAgentModeKey           = "mode"
+	opencodePrimaryModeValue       = "primary"
+	opencodeSubagentModeValue      = "subagent"
+	opencodeAgentModelKey          = "model"
+	opencodeAgentVariantKey        = "variant"
+	opencodeAgentPromptKey         = "prompt"
+	opencodeLoreWorkerAgentName    = "lore-worker"
+	opencodePrimaryAgentPromptFile = "prompts/lore.md"
+	opencodeLoreWorkerPromptFile   = "prompts/lore-worker.md"
 )
 
 // opencodePrimaryAgentName is the canonical name of the primary
@@ -104,24 +111,13 @@ const (
 // built-in `build` agent.
 const opencodePrimaryAgentName = "lore"
 
-// opencodePrimaryAgentPromptFile is the relative path of the
-// managed prompt body for the primary orchestrator agent. The
-// managed AGENTS.md file already contains the canonical
-// orchestrator system instruction rendered by
-// `agentpack.RenderOrchestratorSystemInstruction`, so the primary
-// agent reuses that file via a `{file:./<path>}` reference instead
-// of duplicating the instruction into a separate SKILL.md. The
-// reference is resolved relative to the opencode.json file
-// (i.e. `~/.config/opencode/`).
-const opencodePrimaryAgentPromptFile = "AGENTS.md"
-
 // opencodePrimaryAgentDescription is the human-readable description
 // for the primary orchestrator agent entry. It is rendered into the
 // native `agent` overlay so OpenCode tooling (CLI help, picker UIs)
 // can show the primary agent's intent. The description is
 // intentionally short and self-contained so the opencode.json file
 // stays compact.
-const opencodePrimaryAgentDescription = "Global Lore orchestrator. Owns decisions, pacing, user-facing synthesis, and SDD phase delegation. Loads ~/.config/opencode/AGENTS.md (rendered from agentpack.RenderOrchestratorSystemInstruction)."
+const opencodePrimaryAgentDescription = "Global Lore orchestrator. Owns decisions, pacing, user-facing synthesis, and SDD phase delegation. Loads ~/.config/opencode/prompts/lore.md."
 
 // opencodePrimaryAgentModelFallback is the model used for the
 // primary orchestrator agent when the `ProfileBalanced.RoleModels["orchestrator"]`
@@ -130,14 +126,10 @@ const opencodePrimaryAgentDescription = "Global Lore orchestrator. Owns decision
 // specific model name in the additive-merge regression gates.
 const opencodePrimaryAgentModelFallback = agentpack.DefaultSDDModel
 
-// opencodeManagedPluginNames is the bounded set of plugin names
-// the OpenCode installer registers in the native `tui.json` file.
-// The OpenCode TUI native shape uses a singular `plugin` string
-// array (e.g. `["opencode-subagent-statusline"]`), and only the
-// community statusline is registered — local plugin .ts files
-// (background-agents.ts, lore-models.ts) are copied into the
-// plugins/ directory but are NOT registered as native TUI plugins
-// (they are picked up automatically from the plugins/ directory).
+// opencodeCommunityStatuslinePlugin is the legacy optional plugin name
+// that older Lore-managed OpenCode installs registered. The current
+// native-agent install does not copy or register it; the constant is
+// retained for legacy detection/migration tests.
 const (
 	opencodeCommunityStatuslinePlugin = "opencode-subagent-statusline"
 )
@@ -186,7 +178,7 @@ func defaultOpenCodeAdapter() HarnessAdapter {
 			CapabilityOpenCodePlugins: {
 				ID:          CapabilityOpenCodePlugins,
 				Component:   ComponentOpenCodePlugins,
-				Description: "Bounded OpenCode plugin asset bundle: background-agents.ts and lore-models.ts are copied to ~/.config/opencode/plugins/; the community opencode-subagent-statusline is registered in tui.json. The previous `model-variants.ts` asset was renamed to `lore-models.ts` by the `add-opencode-lore-models-plugin` change; `lore-models.ts` keeps the provider/model/variant discovery cache behavior of the previous asset and additionally exposes a safe opencode.json hot-edit entrypoint for in-OpenCode model/variant configuration. Excludes sdd-engram and logo.",
+				Description: "Bounded OpenCode native-safe TUI settings bundle: no Lore-managed plugins are copied or registered. Legacy Lore-owned runtime emulation plugins (background-agents.ts, lore-models.ts, model-variants.ts, and the previous statusline stub) are not installed; prior Lore-managed copies are cleaned up through manifest-scoped backup/delete. Excludes sdd-engram and logo.",
 				Optional:    true,
 			},
 		},
@@ -319,6 +311,11 @@ func (a opencodeAdapter) Render(_ context.Context, req RenderRequest) ([]Rendere
 			MergeMode:    MergeModeReplace,
 			Content:      agentsContent,
 		})
+		promptFiles, err := renderOpenCodePromptAssets()
+		if err != nil {
+			return nil, err
+		}
+		rendered = append(rendered, promptFiles...)
 		rendered = append(rendered, renderOpenCodeManagedSkills(req)...)
 	}
 	if containsComponent(components, ComponentExtendedSkills) {
@@ -375,14 +372,15 @@ func renderOpenCodeAgentsMD(req RenderRequest) ([]byte, error) {
 		"",
 		"## OpenCode managed surface",
 		"- Managed skills directory: `~/.config/opencode/skills`",
-		"- Managed settings merge target: `~/.config/opencode/opencode.json` (native OpenCode shape: `$schema: https://opencode.ai/config.json`, `default_agent: \"lore\"`, the native `agent` overlay wiring the primary `lore` orchestrator (model from `ProfileBalanced.RoleModels[\"orchestrator\"]`, `mode: \"primary\"`, prompt reference `{file:./AGENTS.md}` resolved against the managed orchestrator system instruction below) plus the `lore-worker` repository worker (model from `ProfileBalanced.RoleModels[\"lore-worker\"]`, `mode: \"subagent\"`, prompt reference `{file:./skills/lore-worker/SKILL.md}`) plus every SDD phase agent to its `~/.config/opencode/skills/<name>/SKILL.md` prompt via `{file:...}` references — non-lore agents render `mode: \"subagent\"`. Each Lore-managed agent MAY carry a `variant` field sourced from a previous user-driven `opencode.json` `agent.<name>.variant` value so user-chosen variants survive reinstall; the installer never invents unsupported variants. The documented `mcp.lore` remote entry is included when lore-server-mcp is selected/defaulted. The installer never writes a top-level Lore-only `lore` metadata block into opencode.json, and it never grants a `permission: \"allow\"` (or any other) bypass on `agent.lore`; users who need elevated permissions configure them out-of-band on a sibling agent.",
+		"- Managed prompt files: `~/.config/opencode/prompts/lore.md`, `~/.config/opencode/prompts/lore-worker.md`, and `~/.config/opencode/prompts/sdd/<phase>.md`. These OpenCode-native prompt assets are rendered now so later native `agent.*.prompt` references can move to `{file:./prompts/...}` without relying on plugin-owned runtime shims.",
+		"- Managed settings merge target: `~/.config/opencode/opencode.json` (native OpenCode shape: `$schema: https://opencode.ai/config.json`, `default_agent: \"lore\"`, the native `agent` overlay wiring the primary `lore` orchestrator (model from `ProfileBalanced.RoleModels[\"orchestrator\"]`, `mode: \"primary\"`, prompt reference `{file:./prompts/lore.md}`) plus the `lore-worker` repository worker (model from `ProfileBalanced.RoleModels[\"lore-worker\"]`, `mode: \"subagent\"`, prompt reference `{file:./prompts/lore-worker.md}`) plus every SDD phase agent to its managed `~/.config/opencode/prompts/sdd/<phase>.md` prompt via `{file:./prompts/sdd/<phase>.md}` references — non-lore agents render `mode: \"subagent\"`. The primary `lore` entry renders native OpenCode `permission.task` routing with `*` denied and only `lore-worker` plus `sdd-*` allowed; all Lore-managed agents render `permission.question: \"allow\"`, while subagents render `permission.task: \"deny\"` so they do not chain delegation. Each Lore-managed agent MAY carry a `variant` field sourced from a previous user-driven `opencode.json` `agent.<name>.variant` value so user-chosen variants survive reinstall; the installer never invents unsupported variants. The documented `mcp.lore` remote entry is included when lore-server-mcp is selected/defaulted. The installer never writes a top-level Lore-only `lore` metadata block into opencode.json, and it never grants a `permission: \"allow\"` bypass or any blanket permission bypass on `agent.lore`; users who need elevated permissions configure them out-of-band on a sibling agent.",
 		"- Primary `lore` orchestrator: the native `default_agent: \"lore\"` and `agent.lore` entry are the documented way to run OpenCode with the global Lore orchestrator instead of letting OpenCode fall back to the built-in `build` agent; explicit selection via `opencode --agent lore` also works. The `agent.lore` entry is owned by the installer (the additive merge replaces it on every render); users who want a custom primary add a sibling entry under a different key (e.g. `agent.lore-custom`) instead of editing `agent.lore` directly.",
-		"- Managed plugin bundle: `~/.config/opencode/plugins/` (default component: `opencode-plugins`). Bundled assets: `background-agents.ts`, `lore-models.ts`, and the community `opencode-subagent-statusline`. The native `tui.json` registers ONLY the community statusline in its singular `plugin` string array; local plugin .ts files are picked up automatically from the plugins/ directory and are not registered in tui.json. The previous `model-variants.ts` asset was renamed to `lore-models.ts`; the `lore-models.ts` plugin keeps the provider/model/variant discovery cache behavior of the previous asset AND exposes a safe `opencode.json` hot-edit entrypoint (`lore_models_set_agent` / `lore_models_list_agents` plugin tools) for in-OpenCode model/variant configuration.",
+		"- Managed plugin bundle: `~/.config/opencode/plugins/` (default component: `opencode-plugins`). Current native-agent installs copy no Lore-managed plugin `.ts` files and render native `tui.json` with an empty singular `plugin` array. Legacy Lore-owned runtime emulation plugins (`background-agents.ts`, `lore-models.ts`, the older `model-variants.ts`, and the previous `opencode-subagent-statusline.ts` stub) are not installed and prior Lore-managed copies are backup-deleted during reinstall.",
 		"- Explicit exclusions: the installer NEVER bundles, renders, or registers `sdd-engram` or `logo`. The exclusion list is enforced at the embed.FS static guard, the plugin asset reader, and the tui.json plugin allowlist.",
 		"- Managed manifest: `~/.config/opencode/lore-install.json`",
-		"- Scope boundary: config-only Lore projection; no profiles or bootstrap/package-manager behavior in this slice. OpenCode plugin behavior is bounded to the three managed plugin .ts files plus `tui.json`: `background-agents.ts` provides async delegation tools, `lore-models.ts` provides in-OpenCode model/variant configuration plus a best-effort provider/variant discovery cache, and the community statusline is registered through the native TUI `plugin` array.",
+		"- Scope boundary: config-only Lore projection; no profiles, bootstrap/package-manager behavior, Pi-like delegation emulation, or model hot-edit runtime. OpenCode plugin behavior is bounded to native `tui.json` settings with no Lore-managed plugin registrations; native OpenCode owns subagent/background behavior.",
 		"- Lore server MCP token: when lore-server-mcp is selected/defaulted, the bearer token is persisted in opencode.json under `mcp.lore.headers.Authorization` and a plaintext-token warning (`auth_header=plaintext-bearer-token`) appears at install time. The install summary never embeds the saved token; only the path, the server URL, and the auth header name are surfaced.",
-		"- `mcp.lore` ownership: the installer only overwrites an existing `mcp.lore` subtree when it is recognizably Lore-owned (legacy `managed_by: lore-cli`, or a remote `/v1/mcp` endpoint with an Authorization header). A non-Lore-owned `mcp.lore` block is treated as a foreign MCP configuration and the installer fails closed with a typed conflict error. The rendered OpenCode MCP block intentionally omits Lore-only marker fields so it remains valid against the native OpenCode schema. The existing file is backed up to the managed backup root before the installer aborts, the error names the conflicting `mcp.lore` `type` and `url` (without the token), and the resolution guidance points the user at editing the existing block or removing the conflicting `mcp.lore` subtree.",
+		"- `mcp.lore` ownership: the installer only overwrites an existing `mcp.lore` subtree when it is recognizably Lore-owned (legacy `managed_by: lore-cli`, or a remote `/v1/mcp` endpoint with an Authorization header). A non-Lore-owned `mcp.lore` block is treated as a foreign MCP configuration and the installer fails closed with a typed conflict error. The rendered OpenCode MCP block intentionally omits Lore-only marker fields so it remains valid against the native OpenCode schema. Planning stays pure: the error records the managed backup path for guidance but does not write a backup during plan/dry-run; it names the conflicting `mcp.lore` `type` and `url` (without the token), and the resolution guidance points the user at editing the existing block or removing the conflicting `mcp.lore` subtree.",
 		"- Migration: when an existing install was produced by the legacy `lore`-shaped renderer (a top-level `lore` block in opencode.json, or a plural `plugins` object array plus a top-level `lore` block in tui.json), the additive merge drops the stale shape and writes the native shape on the next run. The existing user-owned top-level keys (e.g. `theme`, custom `mcp.<other>` entries, user `agent` overrides) are preserved.",
 		"",
 		"## Managed SDD model declarations",
@@ -454,18 +452,55 @@ func OpenCodeSkillPathResolver() agentpack.SkillPathResolver {
 // agent-config.json file, falling back to the agentpack default model.
 func openCodeAgentModels(cfg agentconfig.Config) map[string]string {
 	models := make(map[string]string, len(agentpack.SDDPhaseAgentNames()))
+	defaultModel := openCodeModelOrDefault(agentpack.DefaultSDDModel)
 	for _, name := range agentpack.SDDPhaseAgentNames() {
-		models[name] = agentpack.DefaultSDDModel
+		models[name] = defaultModel
 	}
 	for name, agent := range cfg.SDDAgents {
-		if strings.TrimSpace(agent.Model) == "" {
+		model, ok := normalizeOpenCodeModelIdentifier(agent.Model)
+		if !ok {
 			continue
 		}
-		if _, ok := models[name]; ok {
-			models[name] = strings.TrimSpace(agent.Model)
+		if _, managed := models[name]; managed {
+			models[name] = model
 		}
 	}
 	return models
+}
+
+func openCodeModelOrDefault(model string) string {
+	if normalized, ok := normalizeOpenCodeModelIdentifier(model); ok {
+		return normalized
+	}
+	if normalized, ok := normalizeOpenCodeModelIdentifier(agentpack.DefaultSDDModel); ok {
+		return normalized
+	}
+	return strings.TrimSpace(agentpack.DefaultSDDModel)
+}
+
+func normalizeOpenCodeModelIdentifier(model string) (string, bool) {
+	trimmed := strings.TrimSpace(model)
+	if trimmed == "" {
+		return "", false
+	}
+	if strings.Contains(trimmed, "/") {
+		parts := strings.SplitN(trimmed, "/", 2)
+		if strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+			return "", false
+		}
+		return trimmed, true
+	}
+	lower := strings.ToLower(trimmed)
+	switch {
+	case strings.HasPrefix(lower, "gpt-"), strings.HasPrefix(lower, "o1"), strings.HasPrefix(lower, "o3"), strings.HasPrefix(lower, "o4"):
+		return "openai/" + trimmed, true
+	case strings.HasPrefix(lower, "claude-"):
+		return "anthropic/" + trimmed, true
+	case strings.HasPrefix(lower, "gemini-"):
+		return "google/" + trimmed, true
+	default:
+		return "", false
+	}
 }
 
 // canonicalOpenCodePhaseName returns the approved canonical phase name
@@ -577,10 +612,11 @@ func opencodeAgentOverlay(definition agentpack.Definition, cfg agentconfig.Confi
 		primaryModel = existing
 	}
 	primaryEntry := map[string]any{
-		"description":        opencodePrimaryAgentDescription,
-		"model":              primaryModel,
-		opencodeAgentModeKey: opencodePrimaryModeValue,
-		"prompt":             "{file:./" + opencodePrimaryAgentPromptFile + "}",
+		"description":          opencodePrimaryAgentDescription,
+		opencodeAgentModelKey:  primaryModel,
+		opencodeAgentModeKey:   opencodePrimaryModeValue,
+		opencodeAgentPromptKey: openCodePromptFileReference(opencodePrimaryAgentPromptFile),
+		opencodePermissionKey:  openCodePrimaryAgentPermission(),
 	}
 	if variant, ok := variants[opencodePrimaryAgentName]; ok {
 		primaryEntry[opencodeAgentVariantKey] = variant
@@ -602,9 +638,10 @@ func opencodeAgentOverlay(definition agentpack.Definition, cfg agentconfig.Confi
 		workerModel = existing
 	}
 	workerEntry := map[string]any{
-		"model":              workerModel,
-		opencodeAgentModeKey: opencodeSubagentModeValue,
-		"prompt":             "{file:./" + opencodeLoreWorkerPromptFile + "}",
+		opencodeAgentModelKey:  workerModel,
+		opencodeAgentModeKey:   opencodeSubagentModeValue,
+		opencodeAgentPromptKey: openCodePromptFileReference(opencodeLoreWorkerPromptFile),
+		opencodePermissionKey:  openCodeSubagentPermission(),
 	}
 	if variant, ok := variants[opencodeLoreWorkerAgentName]; ok {
 		workerEntry[opencodeAgentVariantKey] = variant
@@ -616,9 +653,10 @@ func opencodeAgentOverlay(definition agentpack.Definition, cfg agentconfig.Confi
 			entryModel = existing
 		}
 		entry := map[string]any{
-			"model":              entryModel,
-			opencodeAgentModeKey: opencodeSubagentModeValue,
-			"prompt":             "{file:./skills/" + name + "/SKILL.md}",
+			opencodeAgentModelKey:  entryModel,
+			opencodeAgentModeKey:   opencodeSubagentModeValue,
+			opencodeAgentPromptKey: openCodePromptFileReference(openCodeSDDPromptFile(name)),
+			opencodePermissionKey:  openCodeSubagentPermission(),
 		}
 		if variant, ok := variants[name]; ok {
 			entry[opencodeAgentVariantKey] = variant
@@ -626,6 +664,33 @@ func opencodeAgentOverlay(definition agentpack.Definition, cfg agentconfig.Confi
 		overlay[name] = entry
 	}
 	return overlay
+}
+
+func openCodePrimaryAgentPermission() map[string]any {
+	return map[string]any{
+		opencodePermissionTaskKey: map[string]any{
+			"*":                         opencodePermissionDenyValue,
+			opencodeLoreWorkerAgentName: opencodePermissionAllowValue,
+			"sdd-*":                     opencodePermissionAllowValue,
+		},
+		opencodePermissionQuestionKey: opencodePermissionAllowValue,
+	}
+}
+
+func openCodeSubagentPermission() map[string]any {
+	return map[string]any{
+		opencodePermissionTaskKey:     opencodePermissionDenyValue,
+		opencodePermissionQuestionKey: opencodePermissionAllowValue,
+	}
+}
+
+func openCodePromptFileReference(relativePath string) string {
+	return "{file:./" + filepath.ToSlash(strings.TrimSpace(relativePath)) + "}"
+}
+
+func openCodeSDDPromptFile(agentName string) string {
+	phase := strings.TrimPrefix(strings.TrimSpace(agentName), "sdd-")
+	return filepath.ToSlash(filepath.Join("prompts", "sdd", phase+".md"))
 }
 
 // openCodeAgentModelsFromExisting returns the per-agent model map
@@ -637,8 +702,8 @@ func opencodeAgentOverlay(definition agentpack.Definition, cfg agentconfig.Confi
 func openCodeAgentModelsFromExisting(existingAgent map[string]openCodeExistingAgentEntry) map[string]string {
 	models := make(map[string]string, len(existingAgent))
 	for name, entry := range existingAgent {
-		model := strings.TrimSpace(entry.Model)
-		if model == "" {
+		model, ok := normalizeOpenCodeModelIdentifier(entry.Model)
+		if !ok {
 			continue
 		}
 		if !isLoreManagedOverlayAgent(name) {
@@ -734,17 +799,17 @@ func isLoreManagedOverlayAgent(name string) bool {
 // of the primary orchestrator's model.
 func opencodeOrchestratorModel(definition agentpack.Definition) string {
 	if definition.SchemaVersion == 0 {
-		return opencodePrimaryAgentModelFallback
+		return openCodeModelOrDefault(opencodePrimaryAgentModelFallback)
 	}
 	profile, err := definition.Profile(agentpack.ProfileBalanced)
 	if err != nil || strings.TrimSpace(profile.ID) == "" {
-		return opencodePrimaryAgentModelFallback
+		return openCodeModelOrDefault(opencodePrimaryAgentModelFallback)
 	}
 	model := strings.TrimSpace(profile.ModelForRole(agentpack.RoleOrchestrator))
 	if model == "" {
-		return opencodePrimaryAgentModelFallback
+		return openCodeModelOrDefault(opencodePrimaryAgentModelFallback)
 	}
-	return model
+	return openCodeModelOrDefault(model)
 }
 
 // opencodeWorkerModel returns the model the `lore-worker`
@@ -760,29 +825,27 @@ func opencodeOrchestratorModel(definition agentpack.Definition) string {
 // `model` read in `effectiveOpenCodeExistingAgent`).
 func opencodeWorkerModel(definition agentpack.Definition) string {
 	if definition.SchemaVersion == 0 {
-		return opencodePrimaryAgentModelFallback
+		return openCodeModelOrDefault(opencodePrimaryAgentModelFallback)
 	}
 	profile, err := definition.Profile(agentpack.ProfileBalanced)
 	if err != nil || strings.TrimSpace(profile.ID) == "" {
-		return opencodePrimaryAgentModelFallback
+		return openCodeModelOrDefault(opencodePrimaryAgentModelFallback)
 	}
 	model := strings.TrimSpace(profile.ModelForRole(agentpack.RoleLoreWorker))
 	if model == "" {
-		return opencodePrimaryAgentModelFallback
+		return openCodeModelOrDefault(opencodePrimaryAgentModelFallback)
 	}
-	return model
+	return openCodeModelOrDefault(model)
 }
 
 // opencodeSkillsBlock returns the native `skills` block for the
-// `opencode.json` file. The block declares the path of the
-// managed skills directory so OpenCode can resolve the
-// `{file:./skills/<name>/SKILL.md}` references declared on each
-// `agent.prompt` field. The value is a small `{path, ...}` map
-// that matches the documented OpenCode shape and never includes
-// any Lore-specific metadata.
+// `opencode.json` file. The block declares the managed skills
+// directory using the schema-safe plural `paths` shape. Agent prompts
+// themselves point at managed `./prompts/...` files, so this block is
+// discovery metadata only and never includes Lore-specific fields.
 func opencodeSkillsBlock() map[string]any {
 	return map[string]any{
-		"path": opencodeSkillsDirPath,
+		"paths": []string{opencodeSkillsDirPath},
 	}
 }
 
@@ -862,8 +925,8 @@ func effectiveOpenCodeExistingAgent(layout HarnessLayout) map[string]openCodeExi
 // block. The shape is: `$schema`, `theme`, the native `agent`
 // overlay (primary `lore` orchestrator + the `lore-worker`
 // repository worker + one entry per SDD phase agent with
-// `model` + `{file:./skills/<name>/SKILL.md}` prompt reference),
-// and a `skills.path` declaration. When the caller wants the
+// `model` + `{file:./prompts/...}` prompt reference),
+// and a schema-safe `skills.paths` declaration. When the caller wants the
 // MCP-enabled variant they should call `renderOpenCodeMCPConfig`
 // instead, which extends this shape with the documented top-level
 // `mcp.lore` remote entry.
@@ -910,7 +973,11 @@ func renderOpenCodeNativeConfigWithExisting(definition agentpack.Definition, cfg
 	if err != nil {
 		return nil, fmt.Errorf("encode opencode native config: %w", err)
 	}
-	return append(data, '\n'), nil
+	data = append(data, '\n')
+	if err := validateOpenCodeStartupSafeConfig(data, opencodeConfigFileName); err != nil {
+		return nil, err
+	}
+	return data, nil
 }
 
 // opencodeSchemaKey returns the JSON key for the `$schema`
@@ -982,5 +1049,159 @@ func renderOpenCodeMCPConfigWithExisting(definition agentpack.Definition, cfg ag
 	if err != nil {
 		return nil, fmt.Errorf("encode opencode mcp config: %w", err)
 	}
-	return append(data, '\n'), nil
+	data = append(data, '\n')
+	if err := validateOpenCodeStartupSafeConfig(data, opencodeConfigFileName); err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
+func validateOpenCodeStartupSafeConfig(data []byte, path string) error {
+	payload := map[string]any{}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return fmt.Errorf("validate %s startup-safe shape: decode JSON: %w", path, err)
+	}
+	if got, _ := payload[opencodeSchemaKey()].(string); got != opencodeConfigSchemaURL {
+		return fmt.Errorf("validate %s startup-safe shape: %s = %q, want %q", path, opencodeSchemaKey(), got, opencodeConfigSchemaURL)
+	}
+	if got, _ := payload[opencodeDefaultAgentKey].(string); got != opencodePrimaryAgentName {
+		return fmt.Errorf("validate %s startup-safe shape: %s = %q, want %q", path, opencodeDefaultAgentKey, got, opencodePrimaryAgentName)
+	}
+	if _, present := payload[opencodeLoreBlockKey]; present {
+		return fmt.Errorf("validate %s startup-safe shape: top-level %q is not native OpenCode config", path, opencodeLoreBlockKey)
+	}
+	if _, present := payload["plugins"]; present {
+		return fmt.Errorf("validate %s startup-safe shape: top-level %q is not allowed in opencode.json", path, "plugins")
+	}
+	agents, ok := payload[opencodeAgentsKey].(map[string]any)
+	if !ok || len(agents) == 0 {
+		return fmt.Errorf("validate %s startup-safe shape: %q must be a non-empty object", path, opencodeAgentsKey)
+	}
+	for _, name := range expectedOpenCodeManagedAgentNames() {
+		raw, ok := agents[name]
+		if !ok {
+			return fmt.Errorf("validate %s startup-safe shape: missing agent.%s", path, name)
+		}
+		entry, ok := raw.(map[string]any)
+		if !ok {
+			return fmt.Errorf("validate %s startup-safe shape: agent.%s must be an object", path, name)
+		}
+		if err := validateOpenCodeManagedAgentShape(path, name, entry); err != nil {
+			return err
+		}
+	}
+	if skills, ok := payload[opencodeSkillsDirKey].(map[string]any); ok {
+		paths, ok := skills["paths"].([]any)
+		if !ok || len(paths) != 1 || paths[0] != opencodeSkillsDirPath {
+			return fmt.Errorf("validate %s startup-safe shape: skills.paths = %v, want [%q]", path, skills["paths"], opencodeSkillsDirPath)
+		}
+		if _, present := skills["path"]; present {
+			return fmt.Errorf("validate %s startup-safe shape: skills.path is not schema-safe; use skills.paths", path)
+		}
+	} else {
+		return fmt.Errorf("validate %s startup-safe shape: %q must be an object", path, opencodeSkillsDirKey)
+	}
+	if rawMCP, present := payload[opencodeMCPBlockKey]; present {
+		if _, ok := rawMCP.(map[string]any); !ok {
+			return fmt.Errorf("validate %s startup-safe shape: %q must be an object when present", path, opencodeMCPBlockKey)
+		}
+	}
+	return nil
+}
+
+func validateOpenCodeManagedAgentShape(path, name string, entry map[string]any) error {
+	mode, _ := entry[opencodeAgentModeKey].(string)
+	wantMode := opencodeSubagentModeValue
+	if name == opencodePrimaryAgentName {
+		wantMode = opencodePrimaryModeValue
+	}
+	if mode != wantMode {
+		return fmt.Errorf("validate %s startup-safe shape: agent.%s.mode = %q, want %q", path, name, mode, wantMode)
+	}
+	model, _ := entry[opencodeAgentModelKey].(string)
+	if strings.TrimSpace(model) == "" {
+		return fmt.Errorf("validate %s startup-safe shape: agent.%s.model must be a non-empty string", path, name)
+	}
+	if _, ok := normalizeOpenCodeModelIdentifier(model); !ok || !strings.Contains(model, "/") {
+		return fmt.Errorf("validate %s startup-safe shape: agent.%s.model = %q must use provider/model form", path, name, model)
+	}
+	prompt, _ := entry[opencodeAgentPromptKey].(string)
+	wantPrompt := expectedOpenCodeManagedAgentPrompt(name)
+	if prompt != wantPrompt {
+		return fmt.Errorf("validate %s startup-safe shape: agent.%s.prompt = %q, want %q", path, name, prompt, wantPrompt)
+	}
+	if variant, present := entry[opencodeAgentVariantKey]; present {
+		if _, ok := variant.(string); !ok {
+			return fmt.Errorf("validate %s startup-safe shape: agent.%s.variant must be a string when present", path, name)
+		}
+	}
+	permission, ok := entry[opencodePermissionKey].(map[string]any)
+	if !ok || len(permission) == 0 {
+		return fmt.Errorf("validate %s startup-safe shape: agent.%s.%s must be a non-empty object", path, name, opencodePermissionKey)
+	}
+	if err := validateOpenCodeManagedAgentPermission(path, name, permission); err != nil {
+		return err
+	}
+	if _, present := entry["tools"]; present {
+		return fmt.Errorf("validate %s startup-safe shape: agent.%s.tools is deprecated and must not be rendered; use permission instead", path, name)
+	}
+	return nil
+}
+
+func validateOpenCodeManagedAgentPermission(path, name string, permission map[string]any) error {
+	question, _ := permission[opencodePermissionQuestionKey].(string)
+	if question != opencodePermissionAllowValue {
+		return fmt.Errorf("validate %s startup-safe shape: agent.%s.permission.%s = %q, want %q", path, name, opencodePermissionQuestionKey, question, opencodePermissionAllowValue)
+	}
+	taskRaw, present := permission[opencodePermissionTaskKey]
+	if !present {
+		return fmt.Errorf("validate %s startup-safe shape: agent.%s.permission.%s is required", path, name, opencodePermissionTaskKey)
+	}
+	if name == opencodePrimaryAgentName {
+		task, ok := taskRaw.(map[string]any)
+		if !ok {
+			return fmt.Errorf("validate %s startup-safe shape: agent.%s.permission.%s must be an object for managed task routing", path, name, opencodePermissionTaskKey)
+		}
+		return validateOpenCodePrimaryTaskPermission(path, name, task)
+	}
+	task, _ := taskRaw.(string)
+	if task != opencodePermissionDenyValue {
+		return fmt.Errorf("validate %s startup-safe shape: agent.%s.permission.%s = %q, want %q", path, name, opencodePermissionTaskKey, task, opencodePermissionDenyValue)
+	}
+	return nil
+}
+
+func validateOpenCodePrimaryTaskPermission(path, name string, task map[string]any) error {
+	want := map[string]string{
+		"*":                         opencodePermissionDenyValue,
+		opencodeLoreWorkerAgentName: opencodePermissionAllowValue,
+		"sdd-*":                     opencodePermissionAllowValue,
+	}
+	if len(task) != len(want) {
+		return fmt.Errorf("validate %s startup-safe shape: agent.%s.permission.%s has %d routes, want %d", path, name, opencodePermissionTaskKey, len(task), len(want))
+	}
+	for route, wantAction := range want {
+		got, _ := task[route].(string)
+		if got != wantAction {
+			return fmt.Errorf("validate %s startup-safe shape: agent.%s.permission.%s[%q] = %q, want %q", path, name, opencodePermissionTaskKey, route, got, wantAction)
+		}
+	}
+	return nil
+}
+
+func expectedOpenCodeManagedAgentNames() []string {
+	names := []string{opencodePrimaryAgentName, opencodeLoreWorkerAgentName}
+	names = append(names, agentpack.SDDPhaseAgentNames()...)
+	return names
+}
+
+func expectedOpenCodeManagedAgentPrompt(name string) string {
+	switch name {
+	case opencodePrimaryAgentName:
+		return openCodePromptFileReference(opencodePrimaryAgentPromptFile)
+	case opencodeLoreWorkerAgentName:
+		return openCodePromptFileReference(opencodeLoreWorkerPromptFile)
+	default:
+		return openCodePromptFileReference(openCodeSDDPromptFile(name))
+	}
 }

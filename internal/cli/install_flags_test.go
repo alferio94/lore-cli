@@ -88,17 +88,19 @@ func TestInstallCommandAcceptsOpenCodeTarget(t *testing.T) {
 		"runtime=opencode-config-only",
 		"components=core-pack,lore-server-mcp,opencode-plugins",
 		"mcp=remote",
-		"plugins=bundled:background-agents,lore-models,opencode-subagent-statusline",
-		"plugins_location=~/.config/opencode/plugins/ (background-agents.ts, lore-models.ts); tui.json registers only opencode-subagent-statusline",
+		"opencode_background_subagents_env=OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true",
+		"prompts=~/.config/opencode/prompts",
+		"plugins=bundled:none",
+		"legacy_plugins=absent:background-agents,lore-models,model-variants,opencode-subagent-statusline",
+		"plugins_location=~/.config/opencode/plugins/ (no Lore-managed plugin files); tui.json registers no Lore-managed plugins",
+		"migration=legacy-managed-plugins-to-native-agents",
+		"rollback=restore-from-managed-backup-root-then-rerun-install",
 		"mcp_lore_ownership=fail-closed-on-foreign",
 		"excluded_plugins=sdd-engram,logo",
 		"mode=dry-run",
 		"managed_action=create:AGENTS.md",
 		"managed_action=create:lore-install.json",
 		"managed_action=create:opencode.json",
-		"managed_action=create:plugins/background-agents.ts",
-		"managed_action=create:plugins/lore-models.ts",
-		"managed_action=create:plugins/opencode-subagent-statusline.ts",
 		"managed_action=create:tui.json",
 	} {
 		if !strings.Contains(out, want) {
@@ -116,9 +118,9 @@ func TestInstallCommandAcceptsOpenCodeTarget(t *testing.T) {
 	if strings.Contains(out, "no plugins") {
 		t.Fatalf("stdout = %q, want legacy 'no plugins' wording removed", out)
 	}
-	// Defensive: the local plugin .ts files are copied to plugins/ and
-	// are NOT registered in tui.json. The summary must not say the
-	// background-agents / lore-models assets are in tui.json.
+	// Defensive: no local Lore-managed plugin .ts files are copied;
+	// legacy runtime-emulation plugins are neither copied nor registered
+	// in tui.json.
 	for _, forbidden := range []string{
 		"tui.json:background-agents",
 		"tui.json:lore-models",
@@ -126,7 +128,7 @@ func TestInstallCommandAcceptsOpenCodeTarget(t *testing.T) {
 		"plugins/lore-models.ts:tui.json",
 	} {
 		if strings.Contains(out, forbidden) {
-			t.Fatalf("stdout = %q, want %q to be absent (local plugin .ts files are copied to plugins/, not registered in tui.json)", out, forbidden)
+			t.Fatalf("stdout = %q, want %q to be absent (legacy runtime-emulation plugins are not copied or registered in tui.json)", out, forbidden)
 		}
 	}
 	// No OpenCode managed surface written to disk in dry-run mode.
@@ -323,6 +325,9 @@ func TestInstallUsageIncludesTargetAndComponentFlags(t *testing.T) {
 		"legacy managed_by marker",
 		"fails closed with a typed conflict error",
 		"non-Lore-owned mcp.lore block",
+		"Migration from older managed OpenCode installs is backup-first",
+		"~/.config/opencode/backups/<timestamp>/",
+		"native agents and prompt files",
 		// Cleanup slice: the install usage short target list AND the
 		// --target / --component flag descriptions must now include
 		// OpenCode consistently with the accepted runtime behavior and

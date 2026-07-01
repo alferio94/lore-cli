@@ -54,12 +54,9 @@ func TestInitialRenderShowsMenuHintsAndInstallEntry(t *testing.T) {
 		t.Fatal("install menu item description not found")
 	}
 	for _, want := range []string{
-		"opencode-plugins",
-		"background-agents",
-		"lore-models",
-		"opencode-subagent-statusline",
-		"sdd-engram",
-		"logo",
+		"no Lore-managed plugin registrations",
+		"no legacy runtime/statusline plugins",
+		"native prompt refs",
 		"config-only projection",
 		"default Lore MCP",
 		"default_agent=lore",
@@ -180,17 +177,14 @@ func TestInstallTargetSelectionSurfacesPiDefaultAndAntigravityMVPGuidance(t *tes
 	// so the user sees them when picking the OpenCode target.
 	for _, want := range []string{
 		"opencode-plugins",
-		"background-agents.ts",
-		"lore-models.ts",
-		"opencode-subagent-statusline",
-		"sdd-engram",
-		"logo",
+		"legacy runtime/statusline plugins are not copied",
+		"registers no Lore-managed plugins",
+		"sdd-engram/logo exclusions",
 		"default Lore MCP",
 		"default_agent=lore",
 		"`mode: \"subagent\"`",
 		"no `permission: \"allow\"` bypass",
 		"fail-closed",
-		"NOT registered in tui.json",
 	} {
 		if !strings.Contains(m.statusBody, want) {
 			t.Fatalf("statusBody missing %q:\n%s", want, m.statusBody)

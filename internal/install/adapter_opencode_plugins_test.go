@@ -11,29 +11,25 @@ import (
 )
 
 // TestOpenCodePluginAssetsAreBoundedToManagedSet verifies the bounded
-// plugin asset list: only the three documented plugin .ts files
-// (background-agents, lore-models, opencode-subagent-statusline)
-// are rendered, in stable order, and no other plugin name appears.
-// The `add-opencode-lore-models-plugin` change renamed the
-// `model-variants` asset to `lore-models`; the new managed set
-// must NOT include the legacy `model-variants.ts` path.
+// plugin asset list: only tui.json is rendered. Native OpenCode
+// agents do not require a Lore-managed plugin, and legacy runtime
+// emulation/statusline stubs must not be installed or required.
 func TestOpenCodePluginAssetsAreBoundedToManagedSet(t *testing.T) {
 	pluginFiles, err := renderOpenCodePluginAssets()
 	if err != nil {
 		t.Fatalf("renderOpenCodePluginAssets() error = %v, want nil", err)
 	}
-	if len(pluginFiles) != 4 {
-		t.Fatalf("renderOpenCodePluginAssets() returned %d files, want 4 (3 plugin .ts + tui.json); got %v",
+	if len(pluginFiles) != 1 {
+		t.Fatalf("renderOpenCodePluginAssets() returned %d files, want 1 (tui.json only); got %v",
 			len(pluginFiles), relativePathsOf(pluginFiles))
 	}
 	wantPluginPaths := map[string]bool{
-		"plugins/background-agents.ts":            false,
-		"plugins/lore-models.ts":                  false,
-		"plugins/opencode-subagent-statusline.ts": false,
 		"tui.json": false,
 	}
 	forbidden := map[string]bool{
-		"plugins/model-variants.ts": true,
+		"plugins/background-agents.ts": true,
+		"plugins/lore-models.ts":       true,
+		"plugins/model-variants.ts":    true,
 	}
 	for _, file := range pluginFiles {
 		relative := filepath.ToSlash(file.RelativePath)
@@ -42,7 +38,7 @@ func TestOpenCodePluginAssetsAreBoundedToManagedSet(t *testing.T) {
 				relative, file.Component, file.MergeMode)
 		}
 		if forbidden[relative] {
-			t.Fatalf("renderOpenCodePluginAssets() emitted legacy %q; the add-opencode-lore-models-plugin change renamed the asset to lore-models.ts and the legacy path must be removed from the managed set", relative)
+			t.Fatalf("renderOpenCodePluginAssets() emitted legacy runtime plugin %q; want native tui.json surface only", relative)
 		}
 		wantPluginPaths[relative] = true
 		if file.Component != ComponentOpenCodePlugins {
@@ -56,13 +52,91 @@ func TestOpenCodePluginAssetsAreBoundedToManagedSet(t *testing.T) {
 	}
 }
 
+// TestOpenCodePromptAssetsResolveManagedPaths verifies the native
+// prompt-file asset layout added for OpenCode agents. The test keeps
+// the mapping explicit so a future opencode.json prompt reference
+// cannot point at a missing managed file.
+func TestOpenCodePromptAssetsResolveManagedPaths(t *testing.T) {
+	promptFiles, err := renderOpenCodePromptAssets()
+	if err != nil {
+		t.Fatalf("renderOpenCodePromptAssets() error = %v, want nil", err)
+	}
+	wantPaths := map[string]bool{
+		"prompts/lore.md":        false,
+		"prompts/lore-worker.md": false,
+		"prompts/sdd/init.md":    false,
+		"prompts/sdd/explore.md": false,
+		"prompts/sdd/propose.md": false,
+		"prompts/sdd/spec.md":    false,
+		"prompts/sdd/design.md":  false,
+		"prompts/sdd/tasks.md":   false,
+		"prompts/sdd/apply.md":   false,
+		"prompts/sdd/verify.md":  false,
+		"prompts/sdd/archive.md": false,
+	}
+	if len(promptFiles) != len(wantPaths) {
+		t.Fatalf("renderOpenCodePromptAssets() returned %d files, want %d; got %v", len(promptFiles), len(wantPaths), relativePathsOf(promptFiles))
+	}
+	for _, file := range promptFiles {
+		relative := filepath.ToSlash(file.RelativePath)
+		if _, ok := wantPaths[relative]; !ok {
+			t.Fatalf("renderOpenCodePromptAssets() emitted unexpected path %q", relative)
+		}
+		wantPaths[relative] = true
+		if file.Component != ComponentCorePack {
+			t.Fatalf("prompt asset %q component = %q, want %q", relative, file.Component, ComponentCorePack)
+		}
+		if file.MergeMode != MergeModeReplace {
+			t.Fatalf("prompt asset %q merge mode = %q, want replace", relative, file.MergeMode)
+		}
+		content := string(file.Content)
+		for _, want := range []string{"OpenCode", "Lore"} {
+			if !strings.Contains(content, want) {
+				t.Fatalf("prompt asset %q missing %q; content=%q", relative, want, content)
+			}
+		}
+		if relative == "prompts/lore.md" {
+			for _, want := range []string{"Lore MCP", "native OpenCode subagents", "SDD orchestration"} {
+				if !strings.Contains(content, want) {
+					t.Fatalf("prompt asset %q missing orchestrator contract marker %q; content=%q", relative, want, content)
+				}
+			}
+		}
+		if relative == "prompts/lore-worker.md" {
+			for _, want := range []string{"Lore MCP", "needs_user_input", "Final compact JSON envelope", "status"} {
+				if !strings.Contains(content, want) {
+					t.Fatalf("prompt asset %q missing worker decision/envelope/MCP marker %q; content=%q", relative, want, content)
+				}
+			}
+		}
+		if strings.HasPrefix(relative, "prompts/sdd/") {
+			phase := strings.TrimSuffix(strings.TrimPrefix(relative, "prompts/sdd/"), ".md")
+			for _, want := range []string{"SDD graph", "Lore MCP", "Phase identity", "SDD phase: `" + phase + "`", "Persist the full phase artifact", "needs_user_input", "Final compact JSON envelope"} {
+				if !strings.Contains(content, want) {
+					t.Fatalf("prompt asset %q missing %q; content=%q", relative, want, content)
+				}
+			}
+		}
+	}
+	for path, seen := range wantPaths {
+		if !seen {
+			t.Fatalf("renderOpenCodePromptAssets() missing expected prompt asset %q", path)
+		}
+	}
+	if _, err := readOpenCodePromptAsset("sdd/missing.md"); err == nil {
+		t.Fatal("readOpenCodePromptAsset(sdd/missing.md) error = nil, want not-in-managed-list rejection")
+	} else if !strings.Contains(err.Error(), "not in the managed prompt asset list") {
+		t.Fatalf("readOpenCodePromptAsset(sdd/missing.md) error = %v, want not-in-managed-list rejection", err)
+	}
+}
+
 // TestOpenCodeTUISettingsUsesNativeShape is the focused regression
 // gate for the post-repair native OpenCode tui.json shape:
 //
 //   - `$schema` is exactly the documented OpenCode schema URL
 //     (https://opencode.ai/tui.json), not a placeholder URL.
-//   - The `plugin` field is a SINGULAR string array containing
-//     ONLY the community `opencode-subagent-statusline` name.
+//   - The `plugin` field is a SINGULAR string array and is empty
+//     because native OpenCode agents require no Lore-managed plugin.
 //   - There is NO plural `plugins` array of objects (the legacy
 //     shape the previous renderer produced).
 //   - There is NO top-level `lore` block (the legacy shape the
@@ -90,11 +164,8 @@ func TestOpenCodeTUISettingsUsesNativeShape(t *testing.T) {
 	if !ok {
 		t.Fatalf("tui.json missing singular `plugin` string array; got keys %v", keysOfMapTUI(payload))
 	}
-	if len(plugin) != 1 {
-		t.Fatalf("tui.json `plugin` array length = %d, want 1 (only the community statusline)", len(plugin))
-	}
-	if name, _ := plugin[0].(string); name != opencodeCommunityStatuslinePlugin {
-		t.Fatalf("tui.json `plugin`[0] = %q, want %q", name, opencodeCommunityStatuslinePlugin)
+	if len(plugin) != 0 {
+		t.Fatalf("tui.json `plugin` array length = %d, want 0 (no Lore-managed plugins)", len(plugin))
 	}
 	// Legacy plural `plugins` array of objects MUST NOT be present.
 	if _, present := payload["plugins"]; present {
@@ -143,9 +214,8 @@ func keysOfMapTUI(m map[string]any) []string {
 // regression gate: the explicitly-excluded plugin names `sdd-engram`
 // and `logo` must never appear as a managed plugin asset or in the
 // `tui.json` plugin list. The `tui.json` file uses the native
-// OpenCode singular `plugin` string array (e.g.
-// `["opencode-subagent-statusline"]`); the test verifies that no
-// excluded plugin id is registered as a plugin name.
+// OpenCode singular `plugin` string array, currently empty; the test
+// verifies that no excluded plugin id is registered as a plugin name.
 func TestOpenCodePluginAssetsExcludeSddEngramAndLogo(t *testing.T) {
 	pluginFiles, err := renderOpenCodePluginAssets()
 	if err != nil {
@@ -167,8 +237,7 @@ func TestOpenCodePluginAssetsExcludeSddEngramAndLogo(t *testing.T) {
 	}
 
 	// The bundled tui.json must not register any excluded plugin id
-	// in its singular `plugin` string array; only the community
-	// `opencode-subagent-statusline` is referenced.
+	// in its singular `plugin` string array.
 	tuiContent, err := readOpenCodeTUISettingsAsset()
 	if err != nil {
 		t.Fatalf("readOpenCodeTUISettingsAsset() error = %v, want nil", err)
@@ -218,85 +287,29 @@ func TestOpenCodePluginAssetsNoGentleWordingLeakage(t *testing.T) {
 	}
 }
 
-// TestOpenCodeBundledPluginsContainRuntimeHooks verifies the local
-// plugin files are functional plugin assets, not inert identity stubs.
-// The install path relies on OpenCode auto-discovering these .ts files
-// from ~/.config/opencode/plugins/ rather than registering them in
-// tui.json.
-func TestOpenCodeBundledPluginsContainRuntimeHooks(t *testing.T) {
-	background, err := readOpenCodePluginAsset("background-agents.ts")
-	if err != nil {
-		t.Fatalf("read background-agents asset: %v", err)
-	}
-	backgroundText := string(background)
-	for _, want := range []string{
-		"export const BackgroundAgents",
-		"tool: {",
-		"delegate:",
-		"delegation_read:",
-		"delegation_list:",
-		"experimental.chat.system.transform",
-		"session.idle",
-		".local", "share", "opencode", "delegations",
+// TestOpenCodeLegacyRuntimePluginsAreNotBundled verifies that the
+// rejected Lore-owned runtime emulation plugins are not readable from
+// the managed plugin asset set. OpenCode native agents own delegation;
+// the installer must not require background-agents.ts or lore-models.ts.
+func TestOpenCodeLegacyRuntimePluginsAreNotBundled(t *testing.T) {
+	for _, legacy := range []string{
+		"background-agents.ts",
+		"lore-models.ts",
+		"model-variants.ts",
+		"opencode-subagent-statusline.ts",
 	} {
-		if !strings.Contains(backgroundText, want) {
-			t.Fatalf("background-agents.ts missing runtime substring %q; content=%q", want, backgroundText)
+		if _, err := readOpenCodePluginAsset(legacy); err == nil {
+			t.Fatalf("readOpenCodePluginAsset(%q) error = nil, want not-in-managed-list rejection", legacy)
+		} else if !strings.Contains(err.Error(), "not in the managed plugin asset list") {
+			t.Fatalf("readOpenCodePluginAsset(%q) error = %v, want not-in-managed-list rejection", legacy, err)
 		}
-	}
-	for _, forbidden := range []string{
-		"minimal stub",
-		"intentionally does nothing",
-		"LORE_BACKGROUND_AGENTS_PLUGIN",
-	} {
-		if strings.Contains(backgroundText, forbidden) {
-			t.Fatalf("background-agents.ts still contains inert stub marker %q", forbidden)
-		}
-	}
-
-	variants, err := readOpenCodePluginAsset("lore-models.ts")
-	if err != nil {
-		t.Fatalf("read lore-models asset: %v", err)
-	}
-	variantsText := string(variants)
-	for _, want := range []string{
-		"export const LoreModelsPlugin",
-		"client.provider.list()",
-		"opencode-model-variants.json",
-		"rename(tmpPath, finalPath)",
-		"hotEditAgentModelVariant",
-		"lore_models_set_agent",
-		"lore_models_list_agents",
-		"redactSecretLike",
-	} {
-		if !strings.Contains(variantsText, want) {
-			t.Fatalf("lore-models.ts missing runtime substring %q; content=%q", want, variantsText)
-		}
-	}
-	for _, forbidden := range []string{
-		"minimal stub",
-		"intentionally does nothing",
-		"LORE_MODEL_VARIANTS_PLUGIN",
-		"ModelVariantsPlugin",
-	} {
-		if strings.Contains(variantsText, forbidden) {
-			t.Fatalf("lore-models.ts still contains legacy/stub marker %q", forbidden)
-		}
-	}
-	// The previous `model-variants.ts` asset is no longer bundled
-	// (the add-opencode-lore-models-plugin change renamed the
-	// asset to lore-models.ts). Reading the old path MUST fail
-	// with the explicit not-in-managed-list error.
-	if _, err := readOpenCodePluginAsset("model-variants.ts"); err == nil {
-		t.Fatal("readOpenCodePluginAsset(model-variants.ts) error = nil, want explicit not-in-managed-list rejection after rename")
-	} else if !strings.Contains(err.Error(), "not in the managed plugin asset list") {
-		t.Fatalf("readOpenCodePluginAsset(model-variants.ts) error = %v, want explicit not-in-managed-list rejection", err)
 	}
 }
 
 // TestOpenCodeAdapterRenderWithPluginsIncludesTUISettingsAndPluginFiles
 // verifies that when the `opencode-plugins` component is selected,
-// the adapter's `Render()` output includes the three managed plugin
-// .ts files and the `tui.json` settings file.
+// the adapter's `Render()` output includes only the native-safe
+// `tui.json` settings file and no Lore-managed plugin .ts files.
 func TestOpenCodeAdapterRenderWithPluginsIncludesTUISettingsAndPluginFiles(t *testing.T) {
 	adapter := defaultOpenCodeAdapter()
 	definition := agentpack.DefaultDefinition()
@@ -313,17 +326,16 @@ func TestOpenCodeAdapterRenderWithPluginsIncludesTUISettingsAndPluginFiles(t *te
 		byPath[filepath.ToSlash(file.RelativePath)] = file
 	}
 	for _, want := range []string{
-		"plugins/background-agents.ts",
-		"plugins/lore-models.ts",
-		"plugins/opencode-subagent-statusline.ts",
 		"tui.json",
 	} {
 		if _, ok := byPath[want]; !ok {
 			t.Fatalf("Render(core-pack+plugins) missing %q; got %v", want, keysOfRendered(byPath))
 		}
 	}
-	if _, ok := byPath["plugins/model-variants.ts"]; ok {
-		t.Fatalf("Render(core-pack+plugins) unexpectedly emits legacy %q; the add-opencode-lore-models-plugin change renamed the asset to lore-models.ts and the legacy path must not be in the managed set", "plugins/model-variants.ts")
+	for _, legacy := range []string{"plugins/background-agents.ts", "plugins/lore-models.ts", "plugins/model-variants.ts", "plugins/opencode-subagent-statusline.ts"} {
+		if _, ok := byPath[legacy]; ok {
+			t.Fatalf("Render(core-pack+plugins) unexpectedly emits legacy runtime plugin %q; got %v", legacy, keysOfRendered(byPath))
+		}
 	}
 }
 
@@ -359,7 +371,7 @@ func TestOpenCodeRenderFullSurfaceNoGentleLeakageAcrossAllRenderedFiles(t *testi
 		"gentleman-programming",
 	}
 	// Scope the gentle-leakage check to OpenCode-specific surfaces
-	// (AGENTS.md, plugin .ts files, tui.json, opencode.json). The
+	// (AGENTS.md, native tui.json, opencode.json). The
 	// extended skills under `skills/<name>/SKILL.md` are agentpack
 	// content shared with Pi, Antigravity, and Codex and are out of
 	// scope for the OpenCode regression gate.
@@ -367,9 +379,6 @@ func TestOpenCodeRenderFullSurfaceNoGentleLeakageAcrossAllRenderedFiles(t *testi
 		"/AGENTS.md",
 		"/opencode.json",
 		"/tui.json",
-		"/plugins/background-agents.ts",
-		"/plugins/lore-models.ts",
-		"/plugins/opencode-subagent-statusline.ts",
 	}
 	for _, file := range rendered {
 		relative := filepath.ToSlash(file.RelativePath)

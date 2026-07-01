@@ -41,10 +41,10 @@ func TestDefaultTargetsPreferPiAndMarkOthersComingSoon(t *testing.T) {
 	if got := findTarget(targets, TargetOpenCode).Description; !containsAll(got, "Bounded OpenCode projection", "config-only") {
 		t.Fatalf("opencode description = %q, want bounded config-only projection", got)
 	}
-	// 3.3 repair: the OpenCode target description must surface the
-	// fail-closed mcp.lore ownership contract and the gentle
-	// plugin-registration semantics (local plugin .ts files copied
-	// to plugins/, only the community statusline in tui.json).
+	// The OpenCode target description must surface the fail-closed
+	// mcp.lore ownership contract and the native-safe plugin
+	// semantics (only the community statusline is installed; legacy
+	// Lore-owned runtime plugins are rejected/cleaned up).
 	opencodeDescription := findTarget(targets, TargetOpenCode).Description
 	for _, want := range []string{
 		"default_agent=lore",
@@ -58,10 +58,10 @@ func TestDefaultTargetsPreferPiAndMarkOthersComingSoon(t *testing.T) {
 		"tui.json",
 		"sdd-engram",
 		"logo",
-		// The add-opencode-lore-models-plugin change renamed the
-		// model-variants plugin to lore-models; the description
-		// must reference the new managed bundle.
+		"background-agents.ts",
 		"lore-models.ts",
+		"not copied",
+		"model hot-edit plugin",
 	} {
 		if !strings.Contains(opencodeDescription, want) {
 			t.Fatalf("opencode description missing %q; got %q", want, opencodeDescription)
