@@ -27,7 +27,32 @@ func mergeJSONObject(existing, desired []byte, existingLabel, desiredLabel, merg
 }
 
 func mergeAntigravityMCPConfig(existing, desired []byte) ([]byte, error) {
-	return mergeJSONObject(existing, desired, "mcp_config.json", "mcp_config.json", "mcp_config.json")
+	base := map[string]any{}
+	if len(strings.TrimSpace(string(existing))) > 0 {
+		if err := json.Unmarshal(existing, &base); err != nil {
+			return nil, fmt.Errorf("decode existing mcp_config.json: %w", err)
+		}
+	}
+	overlay := map[string]any{}
+	if err := json.Unmarshal(desired, &overlay); err != nil {
+		return nil, fmt.Errorf("decode rendered mcp_config.json: %w", err)
+	}
+	merged := mergeMaps(base, overlay)
+	if desiredServers, ok := overlay["mcpServers"].(map[string]any); ok {
+		if desiredLore, present := desiredServers["lore"]; present {
+			servers, ok := merged["mcpServers"].(map[string]any)
+			if !ok {
+				servers = map[string]any{}
+				merged["mcpServers"] = servers
+			}
+			servers["lore"] = desiredLore
+		}
+	}
+	data, err := json.MarshalIndent(merged, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("encode merged mcp_config.json: %w", err)
+	}
+	return append(data, '\n'), nil
 }
 
 // OpenCodeMCPConfigOwnershipError is the typed error returned by

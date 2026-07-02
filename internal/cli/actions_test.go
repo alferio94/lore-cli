@@ -665,11 +665,11 @@ func TestCodexInstallPlanSummaryNoAntigravityRuntime(t *testing.T) {
 			Target:       install.TargetCodex,
 			RootDir:      "/home/user/.codex",
 			ManifestPath: "/home/user/.codex/lore-install.json",
-			Paths:        map[string]string{"agents_md": "/home/user/.codex/agents.md"},
+			Paths:        map[string]string{"agents_md": "/home/user/.codex/AGENTS.md"},
 		},
 		Components: []install.ComponentID{install.ComponentCorePack, install.ComponentLoreServerMCP},
 		Files: []install.PlanFileAction{
-			{RelativePath: "agents.md", Action: "create"},
+			{RelativePath: "AGENTS.md", Action: "create"},
 			{RelativePath: "config.toml", Action: "create"},
 			{RelativePath: "lore-install.json", Action: "create"},
 		},
@@ -728,12 +728,12 @@ func TestCodexInstallSummaryNoAntigravityRuntime(t *testing.T) {
 			AuthMode:      "config-only",
 			Components:    []install.ComponentID{install.ComponentCorePack, install.ComponentLoreServerMCP},
 			ManagedFiles: []install.ManagedFileRecord{
-				{Path: "/home/user/.codex/agents.md", Component: install.ComponentCorePack, MergeMode: install.MergeModeReplace, ContentHash: "abc"},
+				{Path: "/home/user/.codex/AGENTS.md", Component: install.ComponentCorePack, MergeMode: install.MergeModeReplace, ContentHash: "abc"},
 				{Path: "/home/user/.codex/config.toml", Component: install.ComponentLoreServerMCP, MergeMode: install.MergeModeReplace, ContentHash: "def"},
 			},
 		},
 		Summary: install.InstallSummary{
-			Created:    []string{"/home/user/.codex/agents.md", "/home/user/.codex/config.toml"},
+			Created:    []string{"/home/user/.codex/AGENTS.md", "/home/user/.codex/config.toml"},
 			Updated:    nil,
 			Deleted:    nil,
 			Unchanged:  nil,
@@ -778,11 +778,11 @@ func TestCodexInstallPlanSummaryIncludesManagedActions(t *testing.T) {
 			Target:       install.TargetCodex,
 			RootDir:      "/home/user/.codex",
 			ManifestPath: "/home/user/.codex/lore-install.json",
-			Paths:        map[string]string{"agents_md": "/home/user/.codex/agents.md"},
+			Paths:        map[string]string{"agents_md": "/home/user/.codex/AGENTS.md"},
 		},
 		Components: []install.ComponentID{install.ComponentCorePack, install.ComponentLoreServerMCP},
 		Files: []install.PlanFileAction{
-			{RelativePath: "agents.md", Action: "create"},
+			{RelativePath: "AGENTS.md", Action: "create"},
 			{RelativePath: "config.toml", Action: "create"},
 			{RelativePath: "skills/sdd-apply/SKILL.md", Action: "create"},
 			{RelativePath: "lore-install.json", Action: "create"},
@@ -790,8 +790,8 @@ func TestCodexInstallPlanSummaryIncludesManagedActions(t *testing.T) {
 	}
 
 	summary := formatCodexInstallPlanSummary(plan, false)
-	if !strings.Contains(summary, "managed_action=create:agents.md") {
-		t.Errorf("summary should contain create:agents.md action: %s", summary)
+	if !strings.Contains(summary, "managed_action=create:AGENTS.md") {
+		t.Errorf("summary should contain create:AGENTS.md action: %s", summary)
 	}
 	if !strings.Contains(summary, "managed_action=create:config.toml") {
 		t.Errorf("summary should contain create:config.toml action: %s", summary)

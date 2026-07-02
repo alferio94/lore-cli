@@ -16,7 +16,7 @@ const (
 )
 
 // codexAdapter implements the shared-harness install pattern for Codex.
-// It projects Lore-managed agents.md, config.toml, and skills into ~/.codex.
+// It projects Lore-managed AGENTS.md, config.toml, and skills into ~/.codex.
 type codexAdapter struct {
 	target       TargetID
 	title        string
@@ -31,7 +31,7 @@ func defaultCodexAdapter() HarnessAdapter {
 			CapabilityAgentPack: {
 				ID:               CapabilityAgentPack,
 				Component:        ComponentCorePack,
-				Description:      "Render the portable Lore core pack for Codex-owned agents.md and skills.",
+				Description:      "Render the portable Lore core pack for Codex-owned AGENTS.md and skills.",
 				EnabledByDefault: true,
 			},
 			CapabilityLoreServerMCP: {
@@ -74,7 +74,7 @@ func (a codexAdapter) Supports(component ComponentID) bool {
 func ResolveCodexLayout(homeDir string) HarnessLayout {
 	codexDir := filepath.Join(homeDir, ".codex")
 	manifestPath := filepath.Join(codexDir, "lore-install.json")
-	agentsPath := filepath.Join(codexDir, "agents.md")
+	agentsPath := filepath.Join(codexDir, "AGENTS.md")
 	skillsDir := filepath.Join(codexDir, "skills")
 	configTomlPath := filepath.Join(codexDir, codexConfigTomlRelativePath)
 	return HarnessLayout{
@@ -115,7 +115,7 @@ func (a codexAdapter) Render(_ context.Context, req RenderRequest) ([]RenderedFi
 		}
 		rendered = append(rendered, RenderedFile{
 			Component:    ComponentCorePack,
-			RelativePath: "agents.md",
+			RelativePath: "AGENTS.md",
 			MergeMode:    MergeModeReplace,
 			Content:      agentsContent,
 		})
@@ -135,6 +135,7 @@ func (a codexAdapter) Render(_ context.Context, req RenderRequest) ([]RenderedFi
 	}
 
 	rendered = append(rendered, renderCodexManagedSkills(req)...)
+	rendered = append(rendered, renderCodexSharedSkills()...)
 	rendered = append(rendered, renderCodexExtendedSkills(req)...)
 
 	return rendered, nil
@@ -151,7 +152,7 @@ func (a codexAdapter) RenderExtendedSkills(_ context.Context, req RenderRequest,
 	return renderCodexExtendedSkills(req), nil
 }
 
-// renderCodexAgentsMD renders the agents.md file from agent-config.json.
+// renderCodexAgentsMD renders the AGENTS.md file from agent-config.json.
 // It uses agentconfig as the source of truth for model declarations.
 func renderCodexAgentsMD(req RenderRequest) ([]byte, error) {
 	var agentConfig map[string]string
@@ -260,6 +261,15 @@ func renderCodexManagedSkills(req RenderRequest) []RenderedFile {
 	return rendered
 }
 
+func renderCodexSharedSkills() []RenderedFile {
+	return []RenderedFile{{
+		Component:    ComponentCorePack,
+		RelativePath: filepath.ToSlash(filepath.Join("skills", "_shared", "sdd-phase-common.md")),
+		MergeMode:    MergeModeReplace,
+		Content:      []byte(renderSDDPhaseCommonSkillMarkdown()),
+	}}
+}
+
 // renderCodexExtendedSkills renders the extended skill files for Codex.
 func renderCodexExtendedSkills(req RenderRequest) []RenderedFile {
 	extendedSkills := req.effectiveExtendedSkills(CodexSkillPathResolver())
@@ -277,6 +287,21 @@ func renderCodexExtendedSkills(req RenderRequest) []RenderedFile {
 		})
 	}
 	return rendered
+}
+
+func renderSDDPhaseCommonSkillMarkdown() string {
+	return strings.Join([]string{
+		"# SDD Phase Common Protocol",
+		"",
+		"Shared guidance for Lore SDD phase workers.",
+		"",
+		"- Stay within the assigned SDD phase and do not skip dependency phases.",
+		"- Load the phase-specific skill before substantial work.",
+		"- Persist full phase artifacts to the configured SDD store before returning compact results.",
+		"- If a user decision is required, stop and return needs_user_input.",
+		"- Keep implementation and validation evidence focused on the assigned change.",
+		"",
+	}, "\n")
 }
 
 type agentpackSkillPathResolverFunc func(agentpack.SkillRef) string
@@ -299,7 +324,7 @@ func CodexSkillPathResolver() agentpack.SkillPathResolver {
 func codexAbsolutePath(layout HarnessLayout, relativePath string) string {
 	cleanRelativePath := filepath.ToSlash(relativePath)
 	switch cleanRelativePath {
-	case "agents.md":
+	case "AGENTS.md":
 		return layout.Paths["agents_md"]
 	case codexConfigTomlRelativePath:
 		return layout.Paths["config_toml"]

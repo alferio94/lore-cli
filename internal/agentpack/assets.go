@@ -65,7 +65,17 @@ func PiSkillPathResolver() SkillPathResolver {
 }
 
 func AntigravitySkillPathResolver() SkillPathResolver {
-	return skillPathResolverFunc(resolveAntigravitySkillRef)
+	return AntigravityVariantSkillPathResolver("antigravity-cli")
+}
+
+func AntigravityVariantSkillPathResolver(variant string) SkillPathResolver {
+	trimmed := strings.TrimSpace(variant)
+	if trimmed != "antigravity-desktop" {
+		trimmed = "antigravity-cli"
+	}
+	return skillPathResolverFunc(func(ref SkillRef) string {
+		return resolveAntigravitySkillRefForVariant(ref, trimmed)
+	})
 }
 
 func ResolveSkillPaths(resolver SkillPathResolver, refs []SkillRef) []string {
@@ -171,10 +181,15 @@ func resolvePiSkillRef(ref SkillRef) string {
 }
 
 func resolveAntigravitySkillRef(ref SkillRef) string {
+	return resolveAntigravitySkillRefForVariant(ref, "antigravity-cli")
+}
+
+func resolveAntigravitySkillRefForVariant(ref SkillRef, variant string) string {
+	base := filepath.Join("~/.gemini", variant, "skills")
 	if ref.Shared {
-		return filepath.ToSlash(filepath.Join("~/.gemini/antigravity-cli/skills", ref.Name+".md"))
+		return filepath.ToSlash(filepath.Join(base, ref.Name+".md"))
 	}
-	return filepath.ToSlash(filepath.Join("~/.gemini/antigravity-cli/skills", ref.Name, "SKILL.md"))
+	return filepath.ToSlash(filepath.Join(base, ref.Name, "SKILL.md"))
 }
 
 func (r SkillRef) placeholder() string {

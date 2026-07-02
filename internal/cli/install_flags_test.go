@@ -301,7 +301,7 @@ func TestInstallUsageIncludesTargetAndComponentFlags(t *testing.T) {
 		"core-pack",
 		"pi-extensions",
 		"Antigravity",
-		"prompt + skills MVP",
+		"Full projection target",
 		"plaintext Authorization bearer token",
 		"~/.gemini/config/mcp_config.json",
 		"~/.gemini/config/agents/lore.json",

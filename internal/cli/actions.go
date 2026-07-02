@@ -721,7 +721,7 @@ func (a *App) installCodexActionWithOptions(ctx context.Context, opts installCom
 		output.Check{Name: "manifest", Status: output.StatusOK, Detail: fmt.Sprintf("verified %s auth_mode=%s managed_files=%d", result.Layout.ManifestPath, result.Manifest.AuthMode, len(result.Manifest.ManagedFiles))},
 	)
 	report.Checks = append(report.Checks,
-		output.Check{Name: "codex-config", Status: output.StatusWarn, Detail: fmt.Sprintf("managed MCP config path=%s server_url=%s auth_header=plaintext-bearer-token; Lore also manages ~/.codex/agents.md and ~/.codex/skills/.", result.Layout.Paths["config_toml"], preflight.ServerURL), Action: "Rerun lore install after lore login if the saved session changes or if the Lore server URL changes."},
+		output.Check{Name: "codex-config", Status: output.StatusWarn, Detail: fmt.Sprintf("managed MCP config path=%s server_url=%s auth_header=plaintext-bearer-token; Lore also manages ~/.codex/AGENTS.md and ~/.codex/skills/.", result.Layout.Paths["config_toml"], preflight.ServerURL), Action: "Rerun lore install after lore login if the saved session changes or if the Lore server URL changes."},
 	)
 	return report
 }

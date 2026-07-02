@@ -30,8 +30,8 @@ func TestDefaultTargetsPreferPiAndMarkOthersComingSoon(t *testing.T) {
 	if got := targets[0].Description; !containsAll(got, "uses hosted Lore MCP via pi-mcp-adapter", "optional explicit pi-extensions (lore-footer.ts only)") {
 		t.Fatalf("targets[0].Description = %q, want hosted MCP default with optional explicit pi-extensions", got)
 	}
-	if got := findTarget(targets, TargetAntigravity); !got.Available || got.Recommended || !containsAll(got.Description, "prompt", "skills", "agent profile", "optional direct MCP config") {
-		t.Fatalf("antigravity target = %+v, want supported prompt/skills target with managed Gemini agent profile and optional direct MCP config", got)
+	if got := findTarget(targets, TargetAntigravity); !got.Available || got.Recommended || !containsAll(got.Description, "Full Antigravity projection", "skills", "agent profile", "global ~/.gemini/config/mcp_config.json") {
+		t.Fatalf("antigravity target = %+v, want supported full Antigravity target with managed Gemini agent profile and global direct MCP config", got)
 	}
 	// OpenCode is supported again: it must be in the visible default target
 	// list as a bounded config-only target.
@@ -125,7 +125,7 @@ func TestResolveInstallTargetKeepsPiDefaultAndRejectsRoadmapTargets(t *testing.T
 
 func TestFormatTargetSelectionExplainsPiNativePathAndMCPDeferral(t *testing.T) {
 	formatted := FormatTargetSelection(DefaultTargets())
-	for _, want := range []string{"Choose an install target:", "Pi — Recommended", "uses hosted Lore MCP", "Antigravity:", "prompt + skills", "Coming soon", "Pi remains the default recommended path", "uses hosted Lore MCP by default", "~/.gemini/config/agents/lore.json", "optionally write direct MCP config", "Bounded OpenCode projection", "~/.config/opencode"} {
+	for _, want := range []string{"Choose an install target:", "Pi — Recommended", "uses hosted Lore MCP", "Antigravity:", "Full Antigravity projection", "Coming soon", "Pi remains the default recommended path", "uses hosted Lore MCP by default", "~/.gemini/config/agents/lore.json", "global ~/.gemini/config/mcp_config.json", "Bounded OpenCode projection", "~/.config/opencode"} {
 		if !strings.Contains(formatted, want) {
 			t.Fatalf("FormatTargetSelection() = %q, want substring %q", formatted, want)
 		}

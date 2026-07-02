@@ -1,0 +1,7 @@
+# BEGIN lore-cli managed Lore MCP
+[mcp_servers.lore]
+url = "https://example.test/v1/mcp"
+
+[mcp_servers.lore.http_headers]
+Authorization = "Bearer secret-token"
+# END lore-cli managed Lore MCP

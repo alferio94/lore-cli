@@ -261,7 +261,7 @@ func TestManifestValidateForLayoutConfigOnlyFailsClosed(t *testing.T) {
 				Target:        TargetCodex,
 				AuthMode:      "config-only",
 				ManagedFiles: []ManagedFileRecord{
-					{Path: filepath.Join(layout.RootDir, "agents.md"), Component: "", MergeMode: MergeModeReplace, ContentHash: "abc"},
+					{Path: filepath.Join(layout.RootDir, "AGENTS.md"), Component: "", MergeMode: MergeModeReplace, ContentHash: "abc"},
 				},
 				BackupRoot:  backupRoot,
 				InstalledAt: "2026-05-29T12:00:00Z",
@@ -275,7 +275,7 @@ func TestManifestValidateForLayoutConfigOnlyFailsClosed(t *testing.T) {
 				Target:        TargetCodex,
 				AuthMode:      "config-only",
 				ManagedFiles: []ManagedFileRecord{
-					{Path: filepath.Join(layout.RootDir, "agents.md"), Component: ComponentCorePack, MergeMode: "", ContentHash: "abc"},
+					{Path: filepath.Join(layout.RootDir, "AGENTS.md"), Component: ComponentCorePack, MergeMode: "", ContentHash: "abc"},
 				},
 				BackupRoot:  backupRoot,
 				InstalledAt: "2026-05-29T12:00:00Z",
@@ -289,7 +289,7 @@ func TestManifestValidateForLayoutConfigOnlyFailsClosed(t *testing.T) {
 				Target:        TargetCodex,
 				AuthMode:      "config-only",
 				ManagedFiles: []ManagedFileRecord{
-					{Path: filepath.Join(layout.RootDir, "agents.md"), Component: ComponentCorePack, MergeMode: MergeModeReplace, ContentHash: "abc"},
+					{Path: filepath.Join(layout.RootDir, "AGENTS.md"), Component: ComponentCorePack, MergeMode: MergeModeReplace, ContentHash: "abc"},
 				},
 				BackupRoot:  filepath.Join(homeDir, "elsewhere"),
 				InstalledAt: "2026-05-29T12:00:00Z",
@@ -303,7 +303,7 @@ func TestManifestValidateForLayoutConfigOnlyFailsClosed(t *testing.T) {
 				Target:        TargetCodex,
 				AuthMode:      "config-only",
 				ManagedFiles: []ManagedFileRecord{
-					{Path: filepath.Join(layout.RootDir, "agents.md"), Component: ComponentCorePack, MergeMode: MergeModeReplace, ContentHash: "abc"},
+					{Path: filepath.Join(layout.RootDir, "AGENTS.md"), Component: ComponentCorePack, MergeMode: MergeModeReplace, ContentHash: "abc"},
 				},
 				BackupRoot:  backupRoot,
 				InstalledAt: "not-a-timestamp",
@@ -317,7 +317,7 @@ func TestManifestValidateForLayoutConfigOnlyFailsClosed(t *testing.T) {
 				Target:        TargetAntigravity,
 				AuthMode:      "config-only",
 				ManagedFiles: []ManagedFileRecord{
-					{Path: filepath.Join(layout.RootDir, "agents.md"), Component: ComponentCorePack, MergeMode: MergeModeReplace, ContentHash: "abc"},
+					{Path: filepath.Join(layout.RootDir, "AGENTS.md"), Component: ComponentCorePack, MergeMode: MergeModeReplace, ContentHash: "abc"},
 				},
 				BackupRoot:  backupRoot,
 				InstalledAt: "2026-05-29T12:00:00Z",
@@ -330,7 +330,7 @@ func TestManifestValidateForLayoutConfigOnlyFailsClosed(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// backupRootDir is the parent backups directory; BackupRoot must be a subdirectory.
 			backupParentDir := filepath.Join(layout.RootDir, "backups")
-			err := tt.manifest.ValidateForLayout(layout, []string{filepath.Join(layout.RootDir, "agents.md")}, backupParentDir)
+			err := tt.manifest.ValidateForLayout(layout, []string{filepath.Join(layout.RootDir, "AGENTS.md")}, backupParentDir)
 			if err == nil {
 				t.Fatalf("ValidateForLayout() error = nil, want error containing %q", tt.wantErr)
 			}
@@ -355,7 +355,7 @@ func TestManifestValidateForLayoutConfigOnlyPassesValid(t *testing.T) {
 		Target:        TargetCodex,
 		AuthMode:      "config-only",
 		ManagedFiles: []ManagedFileRecord{
-			{Path: filepath.Join(layout.RootDir, "agents.md"), Component: ComponentCorePack, MergeMode: MergeModeReplace, ContentHash: "abc123"},
+			{Path: filepath.Join(layout.RootDir, "AGENTS.md"), Component: ComponentCorePack, MergeMode: MergeModeReplace, ContentHash: "abc123"},
 			{Path: filepath.Join(layout.RootDir, "skills", "sdd-apply", "SKILL.md"), Component: ComponentCorePack, MergeMode: MergeModeReplace, ContentHash: "def456"},
 		},
 		BackupRoot:  backupRoot,
@@ -363,7 +363,7 @@ func TestManifestValidateForLayoutConfigOnlyPassesValid(t *testing.T) {
 	}
 
 	err := manifest.ValidateForLayout(layout, []string{
-		filepath.Join(layout.RootDir, "agents.md"),
+		filepath.Join(layout.RootDir, "AGENTS.md"),
 		filepath.Join(layout.RootDir, "skills", "sdd-apply", "SKILL.md"),
 	}, backupParentDir)
 	if err != nil {

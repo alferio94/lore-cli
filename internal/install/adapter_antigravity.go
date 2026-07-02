@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -81,7 +82,7 @@ func (a antigravityAdapter) Supports(component ComponentID) bool {
 
 func ResolveAntigravityLayout(homeDir string) HarnessLayout {
 	geminiDir := filepath.Join(homeDir, ".gemini")
-	rootDir := filepath.Join(geminiDir, "antigravity-cli")
+	rootDir := resolveAntigravityVariantRoot(homeDir)
 	manifestPath := filepath.Join(rootDir, "lore-install.json")
 	sharedPromptPath := filepath.Join(geminiDir, "GEMINI.md")
 	skillsDir := filepath.Join(rootDir, "skills")
@@ -104,8 +105,18 @@ func ResolveAntigravityLayout(homeDir string) HarnessLayout {
 			"agent_profile":     agentProfilePath,
 			"harness_root":      rootDir,
 			"antigravity_dir":   rootDir,
+			"variant_root":      rootDir,
 		},
 	}
+}
+
+func resolveAntigravityVariantRoot(homeDir string) string {
+	geminiDir := filepath.Join(homeDir, ".gemini")
+	desktop := filepath.Join(geminiDir, "antigravity-desktop")
+	if info, err := os.Stat(desktop); err == nil && info.IsDir() {
+		return desktop
+	}
+	return filepath.Join(geminiDir, "antigravity-cli")
 }
 
 func (a antigravityAdapter) Render(_ context.Context, req RenderRequest) ([]RenderedFile, error) {
@@ -130,6 +141,7 @@ func (a antigravityAdapter) Render(_ context.Context, req RenderRequest) ([]Rend
 		Content:      renderAntigravityPrompt(definition),
 	}}
 	rendered = append(rendered, renderAntigravitySkills(req)...)
+	rendered = append(rendered, renderAntigravitySharedSkills()...)
 	rendered = append(rendered, renderAntigravityExtendedSkills(req)...)
 	agentProfile, err := renderAntigravityAgentProfile(definition)
 	if err != nil {
@@ -180,8 +192,9 @@ func renderAntigravityPrompt(definition agentpack.Definition) []byte {
 		"This section is managed for Antigravity and should be appended or refreshed in place without replacing unrelated shared prompt content.",
 		"",
 		fmt.Sprintf("- Persona: `%s`", definition.Persona.Name),
-		"- Managed skills guidance: `~/.gemini/antigravity-cli/skills`",
-		"- Managed manifest: `~/.gemini/antigravity-cli/lore-install.json`",
+		"- Managed skills guidance: `~/.gemini/antigravity-cli/skills` or `~/.gemini/antigravity-desktop/skills` when the desktop variant root exists",
+		"- Managed manifest: stored under the selected Antigravity variant root (`antigravity-desktop` when present, otherwise `antigravity-cli`)",
+		"- Shared prompt/profile/MCP stay global at `~/.gemini/GEMINI.md`, `~/.gemini/config/agents/lore.json`, and `~/.gemini/config/mcp_config.json`",
 		fmt.Sprintf("- Managed SDD phases: `%s`", strings.Join(phases, "`, `")),
 		"",
 		"Load the Lore-managed skill files from the Antigravity skills directory when a task explicitly requires them.",
@@ -194,7 +207,7 @@ func renderAntigravityPrompt(definition agentpack.Definition) []byte {
 }
 
 func renderAntigravitySkills(req RenderRequest) []RenderedFile {
-	managedAgents := req.effectiveManagedAgents(agentpack.AntigravitySkillPathResolver())
+	managedAgents := req.effectiveManagedAgents(antigravitySkillPathResolver(req))
 	rendered := make([]RenderedFile, 0, len(managedAgents))
 	for _, agent := range managedAgents {
 		content := strings.Join([]string{
@@ -218,8 +231,17 @@ func renderAntigravitySkills(req RenderRequest) []RenderedFile {
 	return rendered
 }
 
+func renderAntigravitySharedSkills() []RenderedFile {
+	return []RenderedFile{{
+		Component:    ComponentCorePack,
+		RelativePath: filepath.ToSlash(filepath.Join("skills", "_shared", "sdd-phase-common.md")),
+		MergeMode:    MergeModeReplace,
+		Content:      []byte(renderSDDPhaseCommonSkillMarkdown()),
+	}}
+}
+
 func renderAntigravityExtendedSkills(req RenderRequest) []RenderedFile {
-	extendedSkills := req.effectiveExtendedSkills(agentpack.AntigravitySkillPathResolver())
+	extendedSkills := req.effectiveExtendedSkills(antigravitySkillPathResolver(req))
 	if len(extendedSkills) == 0 {
 		return nil
 	}
@@ -235,6 +257,11 @@ func renderAntigravityExtendedSkills(req RenderRequest) []RenderedFile {
 	}
 	sort.Slice(rendered, func(i, j int) bool { return rendered[i].RelativePath < rendered[j].RelativePath })
 	return rendered
+}
+
+func antigravitySkillPathResolver(req RenderRequest) agentpack.SkillPathResolver {
+	variant := filepath.Base(filepath.Clean(req.HarnessRoot))
+	return agentpack.AntigravityVariantSkillPathResolver(variant)
 }
 
 type antigravityAgentProfile struct {
@@ -264,11 +291,11 @@ func renderAntigravityAgentSystemInstruction(definition agentpack.Definition) st
 	base := strings.TrimRight(agentpack.RenderOrchestratorSystemInstruction(definition), "\n")
 	suffix := strings.Join([]string{
 		"Antigravity/Gemini runtime notes:",
-		"- Keep the shared Lore-managed skills under `~/.gemini/antigravity-cli/skills`.",
-		"- Keep the Lore-managed manifest at `~/.gemini/antigravity-cli/lore-install.json`.",
+		"- Keep Lore-managed skills under the selected Antigravity variant root: `~/.gemini/antigravity-desktop/skills` when that directory exists, otherwise `~/.gemini/antigravity-cli/skills`.",
+		"- Keep the Lore-managed manifest under the selected Antigravity variant root.",
 		"- Treat `~/.gemini/GEMINI.md` as the shared prompt file and `~/.gemini/config/agents/lore.json` as the managed Gemini agent profile installed by Lore CLI.",
 		"- Optional managed MCP config lives at `~/.gemini/config/mcp_config.json`.",
-		"- Keep Antigravity on its managed prompt-and-skills path; do not assume Pi-style overlays, daemons, autostart, or background subagent parity.",
+		"- Keep Antigravity on its managed Full projection path; do not assume Pi-style overlays, daemons, autostart, or background subagent parity.",
 		"- Lore MCP tools are exposed according to the user's current role and permissions, so `tools` is intentionally omitted from this profile.",
 	}, "\n")
 	return base + "\n\n" + suffix + "\n"

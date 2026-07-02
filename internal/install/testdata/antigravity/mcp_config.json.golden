@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "lore": {
+      "headers": {
+        "Authorization": "Bearer secret-token"
+      },
+      "serverUrl": "https://example.test/v1/mcp"
+    }
+  }
+}

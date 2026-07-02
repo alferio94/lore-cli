@@ -44,6 +44,7 @@ type RenderRequest struct {
 	LoreConfigDir   string
 	LoreCLIVersion  string
 	SettingsPath    string
+	HarnessRoot     string
 	RuntimeContract RuntimeContract
 	AgentConfig     agentconfig.Config
 }

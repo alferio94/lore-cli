@@ -63,6 +63,9 @@ func TestAntigravityAdapterRenderProducesPromptSkillsAndOptionalMCPWithoutPiArti
 	if _, ok := byPath[filepath.ToSlash(filepath.Join("skills", "lore-worker", "SKILL.md"))]; !ok {
 		t.Fatalf("Render(core-pack) paths = %v, want skills/lore-worker/SKILL.md", sortedRenderedPaths(files))
 	}
+	if shared, ok := byPath[filepath.ToSlash(filepath.Join("skills", "_shared", "sdd-phase-common.md"))]; !ok || !strings.Contains(string(shared.Content), "SDD Phase Common Protocol") {
+		t.Fatalf("Render(core-pack) shared skill = %q ok=%v, want installed shared SDD phase protocol", string(shared.Content), ok)
+	}
 	agentProfileRelativePath := filepath.ToSlash(filepath.Join("..", "config", "agents", "lore.json"))
 	agentProfile, ok := byPath[agentProfileRelativePath]
 	if !ok {
@@ -189,6 +192,36 @@ func TestAntigravityMCPConfigMergePreservesExistingServersAndTreatsEmptyAsObject
 	}
 }
 
+func TestAntigravityMCPConfigMergeReplacesManagedLoreServerObject(t *testing.T) {
+	managed, err := renderAntigravityMCPConfig("https://example.test", "secret-token")
+	if err != nil {
+		t.Fatalf("renderAntigravityMCPConfig() error = %v, want nil", err)
+	}
+	existing := []byte(`{"mcpServers":{"existing":{"command":"keep-me"},"lore":{"command":"stale","args":["mcp"],"serverUrl":"https://old.example/v1/mcp","headers":{"Authorization":"Bearer old"}}},"topLevel":true}`)
+	merged, err := mergeAntigravityMCPConfig(existing, managed)
+	if err != nil {
+		t.Fatalf("mergeAntigravityMCPConfig(existing) error = %v, want nil", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(merged, &payload); err != nil {
+		t.Fatalf("json.Unmarshal(merged) error = %v", err)
+	}
+	servers := payload["mcpServers"].(map[string]any)
+	lore := servers["lore"].(map[string]any)
+	if _, ok := lore["command"]; ok {
+		t.Fatalf("merged lore server retained stale command: %s", string(merged))
+	}
+	if _, ok := lore["args"]; ok {
+		t.Fatalf("merged lore server retained stale args: %s", string(merged))
+	}
+	if lore["serverUrl"] != "https://example.test/v1/mcp" {
+		t.Fatalf("lore.serverUrl = %v, want refreshed serverUrl", lore["serverUrl"])
+	}
+	if _, ok := servers["existing"]; !ok {
+		t.Fatalf("merged config dropped unrelated server: %s", string(merged))
+	}
+}
+
 func TestAntigravityManifestTracksPromptSkillsAndManagedMCPFilesWithoutPiOverlays(t *testing.T) {
 	homeDir := t.TempDir()
 	layout := ResolveAntigravityLayout(homeDir)
@@ -301,4 +334,108 @@ func sortedRenderedPaths(files []RenderedFile) []string {
 		paths = append(paths, file.RelativePath)
 	}
 	return paths
+}
+
+func TestResolveAntigravityLayoutPrefersDesktopVariantForHarnessOwnedAssets(t *testing.T) {
+	homeDir := t.TempDir()
+	desktopRoot := filepath.Join(homeDir, ".gemini", "antigravity-desktop")
+	if err := os.MkdirAll(desktopRoot, 0o755); err != nil {
+		t.Fatalf("mkdir desktop root: %v", err)
+	}
+	layout := ResolveAntigravityLayout(homeDir)
+	if got := layout.RootDir; got != desktopRoot {
+		t.Fatalf("layout.RootDir = %q, want desktop variant %q", got, desktopRoot)
+	}
+	if got := layout.Paths["skills_dir"]; got != filepath.Join(desktopRoot, "skills") {
+		t.Fatalf("skills_dir = %q, want desktop skills dir", got)
+	}
+	if got := layout.Paths["shared_prompt"]; got != filepath.Join(homeDir, ".gemini", "GEMINI.md") {
+		t.Fatalf("shared prompt = %q, want global GEMINI.md", got)
+	}
+	if got := layout.Paths["mcp_config"]; got != filepath.Join(homeDir, ".gemini", "config", "mcp_config.json") {
+		t.Fatalf("mcp_config = %q, want global Gemini MCP", got)
+	}
+}
+
+func TestAntigravitySkillResolverUsesSelectedDesktopVariantRoot(t *testing.T) {
+	homeDir := t.TempDir()
+	desktopRoot := filepath.Join(homeDir, ".gemini", "antigravity-desktop")
+	if err := os.MkdirAll(desktopRoot, 0o755); err != nil {
+		t.Fatalf("mkdir desktop root: %v", err)
+	}
+	files, err := defaultAntigravityAdapter().Render(context.Background(), RenderRequest{
+		Target:      TargetAntigravity,
+		Assets:      agentpack.DefaultOperationalAssets(),
+		Components:  []ComponentID{ComponentCorePack},
+		HarnessRoot: desktopRoot,
+	})
+	if err != nil {
+		t.Fatalf("Render error: %v", err)
+	}
+	applySkill := renderedFileByPath(t, files, filepath.ToSlash(filepath.Join("skills", "sdd-apply", "SKILL.md")))
+	skillText := string(applySkill.Content)
+	if !containsAll(skillText, "~/.gemini/antigravity-desktop/skills/sdd-apply/SKILL.md", "~/.gemini/antigravity-desktop/skills/_shared/sdd-phase-common.md") {
+		t.Fatalf("sdd-apply skill = %q, want selected desktop variant paths", skillText)
+	}
+	if strings.Contains(skillText, "~/.gemini/antigravity-cli/skills/sdd-apply/SKILL.md") {
+		t.Fatalf("sdd-apply skill leaked cli variant path: %q", skillText)
+	}
+}
+
+func TestAntigravityMCPNeverUsesVariantLocalPath(t *testing.T) {
+	homeDir := t.TempDir()
+	for _, variant := range []string{"antigravity-cli", "antigravity-desktop"} {
+		t.Run(variant, func(t *testing.T) {
+			variantRoot := filepath.Join(homeDir, ".gemini", variant)
+			if err := os.MkdirAll(variantRoot, 0o755); err != nil {
+				t.Fatalf("mkdir variant root: %v", err)
+			}
+			layout := ResolveAntigravityLayout(homeDir)
+			files, err := defaultAntigravityAdapter().Render(context.Background(), RenderRequest{
+				Target:     TargetAntigravity,
+				Assets:     agentpack.DefaultOperationalAssets(),
+				Components: []ComponentID{ComponentCorePack, ComponentLoreServerMCP},
+				ServerURL:  "https://example.test/",
+				SavedToken: "secret-token",
+			})
+			if err != nil {
+				t.Fatalf("Render error: %v", err)
+			}
+			mcpRelativePath := filepath.ToSlash(filepath.Join("..", "config", "mcp_config.json"))
+			if _, ok := renderedFileByPathOK(files, mcpRelativePath); !ok {
+				t.Fatalf("rendered paths=%v, want global relative MCP path", sortedRenderedPaths(files))
+			}
+			for _, file := range files {
+				if strings.Contains(filepath.ToSlash(file.RelativePath), "antigravity-cli/mcp_config.json") || strings.Contains(filepath.ToSlash(file.RelativePath), "antigravity-desktop/mcp_config.json") || file.RelativePath == "mcp_config.json" {
+					t.Fatalf("rendered variant-local MCP path: %q", file.RelativePath)
+				}
+			}
+			if got := antigravityAbsolutePath(layout, mcpRelativePath); got != filepath.Join(homeDir, ".gemini", "config", "mcp_config.json") {
+				t.Fatalf("absolute MCP path = %q, want global Gemini MCP", got)
+			}
+		})
+	}
+}
+
+func TestAntigravityGoldenMCPConfigAndPaths(t *testing.T) {
+	mcp, err := renderAntigravityMCPConfig("https://example.test/", "secret-token")
+	if err != nil {
+		t.Fatalf("renderAntigravityMCPConfig error: %v", err)
+	}
+	wantMCP, err := os.ReadFile(filepath.Join("testdata", "antigravity", "mcp_config.json.golden"))
+	if err != nil {
+		t.Fatalf("read antigravity MCP golden: %v", err)
+	}
+	if string(mcp) != string(wantMCP) {
+		t.Fatalf("Antigravity MCP golden drift\ngot:\n%s\nwant:\n%s", string(mcp), string(wantMCP))
+	}
+	wantPaths, err := os.ReadFile(filepath.Join("testdata", "antigravity", "paths.golden"))
+	if err != nil {
+		t.Fatalf("read antigravity paths golden: %v", err)
+	}
+	for _, want := range []string{"../GEMINI.md", "../config/agents/lore.json", "../config/mcp_config.json", "skills/sdd-apply/SKILL.md", "lore-install.json"} {
+		if !strings.Contains(string(wantPaths), want) {
+			t.Fatalf("antigravity paths golden missing %q: %s", want, string(wantPaths))
+		}
+	}
 }

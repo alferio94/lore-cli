@@ -871,7 +871,7 @@ func TestInstallUsageIncludesPiFirstGuidance(t *testing.T) {
 		"judgment-day",
 		"Rerun lore install to refresh the extended-skills bundle",
 		"lore update does not touch skill files",
-		"Antigravity is the prompt + skills MVP target",
+		"Antigravity is a Full projection target",
 		"Claude Code remains Coming soon",
 	} {
 		if !strings.Contains(stderr.String(), want) {

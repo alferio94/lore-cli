@@ -119,6 +119,7 @@ func renderAntigravityFiles(req InstallRequest) ([]RenderedFile, error) {
 	if err != nil {
 		return nil, err
 	}
+	layout := ResolveAntigravityLayout(req.HomeDir)
 	renderReq := RenderRequest{
 		Target:         TargetAntigravity,
 		Definition:     req.Definition,
@@ -128,6 +129,7 @@ func renderAntigravityFiles(req InstallRequest) ([]RenderedFile, error) {
 		LoreBinaryPath: req.LoreBinaryPath,
 		LoreConfigDir:  req.LoreConfigDir,
 		LoreCLIVersion: req.LoreCLIVersion,
+		HarnessRoot:    layout.RootDir,
 	}
 	if req.Definition.SchemaVersion == 0 {
 		renderReq.Assets = agentpack.DefaultOperationalAssets()

@@ -2,10 +2,12 @@ package install
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/alferio94/lore-cli/internal/agentconfig"
 	"github.com/alferio94/lore-cli/internal/agentpack"
@@ -65,8 +67,8 @@ func TestResolveCodexLayout(t *testing.T) {
 	if layout.RootDir != filepath.Join(homeDir, ".codex") {
 		t.Fatalf("layout.RootDir = %q, want %q", layout.RootDir, filepath.Join(homeDir, ".codex"))
 	}
-	if layout.Paths["agents_md"] != filepath.Join(homeDir, ".codex", "agents.md") {
-		t.Fatalf("agents_md = %q, want %q", layout.Paths["agents_md"], filepath.Join(homeDir, ".codex", "agents.md"))
+	if layout.Paths["agents_md"] != filepath.Join(homeDir, ".codex", "AGENTS.md") {
+		t.Fatalf("agents_md = %q, want %q", layout.Paths["agents_md"], filepath.Join(homeDir, ".codex", "AGENTS.md"))
 	}
 	if layout.Paths["skills_dir"] != filepath.Join(homeDir, ".codex", "skills") {
 		t.Fatalf("skills_dir = %q, want %q", layout.Paths["skills_dir"], filepath.Join(homeDir, ".codex", "skills"))
@@ -105,36 +107,36 @@ func TestCodexAdapterRenderAgentsMD(t *testing.T) {
 		t.Fatalf("Render error: %v", err)
 	}
 
-	// Find agents.md in rendered files.
+	// Find AGENTS.md in rendered files.
 	var agentsFile *RenderedFile
 	for _, f := range files {
-		if filepath.ToSlash(f.RelativePath) == "agents.md" {
+		if filepath.ToSlash(f.RelativePath) == "AGENTS.md" {
 			agentsFile = &f
 			break
 		}
 	}
 	if agentsFile == nil {
-		t.Fatal("agents.md not found in rendered files")
+		t.Fatal("AGENTS.md not found in rendered files")
 	}
 
 	content := string(agentsFile.Content)
 	if !strings.Contains(content, "# Lore Configuration") {
-		t.Fatal("agents.md should contain Lore Configuration header")
+		t.Fatal("AGENTS.md should contain Lore Configuration header")
 	}
 	if !strings.Contains(content, "- sdd-init: gpt-5.4") {
-		t.Fatalf("agents.md should contain sdd-init with gpt-5.4, got: %s", content)
+		t.Fatalf("AGENTS.md should contain sdd-init with gpt-5.4, got: %s", content)
 	}
 	if !strings.Contains(content, "~/.codex/config.toml") {
-		t.Fatal("agents.md should reference ~/.codex/config.toml")
+		t.Fatal("AGENTS.md should reference ~/.codex/config.toml")
 	}
 	if !strings.Contains(content, "remote MCP entry") {
-		t.Fatal("agents.md should describe managed remote MCP config")
+		t.Fatal("AGENTS.md should describe managed remote MCP config")
 	}
 	if strings.Contains(content, "[mcp_servers]") {
-		t.Fatal("agents.md should NOT inline TOML MCP blocks")
+		t.Fatal("AGENTS.md should NOT inline TOML MCP blocks")
 	}
 	if !strings.Contains(content, "~/.codex/skills") {
-		t.Fatal("agents.md should reference ~/.codex/skills")
+		t.Fatal("AGENTS.md should reference ~/.codex/skills")
 	}
 	_ = layout // layout constructed OK, just verify the files render
 }
@@ -156,11 +158,11 @@ func TestCodexAdapterRenderWithExtendedSkills(t *testing.T) {
 		t.Fatal("Render should produce files")
 	}
 
-	// Should have agents.md.
+	// Should have AGENTS.md.
 	hasAgentsMD := false
 	hasSkillFiles := false
 	for _, f := range files {
-		if filepath.ToSlash(f.RelativePath) == "agents.md" {
+		if filepath.ToSlash(f.RelativePath) == "AGENTS.md" {
 			hasAgentsMD = true
 		}
 		if strings.Contains(f.RelativePath, "skills/") && strings.HasSuffix(f.RelativePath, ".md") {
@@ -168,7 +170,7 @@ func TestCodexAdapterRenderWithExtendedSkills(t *testing.T) {
 		}
 	}
 	if !hasAgentsMD {
-		t.Fatal("Render should produce agents.md")
+		t.Fatal("Render should produce AGENTS.md")
 	}
 	if !hasSkillFiles {
 		t.Fatal("Render should produce skill files")
@@ -233,7 +235,7 @@ func TestCodexBackupRelativePath(t *testing.T) {
 		relativePath string
 		want         string
 	}{
-		{"agents.md", "agents.md"},
+		{"AGENTS.md", "AGENTS.md"},
 		{"skills/sdd-apply/SKILL.md", "skills/sdd-apply/SKILL.md"},
 	}
 
@@ -252,7 +254,7 @@ func TestCodexAbsolutePath(t *testing.T) {
 		relativePath string
 		want         string
 	}{
-		{"agents.md", filepath.Join(layout.RootDir, "agents.md")},
+		{"AGENTS.md", filepath.Join(layout.RootDir, "AGENTS.md")},
 		{"config.toml", filepath.Join(layout.RootDir, "config.toml")},
 		{"lore-install.json", layout.ManifestPath},
 		{"skills/sdd-apply/SKILL.md", filepath.Join(layout.RootDir, "skills", "sdd-apply", "SKILL.md")},
@@ -367,7 +369,7 @@ func TestExecuteCodexInstallDryRun(t *testing.T) {
 		t.Fatalf("result.Target = %q, want %q", result.Target, TargetCodex)
 	}
 	// Dry run should not create files.
-	agentsPath := filepath.Join(tmpDir, ".codex", "agents.md")
+	agentsPath := filepath.Join(tmpDir, ".codex", "AGENTS.md")
 	if _, err := os.Stat(agentsPath); !os.IsNotExist(err) {
 		t.Errorf("dry-run should not create %s", agentsPath)
 	}
@@ -396,19 +398,101 @@ func TestExecuteCodexInstallCreatesFiles(t *testing.T) {
 	}
 
 	// Verify files created.
-	agentsPath := filepath.Join(tmpDir, ".codex", "agents.md")
+	agentsPath := filepath.Join(tmpDir, ".codex", "AGENTS.md")
 	data, err := os.ReadFile(agentsPath)
 	if err != nil {
-		t.Fatalf("should create agents.md: %v", err)
+		t.Fatalf("should create AGENTS.md: %v", err)
 	}
 	if !strings.Contains(string(data), "# Lore Configuration") {
-		t.Fatalf("agents.md should contain Lore Configuration header, got: %s", string(data))
+		t.Fatalf("AGENTS.md should contain Lore Configuration header, got: %s", string(data))
 	}
 
 	// Verify manifest created.
 	manifestPath := filepath.Join(tmpDir, ".codex", "lore-install.json")
 	if _, err := os.ReadFile(manifestPath); err != nil {
 		t.Fatalf("should create lore-install.json: %v", err)
+	}
+}
+
+func TestExecuteCodexInstallDoesNotWriteManifestWhenPromptApplyFails(t *testing.T) {
+	svc := Service{}
+	tmpDir := t.TempDir()
+	originalApply := applyCodexPlannedContent
+	applyCodexPlannedContent = func(action PlanFileAction, desired []byte) error {
+		if action.RelativePath == "AGENTS.md" {
+			return errors.New("injected AGENTS.md apply failure")
+		}
+		return originalApply(action, desired)
+	}
+	t.Cleanup(func() { applyCodexPlannedContent = originalApply })
+
+	plan, err := svc.PlanCodexInstall(InstallRequest{HomeDir: tmpDir, Target: TargetCodex, Components: []ComponentID{ComponentCorePack}})
+	if err != nil {
+		t.Fatalf("PlanCodexInstall error: %v", err)
+	}
+	_, err = svc.ExecuteCodexInstall(plan, InstallCommandOptions{})
+	if err == nil || !strings.Contains(err.Error(), "AGENTS.md") {
+		t.Fatalf("ExecuteCodexInstall error = %v, want AGENTS.md apply failure", err)
+	}
+	manifestPath := filepath.Join(tmpDir, ".codex", "lore-install.json")
+	if _, statErr := os.Stat(manifestPath); !os.IsNotExist(statErr) {
+		t.Fatalf("manifest stat err=%v, want not written after AGENTS.md failure", statErr)
+	}
+}
+
+func TestExecuteCodexInstallDoesNotWriteManifestWhenLegacyCleanupFails(t *testing.T) {
+	svc := Service{}
+	originalAliasCheck := aliasesCodexCanonicalPrompt
+	aliasesCodexCanonicalPrompt = func(HarnessLayout, string) bool { return false }
+	t.Cleanup(func() { aliasesCodexCanonicalPrompt = originalAliasCheck })
+	tmpDir := t.TempDir()
+	layout := ResolveCodexLayout(tmpDir)
+	legacyPath := filepath.Join(layout.RootDir, "agents.md")
+	if err := os.MkdirAll(layout.RootDir, 0o755); err != nil {
+		t.Fatalf("mkdir codex dir: %v", err)
+	}
+	legacyContent := []byte("# Lore Configuration\n\nThis file is managed by `lore install --target codex` and should not be edited manually.\n")
+	if err := os.WriteFile(legacyPath, legacyContent, 0o600); err != nil {
+		t.Fatalf("write legacy prompt: %v", err)
+	}
+	manifest := Manifest{
+		SchemaVersion: PortableManifestSchemaVersion,
+		Target:        TargetCodex,
+		AuthMode:      "config-only",
+		Components:    []ComponentID{ComponentCorePack},
+		ManagedFiles:  []ManagedFileRecord{{Path: legacyPath, Component: ComponentCorePack, MergeMode: MergeModeReplace, ContentHash: contentHash(legacyContent)}},
+		BackupRoot:    filepath.Join(layout.RootDir, "backups", "20260529T120000Z"),
+		InstalledAt:   "2026-05-29T12:00:00Z",
+	}
+	data, err := marshalManifest(manifest)
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+	if err := os.WriteFile(layout.ManifestPath, data, 0o600); err != nil {
+		t.Fatalf("write old manifest: %v", err)
+	}
+	oldManifest := append([]byte(nil), data...)
+
+	originalApply := applyCodexPlannedContent
+	applyCodexPlannedContent = func(action PlanFileAction, desired []byte) error {
+		if action.RelativePath == "agents.md" {
+			return errors.New("injected legacy cleanup failure")
+		}
+		return originalApply(action, desired)
+	}
+	t.Cleanup(func() { applyCodexPlannedContent = originalApply })
+
+	plan, err := svc.PlanCodexInstall(InstallRequest{HomeDir: tmpDir, Target: TargetCodex, Components: []ComponentID{ComponentCorePack}})
+	if err != nil {
+		t.Fatalf("PlanCodexInstall error: %v", err)
+	}
+	_, err = svc.ExecuteCodexInstall(plan, InstallCommandOptions{})
+	if err == nil || !strings.Contains(err.Error(), "agents.md") {
+		t.Fatalf("ExecuteCodexInstall error = %v, want legacy cleanup failure", err)
+	}
+	got, readErr := os.ReadFile(layout.ManifestPath)
+	if readErr != nil || string(got) != string(oldManifest) {
+		t.Fatalf("manifest content=%q err=%v, want previous manifest preserved after cleanup failure", string(got), readErr)
 	}
 }
 
@@ -420,10 +504,10 @@ func TestExecuteCodexInstallBackupExistingAgentsMD(t *testing.T) {
 		t.Fatalf("mkdir codex dir: %v", err)
 	}
 
-	// Create existing agents.md.
-	existingContent := "# Old agents.md\nThis is not managed by Lore."
-	if err := os.WriteFile(filepath.Join(codexDir, "agents.md"), []byte(existingContent), 0o600); err != nil {
-		t.Fatalf("write existing agents.md: %v", err)
+	// Create existing AGENTS.md.
+	existingContent := "# Old AGENTS.md\nThis is not managed by Lore."
+	if err := os.WriteFile(filepath.Join(codexDir, "AGENTS.md"), []byte(existingContent), 0o600); err != nil {
+		t.Fatalf("write existing AGENTS.md: %v", err)
 	}
 
 	req := InstallRequest{
@@ -442,19 +526,19 @@ func TestExecuteCodexInstallBackupExistingAgentsMD(t *testing.T) {
 	// Verify plan includes backup action.
 	var agentsAction *PlanFileAction
 	for _, f := range plan.Files {
-		if filepath.ToSlash(f.RelativePath) == "agents.md" {
+		if filepath.ToSlash(f.RelativePath) == "AGENTS.md" {
 			agentsAction = &f
 			break
 		}
 	}
 	if agentsAction == nil {
-		t.Fatal("agents.md action not found in plan")
+		t.Fatal("AGENTS.md action not found in plan")
 	}
 	if agentsAction.Action != "update" {
-		t.Fatalf("agents.md action = %q, want update (should backup existing)", agentsAction.Action)
+		t.Fatalf("AGENTS.md action = %q, want update (should backup existing)", agentsAction.Action)
 	}
 	if agentsAction.BackupPath == "" {
-		t.Fatal("agents.md backup path should be set")
+		t.Fatal("AGENTS.md backup path should be set")
 	}
 
 	// Execute install.
@@ -469,13 +553,13 @@ func TestExecuteCodexInstallBackupExistingAgentsMD(t *testing.T) {
 		t.Fatalf("backup should exist at %s: %v", agentsAction.BackupPath, err)
 	}
 
-	// Verify current agents.md is the new managed content.
-	currentContent, err := os.ReadFile(filepath.Join(codexDir, "agents.md"))
+	// Verify current AGENTS.md is the new managed content.
+	currentContent, err := os.ReadFile(filepath.Join(codexDir, "AGENTS.md"))
 	if err != nil {
-		t.Fatalf("read current agents.md: %v", err)
+		t.Fatalf("read current AGENTS.md: %v", err)
 	}
 	if string(currentContent) == existingContent {
-		t.Fatal("agents.md should be replaced with managed content")
+		t.Fatal("AGENTS.md should be replaced with managed content")
 	}
 }
 
@@ -601,6 +685,23 @@ func TestExecuteCodexInstallMergesConfigToml(t *testing.T) {
 	if err := os.WriteFile(configTomlPath, []byte(existing), 0o600); err != nil {
 		t.Fatalf("write existing config.toml: %v", err)
 	}
+	layout := ResolveCodexLayout(tmpDir)
+	manifest := Manifest{
+		SchemaVersion: PortableManifestSchemaVersion,
+		Target:        TargetCodex,
+		AuthMode:      "config-only",
+		Components:    []ComponentID{ComponentCorePack, ComponentLoreServerMCP},
+		ManagedFiles:  []ManagedFileRecord{{Path: configTomlPath, Component: ComponentLoreServerMCP, MergeMode: MergeModeReplace, ContentHash: "old"}},
+		BackupRoot:    filepath.Join(layout.RootDir, "backups", "20260529T120000Z"),
+		InstalledAt:   "2026-05-29T12:00:00Z",
+	}
+	manifestData, err := marshalManifest(manifest)
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+	if err := os.WriteFile(layout.ManifestPath, manifestData, 0o600); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
 
 	req := InstallRequest{
 		HomeDir:        tmpDir,
@@ -633,7 +734,100 @@ func TestExecuteCodexInstallMergesConfigToml(t *testing.T) {
 }
 
 // TestCodexInstallUsesCustomAgentConfigModels verifies that persisted
-// agent-config.json custom model values drive Codex agents.md projection.
+// agent-config.json custom model values drive Codex AGENTS.md projection.
+func TestPlanCodexInstallFailsClosedOnUnmarkedUserLoreMCPBlock(t *testing.T) {
+	svc := Service{}
+	for _, tt := range []struct {
+		name   string
+		header string
+	}{
+		{name: "bare", header: "[mcp_servers.lore]"},
+		{name: "inline comment", header: "[mcp_servers.lore] # user-owned Lore MCP"},
+		{name: "spaced dotted key", header: "[ mcp_servers . lore ]"},
+		{name: "quoted dotted segments", header: "[\"mcp_servers\".\"lore\"] # user-owned Lore MCP"},
+		{name: "quoted http headers subtable", header: "['mcp_servers' . 'lore' . 'http_headers'] # user-owned Lore MCP"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			configTomlPath := filepath.Join(tmpDir, ".codex", "config.toml")
+			if err := os.MkdirAll(filepath.Dir(configTomlPath), 0o755); err != nil {
+				t.Fatalf("mkdir codex dir: %v", err)
+			}
+			existing := strings.Join([]string{
+				"model = \"gpt-5\"",
+				"",
+				tt.header,
+				"command = \"user-owned\"",
+				"args = [\"mcp\"]",
+				"",
+			}, "\n")
+			if err := os.WriteFile(configTomlPath, []byte(existing), 0o600); err != nil {
+				t.Fatalf("write existing config.toml: %v", err)
+			}
+			_, err := svc.PlanCodexInstall(InstallRequest{
+				HomeDir:        tmpDir,
+				ServerURL:      "https://lore.test",
+				SavedToken:     "secret-token",
+				LoreBinaryPath: "/usr/local/bin/lore",
+				Target:         TargetCodex,
+				Components:     []ComponentID{ComponentCorePack, ComponentLoreServerMCP},
+			})
+			if err == nil || !strings.Contains(err.Error(), "refusing to overwrite unowned [mcp_servers.lore]") {
+				t.Fatalf("PlanCodexInstall error = %v, want unowned Lore MCP block conflict", err)
+			}
+			got, readErr := os.ReadFile(configTomlPath)
+			if readErr != nil || string(got) != existing {
+				t.Fatalf("config.toml content=%q err=%v, want preserved", string(got), readErr)
+			}
+		})
+	}
+}
+
+func TestCodexConfigLoreMCPDetectionRecognizesTOMLTableHeaderForms(t *testing.T) {
+	for _, tt := range []struct {
+		line string
+		want bool
+	}{
+		{line: "[mcp_servers.lore]", want: true},
+		{line: "[mcp_servers.lore] # inline comment", want: true},
+		{line: "[ mcp_servers . lore . headers ]", want: true},
+		{line: "[\"mcp_servers\" . \"lore\" . \"http_headers\"] # inline comment", want: true},
+		{line: "['mcp_servers'.'lore']", want: true},
+		{line: "[mcp_servers.other]", want: false},
+		{line: "[\"mcp_servers.lore\"]", want: false},
+		{line: "[mcp_servers.lore] trailing", want: false},
+	} {
+		t.Run(tt.line, func(t *testing.T) {
+			if got := isCodexLoreTableHeader(tt.line); got != tt.want {
+				t.Fatalf("isCodexLoreTableHeader(%q) = %v, want %v", tt.line, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestStripLegacyCodexLoreMCPBlockRecognizesTOMLTableHeaderForms(t *testing.T) {
+	existing := strings.Join([]string{
+		"model = \"gpt-5\"",
+		"",
+		"[ \"mcp_servers\" . \"lore\" ] # old managed block",
+		"url = \"https://old.example/v1/mcp\"",
+		"",
+		"['mcp_servers'.'lore'.'http_headers'] # old managed headers",
+		"Authorization = \"Bearer old-token\"",
+		"",
+		"[mcp_servers.existing] # keep this table",
+		"command = \"keep-me\"",
+		"",
+	}, "\n")
+	stripped := stripLegacyCodexLoreMCPBlock(existing)
+	if !containsAll(stripped, "model = \"gpt-5\"", "[mcp_servers.existing] # keep this table", "command = \"keep-me\"") {
+		t.Fatalf("stripped config = %q, want unrelated config preserved", stripped)
+	}
+	if strings.Contains(stripped, "old-token") || strings.Contains(stripped, "old.example") || strings.Contains(stripped, "http_headers") {
+		t.Fatalf("stripped config = %q, want old Lore MCP tables removed", stripped)
+	}
+}
+
 func TestCodexInstallUsesCustomAgentConfigModels(t *testing.T) {
 	tmpDir := t.TempDir()
 
@@ -684,25 +878,25 @@ func TestCodexInstallUsesCustomAgentConfigModels(t *testing.T) {
 		t.Fatalf("ExecuteCodexInstall error: %v", err)
 	}
 
-	// Read the generated agents.md.
-	agentsPath := filepath.Join(codexDir, "agents.md")
+	// Read the generated AGENTS.md.
+	agentsPath := filepath.Join(codexDir, "AGENTS.md")
 	data, err := os.ReadFile(agentsPath)
 	if err != nil {
-		t.Fatalf("read agents.md: %v", err)
+		t.Fatalf("read AGENTS.md: %v", err)
 	}
 	content := string(data)
 
-	// Custom model gpt-4o should appear in the generated agents.md for sdd-verify.
+	// Custom model gpt-4o should appear in the generated AGENTS.md for sdd-verify.
 	if !strings.Contains(content, "sdd-verify: gpt-4o") {
-		t.Errorf("agents.md should contain custom model sdd-verify: gpt-4o, got:\n%s", content)
+		t.Errorf("AGENTS.md should contain custom model sdd-verify: gpt-4o, got:\n%s", content)
 	}
 	// Verify the default model (gpt-5.4) also appears for sdd-init.
 	if !strings.Contains(content, "sdd-init: gpt-5.4") {
-		t.Errorf("agents.md should contain sdd-init: gpt-5.4, got:\n%s", content)
+		t.Errorf("AGENTS.md should contain sdd-init: gpt-5.4, got:\n%s", content)
 	}
 	// Make sure we're not falling back to the wrong default.
 	if strings.Contains(content, "sdd-verify: gpt-5.4") {
-		t.Errorf("agents.md should NOT contain default fallback sdd-verify: gpt-5.4 when custom model is set")
+		t.Errorf("AGENTS.md should NOT contain default fallback sdd-verify: gpt-5.4 when custom model is set")
 	}
 }
 
@@ -738,6 +932,220 @@ func TestExecuteCodexInstallManifestValid(t *testing.T) {
 	for _, mf := range result.Manifest.ManagedFiles {
 		if mf.Path == "" {
 			t.Fatal("managed file path should not be empty")
+		}
+	}
+}
+
+func TestCodexAdapterDoesNotRenderLegacyLowercasePrompt(t *testing.T) {
+	files, err := defaultCodexAdapter().Render(context.Background(), RenderRequest{
+		Target:     TargetCodex,
+		Assets:     agentpack.DefaultOperationalAssets(),
+		Components: []ComponentID{ComponentCorePack, ComponentLoreServerMCP},
+		ServerURL:  "https://example.test/",
+		SavedToken: "secret-token",
+	})
+	if err != nil {
+		t.Fatalf("Render error: %v", err)
+	}
+	for _, file := range files {
+		if filepath.ToSlash(file.RelativePath) == "agents.md" {
+			t.Fatalf("rendered legacy lowercase agents.md: paths=%v", sortedRenderedPaths(files))
+		}
+	}
+	if _, ok := renderedFileByPathOK(files, "AGENTS.md"); !ok {
+		t.Fatalf("rendered paths=%v, want AGENTS.md", sortedRenderedPaths(files))
+	}
+	shared, ok := renderedFileByPathOK(files, filepath.ToSlash(filepath.Join("skills", "_shared", "sdd-phase-common.md")))
+	if !ok || !strings.Contains(string(shared.Content), "SDD Phase Common Protocol") {
+		t.Fatalf("rendered shared skill = %q ok=%v, want installed shared SDD phase protocol", string(shared.Content), ok)
+	}
+}
+
+func TestCodexPromptEntryNamePrefersExactLowercaseBeforeCaseFoldAlias(t *testing.T) {
+	got, ok := preferCodexPromptEntryName([]string{"AGENTS.md", "agents.md"}, "agents.md")
+	if !ok || got != "agents.md" {
+		t.Fatalf("preferCodexPromptEntryName() = %q, %v; want exact lowercase agents.md", got, ok)
+	}
+}
+
+func TestExecuteCodexInstallCleansManifestOwnedLegacyLowercasePrompt(t *testing.T) {
+	svc := Service{}
+	originalAliasCheck := aliasesCodexCanonicalPrompt
+	aliasesCodexCanonicalPrompt = func(HarnessLayout, string) bool { return false }
+	t.Cleanup(func() { aliasesCodexCanonicalPrompt = originalAliasCheck })
+	tmpDir := t.TempDir()
+	layout := ResolveCodexLayout(tmpDir)
+	legacyPath := filepath.Join(layout.RootDir, "agents.md")
+	if err := os.MkdirAll(layout.RootDir, 0o755); err != nil {
+		t.Fatalf("mkdir codex dir: %v", err)
+	}
+	legacyContent := []byte("# Lore Configuration\n\nThis file is managed by `lore install --target codex` and should not be edited manually.\n")
+	if err := os.WriteFile(legacyPath, legacyContent, 0o600); err != nil {
+		t.Fatalf("write legacy prompt: %v", err)
+	}
+	manifest := Manifest{
+		SchemaVersion: PortableManifestSchemaVersion,
+		Target:        TargetCodex,
+		AuthMode:      "config-only",
+		Components:    []ComponentID{ComponentCorePack},
+		ManagedFiles:  []ManagedFileRecord{{Path: legacyPath, Component: ComponentCorePack, MergeMode: MergeModeReplace, ContentHash: contentHash(legacyContent)}},
+		BackupRoot:    filepath.Join(layout.RootDir, "backups", "20260529T120000Z"),
+		InstalledAt:   "2026-05-29T12:00:00Z",
+	}
+	data, err := marshalManifest(manifest)
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+	if err := os.WriteFile(layout.ManifestPath, data, 0o600); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	plan, err := svc.PlanCodexInstall(InstallRequest{HomeDir: tmpDir, Target: TargetCodex, Components: []ComponentID{ComponentCorePack}, Now: time.Date(2026, 5, 29, 12, 1, 0, 0, time.UTC)})
+	if err != nil {
+		t.Fatalf("PlanCodexInstall error: %v", err)
+	}
+	assertPlanFileAction(t, plan.Files, "agents.md", "delete")
+	var deleteAction PlanFileAction
+	for _, action := range plan.Files {
+		if action.RelativePath == "agents.md" {
+			deleteAction = action
+		}
+	}
+	if deleteAction.BackupPath == "" {
+		t.Fatal("legacy cleanup should have a backup path")
+	}
+	if err := applyCodexPlannedContent(deleteAction, nil); err != nil {
+		t.Fatalf("applyCodexPlannedContent(delete legacy) error: %v", err)
+	}
+	if _, err := os.Stat(legacyPath); !os.IsNotExist(err) {
+		t.Fatalf("legacy lowercase prompt stat err=%v, want removed", err)
+	}
+	if got, err := os.ReadFile(deleteAction.BackupPath); err != nil || string(got) != string(legacyContent) {
+		t.Fatalf("legacy backup content=%q err=%v, want original", string(got), err)
+	}
+}
+
+func TestCodexLegacyLowercasePromptFailsClosedOnInjectedCaseInsensitiveAlias(t *testing.T) {
+	svc := Service{}
+	originalAliasCheck := aliasesCodexCanonicalPrompt
+	aliasesCodexCanonicalPrompt = func(HarnessLayout, string) bool { return true }
+	t.Cleanup(func() { aliasesCodexCanonicalPrompt = originalAliasCheck })
+	for _, tt := range []struct {
+		name    string
+		content string
+	}{
+		{name: "unowned", content: "# Personal Codex notes\nkeep me\n"},
+		{name: "user-modified ambiguous", content: "# Lore Configuration\n\nUser customization without Lore managed install marker.\n"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			legacyPath := filepath.Join(tmpDir, ".codex", "agents.md")
+			if err := os.MkdirAll(filepath.Dir(legacyPath), 0o755); err != nil {
+				t.Fatalf("mkdir codex dir: %v", err)
+			}
+			if err := os.WriteFile(legacyPath, []byte(tt.content), 0o600); err != nil {
+				t.Fatalf("write legacy prompt: %v", err)
+			}
+			_, err := svc.PlanCodexInstall(InstallRequest{HomeDir: tmpDir, Target: TargetCodex, Components: []ComponentID{ComponentCorePack}})
+			if err == nil || !strings.Contains(err.Error(), "unowned legacy ~/.codex/agents.md") {
+				t.Fatalf("PlanCodexInstall error = %v, want fail-closed preservation error", err)
+			}
+			got, readErr := os.ReadFile(legacyPath)
+			if readErr != nil || string(got) != tt.content {
+				t.Fatalf("legacy content=%q err=%v, want preserved %q", string(got), readErr, tt.content)
+			}
+		})
+	}
+}
+
+func TestCodexLegacyLowercasePromptSkipsManagedCleanupOnInjectedAliasRisk(t *testing.T) {
+	svc := Service{}
+	originalAliasCheck := aliasesCodexCanonicalPrompt
+	aliasesCodexCanonicalPrompt = func(HarnessLayout, string) bool { return true }
+	t.Cleanup(func() { aliasesCodexCanonicalPrompt = originalAliasCheck })
+	tmpDir := t.TempDir()
+	legacyPath := filepath.Join(tmpDir, ".codex", "agents.md")
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o755); err != nil {
+		t.Fatalf("mkdir codex dir: %v", err)
+	}
+	legacyContent := []byte("# Lore Configuration\n\nThis file is managed by `lore install --target codex` and should not be edited manually.\n")
+	if err := os.WriteFile(legacyPath, legacyContent, 0o600); err != nil {
+		t.Fatalf("write legacy prompt: %v", err)
+	}
+	plan, err := svc.PlanCodexInstall(InstallRequest{HomeDir: tmpDir, Target: TargetCodex, Components: []ComponentID{ComponentCorePack}})
+	if err != nil {
+		t.Fatalf("PlanCodexInstall error = %v, want alias-safe skip", err)
+	}
+	for _, action := range plan.Files {
+		if action.RelativePath == "agents.md" {
+			t.Fatalf("planned alias-risk delete for legacy prompt: %+v", action)
+		}
+	}
+}
+
+func TestCodexLegacyLowercasePromptPreservesUnmanagedCaseSensitiveContent(t *testing.T) {
+	svc := Service{}
+	originalAliasCheck := aliasesCodexCanonicalPrompt
+	aliasesCodexCanonicalPrompt = func(HarnessLayout, string) bool { return false }
+	t.Cleanup(func() { aliasesCodexCanonicalPrompt = originalAliasCheck })
+	tmpDir := t.TempDir()
+	legacyPath := filepath.Join(tmpDir, ".codex", "agents.md")
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o755); err != nil {
+		t.Fatalf("mkdir codex dir: %v", err)
+	}
+	content := "# Personal Codex notes\nkeep me\n"
+	if err := os.WriteFile(legacyPath, []byte(content), 0o600); err != nil {
+		t.Fatalf("write legacy prompt: %v", err)
+	}
+	plan, err := svc.PlanCodexInstall(InstallRequest{HomeDir: tmpDir, Target: TargetCodex, Components: []ComponentID{ComponentCorePack}})
+	if err != nil {
+		t.Fatalf("PlanCodexInstall error = %v, want preserved non-alias legacy file", err)
+	}
+	for _, action := range plan.Files {
+		if action.RelativePath == "agents.md" {
+			t.Fatalf("planned cleanup for unowned non-alias legacy prompt: %+v", action)
+		}
+	}
+	got, readErr := os.ReadFile(legacyPath)
+	if readErr != nil || string(got) != content {
+		t.Fatalf("legacy content=%q err=%v, want preserved %q", string(got), readErr, content)
+	}
+}
+
+func renderedFileByPathOK(files []RenderedFile, path string) (RenderedFile, bool) {
+	for _, file := range files {
+		if filepath.ToSlash(file.RelativePath) == filepath.ToSlash(path) {
+			return file, true
+		}
+	}
+	return RenderedFile{}, false
+}
+
+func TestCodexGoldenMCPConfigAndPaths(t *testing.T) {
+	mcp, err := renderCodexMCPConfig("https://example.test/", "secret-token")
+	if err != nil {
+		t.Fatalf("renderCodexMCPConfig error: %v", err)
+	}
+	wantMCP, err := os.ReadFile(filepath.Join("testdata", "codex", "config.toml.golden"))
+	if err != nil {
+		t.Fatalf("read codex MCP golden: %v", err)
+	}
+	if string(mcp) != string(wantMCP) {
+		t.Fatalf("Codex MCP golden drift\ngot:\n%s\nwant:\n%s", string(mcp), string(wantMCP))
+	}
+	wantPaths, err := os.ReadFile(filepath.Join("testdata", "codex", "paths.golden"))
+	if err != nil {
+		t.Fatalf("read codex paths golden: %v", err)
+	}
+	for _, want := range strings.Split(strings.TrimSpace(string(wantPaths)), "\n") {
+		if want == "lore-install.json" {
+			continue
+		}
+		if want == "skills/sdd-apply/SKILL.md" || want == "skills/_shared/sdd-phase-common.md" {
+			continue
+		}
+		if want != "AGENTS.md" && want != "config.toml" {
+			t.Fatalf("unexpected codex paths golden entry %q", want)
 		}
 	}
 }

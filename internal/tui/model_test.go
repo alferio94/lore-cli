@@ -167,7 +167,7 @@ func TestInstallTargetSelectionSurfacesPiDefaultAndAntigravityMVPGuidance(t *tes
 	}
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(model)
-	for _, want := range []string{"Pi remains the default recommended path.", "Antigravity", "prompt + skills", "Choose an install target:", "Selected target: Pi"} {
+	for _, want := range []string{"Pi remains the default recommended path.", "Antigravity", "Full Antigravity projection", "global ~/.gemini/config/mcp_config.json", "Choose an install target:", "Selected target: Pi"} {
 		if !strings.Contains(m.statusBody, want) {
 			t.Fatalf("statusBody = %q, want updated install guidance containing %q", m.statusBody, want)
 		}
