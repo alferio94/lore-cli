@@ -481,6 +481,15 @@ func mergeCodexMCPConfig(existing, managed []byte, existingLoreOwned bool) ([]by
 		end += len(codexMCPBlockEndMarker)
 		prefix := strings.TrimRight(existingText[:start], "\n")
 		suffix := strings.TrimLeft(existingText[end:], "\n")
+		var err error
+		prefix, err = stripObsoleteCodexLoreMCPEnvTables(prefix)
+		if err != nil {
+			return nil, err
+		}
+		suffix, err = stripObsoleteCodexLoreMCPEnvTables(suffix)
+		if err != nil {
+			return nil, err
+		}
 		parts := make([]string, 0, 3)
 		if strings.TrimSpace(prefix) != "" {
 			parts = append(parts, prefix)
@@ -498,6 +507,11 @@ func mergeCodexMCPConfig(existing, managed []byte, existingLoreOwned bool) ([]by
 	stripped := existingText
 	if existingLoreOwned {
 		stripped = stripLegacyCodexLoreMCPBlock(existingText)
+	}
+	var err error
+	stripped, err = stripObsoleteCodexLoreMCPEnvTables(stripped)
+	if err != nil {
+		return nil, err
 	}
 	stripped = strings.TrimRight(stripped, "\n")
 	if strings.TrimSpace(stripped) == "" {
@@ -530,6 +544,48 @@ func stripLegacyCodexLoreMCPBlock(existing string) string {
 	return strings.Join(kept, "\n")
 }
 
+func stripObsoleteCodexLoreMCPEnvTables(existing string) (string, error) {
+	lines := strings.Split(existing, "\n")
+	kept := make([]string, 0, len(lines))
+	for i := 0; i < len(lines); {
+		if !isCodexLoreEnvTableHeader(lines[i]) {
+			kept = append(kept, lines[i])
+			i++
+			continue
+		}
+
+		end := i + 1
+		for end < len(lines) && !isTOMLTableHeader(lines[end]) {
+			end++
+		}
+		if !isObsoleteCodexLoreMCPEnvTable(lines[i:end]) {
+			return "", fmt.Errorf("refusing to overwrite unowned [mcp_servers.lore.env] block in ~/.codex/config.toml; remove it or rerun after removing unsupported Lore MCP env keys")
+		}
+		i = end
+	}
+	return strings.Join(kept, "\n"), nil
+}
+
+func isObsoleteCodexLoreMCPEnvTable(lines []string) bool {
+	staleKeySeen := false
+	for _, line := range lines[1:] {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		path, ok := parseTOMLAssignmentKeyPath(line)
+		if !ok || len(path) != 1 || !isObsoleteCodexLoreMCPEnvKey(path[0]) {
+			return false
+		}
+		staleKeySeen = true
+	}
+	return staleKeySeen
+}
+
+func isObsoleteCodexLoreMCPEnvKey(key string) bool {
+	return key == "LORE_MCP_URL" || key == "LORE_MCP_AUTHORIZATION"
+}
+
 func codexConfigHasLoreMCPBlock(existing string) bool {
 	for _, line := range strings.Split(existing, "\n") {
 		if isCodexLoreTableHeader(line) {
@@ -548,6 +604,11 @@ func isCodexLoreTableHeader(line string) bool {
 		return true
 	}
 	return len(path) == 3 && (path[2] == "headers" || path[2] == "http_headers")
+}
+
+func isCodexLoreEnvTableHeader(line string) bool {
+	path, ok := parseTOMLTableHeaderPath(line)
+	return ok && len(path) == 3 && path[0] == "mcp_servers" && path[1] == "lore" && path[2] == "env"
 }
 
 func isTOMLTableHeader(line string) bool {
@@ -576,6 +637,51 @@ func parseTOMLTableHeaderPath(line string) ([]string, bool) {
 		return nil, false
 	}
 	return parseTOMLDottedKeyPath(trimmed[openLen:closeAt])
+}
+
+func parseTOMLAssignmentKeyPath(line string) ([]string, bool) {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+		return nil, false
+	}
+	equalsAt := findTOMLAssignmentEquals(trimmed)
+	if equalsAt < 0 {
+		return nil, false
+	}
+	return parseTOMLDottedKeyPath(strings.TrimSpace(trimmed[:equalsAt]))
+}
+
+func findTOMLAssignmentEquals(line string) int {
+	quote := byte(0)
+	escaped := false
+	for i := 0; i < len(line); i++ {
+		ch := line[i]
+		if quote != 0 {
+			if quote == '"' && escaped {
+				escaped = false
+				continue
+			}
+			if quote == '"' && ch == '\\' {
+				escaped = true
+				continue
+			}
+			if ch == quote {
+				quote = 0
+			}
+			continue
+		}
+		if ch == '\'' || ch == '"' {
+			quote = ch
+			continue
+		}
+		if ch == '#' {
+			return -1
+		}
+		if ch == '=' {
+			return i
+		}
+	}
+	return -1
 }
 
 func findTOMLHeaderClose(line string, start int, closeToken string) int {

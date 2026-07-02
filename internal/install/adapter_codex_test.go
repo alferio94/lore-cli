@@ -735,6 +735,119 @@ func TestExecuteCodexInstallMergesConfigToml(t *testing.T) {
 
 // TestCodexInstallUsesCustomAgentConfigModels verifies that persisted
 // agent-config.json custom model values drive Codex AGENTS.md projection.
+func TestExecuteCodexInstallMigratesObsoleteCodexLoreEnvTable(t *testing.T) {
+	svc := Service{}
+	tmpDir := t.TempDir()
+	codexDir := filepath.Join(tmpDir, ".codex")
+	if err := os.MkdirAll(codexDir, 0o755); err != nil {
+		t.Fatalf("mkdir codex dir: %v", err)
+	}
+	configTomlPath := filepath.Join(codexDir, "config.toml")
+	existing := strings.Join([]string{
+		"model = \"gpt-5\"",
+		"",
+		"[mcp_servers.other.env]",
+		"KEEP_ME = \"yes\"",
+		"",
+		"[mcp_servers.lore.env]",
+		"LORE_MCP_URL = \"https://old.example/v1/mcp\"",
+		"LORE_MCP_AUTHORIZATION = \"Bearer old-test-token\"",
+		"",
+		"[profiles.default]",
+		"approval_policy = \"on-request\"",
+		"",
+	}, "\n")
+	if err := os.WriteFile(configTomlPath, []byte(existing), 0o600); err != nil {
+		t.Fatalf("write existing config.toml: %v", err)
+	}
+
+	plan, err := svc.PlanCodexInstall(InstallRequest{
+		HomeDir:        tmpDir,
+		ServerURL:      "https://lore.test",
+		SavedToken:     "new-test-token",
+		LoreBinaryPath: "/usr/local/bin/lore",
+		Target:         TargetCodex,
+		Components:     []ComponentID{ComponentCorePack, ComponentLoreServerMCP},
+	})
+	if err != nil {
+		t.Fatalf("PlanCodexInstall error: %v", err)
+	}
+	if _, err := svc.ExecuteCodexInstall(plan, InstallCommandOptions{DryRun: false}); err != nil {
+		t.Fatalf("ExecuteCodexInstall error: %v", err)
+	}
+
+	merged, err := os.ReadFile(configTomlPath)
+	if err != nil {
+		t.Fatalf("ReadFile(config.toml) error: %v", err)
+	}
+	text := string(merged)
+	if !containsAll(text, `model = "gpt-5"`, `[mcp_servers.other.env]`, `KEEP_ME = "yes"`, `[profiles.default]`, `approval_policy = "on-request"`, codexMCPBlockStartMarker, `[mcp_servers.lore]`, `url = "https://lore.test/v1/mcp"`, `[mcp_servers.lore.http_headers]`, `Authorization = "Bearer new-test-token"`) {
+		t.Fatal("merged config.toml should preserve unrelated config and add the managed Lore MCP block")
+	}
+	if strings.Contains(text, `[mcp_servers.lore.env]`) || strings.Contains(text, `LORE_MCP_URL`) || strings.Contains(text, `LORE_MCP_AUTHORIZATION`) || strings.Contains(text, `old.example`) || strings.Contains(text, `old-test-token`) {
+		t.Fatal("merged config.toml should remove the obsolete Lore MCP env table")
+	}
+}
+
+func TestExecuteCodexInstallReplacesManagedBlockAndRemovesObsoleteEnvTable(t *testing.T) {
+	svc := Service{}
+	tmpDir := t.TempDir()
+	codexDir := filepath.Join(tmpDir, ".codex")
+	if err := os.MkdirAll(codexDir, 0o755); err != nil {
+		t.Fatalf("mkdir codex dir: %v", err)
+	}
+	configTomlPath := filepath.Join(codexDir, "config.toml")
+	existing := strings.Join([]string{
+		"model = \"gpt-5\"",
+		"",
+		"[mcp_servers.lore.env]",
+		"LORE_MCP_URL = \"https://old.example/v1/mcp\"",
+		"LORE_MCP_AUTHORIZATION = \"Bearer old-test-token\"",
+		"",
+		codexMCPBlockStartMarker,
+		"[mcp_servers.lore]",
+		"url = \"https://old.example/v1/mcp\"",
+		"",
+		"[mcp_servers.lore.http_headers]",
+		"Authorization = \"Bearer old-test-token\"",
+		codexMCPBlockEndMarker,
+		"",
+		"[mcp_servers.other.env]",
+		"KEEP_ME = \"yes\"",
+		"",
+	}, "\n")
+	if err := os.WriteFile(configTomlPath, []byte(existing), 0o600); err != nil {
+		t.Fatalf("write existing config.toml: %v", err)
+	}
+
+	plan, err := svc.PlanCodexInstall(InstallRequest{
+		HomeDir:        tmpDir,
+		ServerURL:      "https://lore.test",
+		SavedToken:     "new-test-token",
+		LoreBinaryPath: "/usr/local/bin/lore",
+		Target:         TargetCodex,
+		Components:     []ComponentID{ComponentCorePack, ComponentLoreServerMCP},
+	})
+	if err != nil {
+		t.Fatalf("PlanCodexInstall error: %v", err)
+	}
+	if _, err := svc.ExecuteCodexInstall(plan, InstallCommandOptions{DryRun: false}); err != nil {
+		t.Fatalf("ExecuteCodexInstall error: %v", err)
+	}
+
+	merged, err := os.ReadFile(configTomlPath)
+	if err != nil {
+		t.Fatalf("ReadFile(config.toml) error: %v", err)
+	}
+	text := string(merged)
+	if !containsAll(text, `model = "gpt-5"`, `[mcp_servers.other.env]`, `KEEP_ME = "yes"`, codexMCPBlockStartMarker, `[mcp_servers.lore]`, `url = "https://lore.test/v1/mcp"`, `[mcp_servers.lore.http_headers]`, `Authorization = "Bearer new-test-token"`) {
+		t.Fatal("merged config.toml should replace the managed block, preserve unrelated env, and use the new remote MCP config")
+	}
+	if strings.Contains(text, `[mcp_servers.lore.env]`) || strings.Contains(text, `LORE_MCP_URL`) || strings.Contains(text, `LORE_MCP_AUTHORIZATION`) || strings.Contains(text, `old.example`) || strings.Contains(text, `old-test-token`) {
+		t.Fatal("merged config.toml should remove obsolete Lore MCP env state and stale managed values")
+	}
+}
+
 func TestPlanCodexInstallFailsClosedOnUnmarkedUserLoreMCPBlock(t *testing.T) {
 	svc := Service{}
 	for _, tt := range []struct {
