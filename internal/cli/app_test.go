@@ -872,6 +872,11 @@ func TestInstallUsageIncludesPiFirstGuidance(t *testing.T) {
 		"Rerun lore install to refresh the extended-skills bundle",
 		"lore update does not touch skill files",
 		"Antigravity is a Full projection target",
+		"features.multi_agent=true",
+		"sdd-strong/mid/cheap profiles",
+		"lore_project_*",
+		"hooks.json and MCP handshake/transport changes are out of scope",
+		"No codex exec runner",
 		"Claude Code remains Coming soon",
 	} {
 		if !strings.Contains(stderr.String(), want) {

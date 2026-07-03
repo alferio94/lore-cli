@@ -134,6 +134,10 @@ func (a codexAdapter) Render(_ context.Context, req RenderRequest) ([]RenderedFi
 		})
 	}
 
+	if containsComponent(components, ComponentCorePack) {
+		rendered = append(rendered, renderCodexSDDProfiles(req.AgentConfig)...)
+	}
+
 	rendered = append(rendered, renderCodexManagedSkills(req)...)
 	rendered = append(rendered, renderCodexSharedSkills()...)
 	rendered = append(rendered, renderCodexExtendedSkills(req)...)
@@ -203,7 +207,9 @@ func renderCodexAgentsMD(req RenderRequest) ([]byte, error) {
 		"",
 		"## Notes",
 		"- Codex receives a Lore-managed remote MCP entry pointing at your saved Lore server `/v1/mcp` endpoint.",
-		"- No `codex exec` runner, npm bootstrap, Pi overlays, or plugin behavior are installed by this target.",
+		"- No `codex exec` runner, npm bootstrap, Pi overlays, hooks, or plugin behavior are installed by this target.",
+		"",
+		renderCodexSDDSection(req.AgentConfig),
 		"",
 		"Load the Lore-managed skill files from `~/.codex/skills` when a task explicitly requires them.",
 		"",
@@ -223,6 +229,7 @@ func renderCodexMCPConfig(serverURL, token string) ([]byte, error) {
 	if trimmedToken == "" {
 		return nil, fmt.Errorf("saved token is required")
 	}
+	approvalFragment := renderCodexLoreMCPApprovalFragment()
 	text := strings.Join([]string{
 		codexMCPBlockStartMarker,
 		"[mcp_servers.lore]",
@@ -230,6 +237,8 @@ func renderCodexMCPConfig(serverURL, token string) ([]byte, error) {
 		"",
 		"[mcp_servers.lore.http_headers]",
 		fmt.Sprintf("Authorization = %q", "Bearer "+trimmedToken),
+		"",
+		approvalFragment,
 		codexMCPBlockEndMarker,
 		"",
 	}, "\n")

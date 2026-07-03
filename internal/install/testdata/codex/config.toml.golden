@@ -4,4 +4,28 @@ url = "https://example.test/v1/mcp"
 
 [mcp_servers.lore.http_headers]
 Authorization = "Bearer secret-token"
+
+[mcp_servers.lore.tools.lore_me]
+approval_mode = "approve"
+
+[mcp_servers.lore.tools.lore_memory_get]
+approval_mode = "approve"
+
+[mcp_servers.lore.tools.lore_memory_save]
+approval_mode = "approve"
+
+[mcp_servers.lore.tools.lore_memory_search]
+approval_mode = "approve"
+
+[mcp_servers.lore.tools.lore_project_activity]
+approval_mode = "approve"
+
+[mcp_servers.lore.tools.lore_project_context]
+approval_mode = "approve"
+
+[mcp_servers.lore.tools.lore_project_get]
+approval_mode = "approve"
+
+[mcp_servers.lore.tools.lore_project_list]
+approval_mode = "approve"
 # END lore-cli managed Lore MCP

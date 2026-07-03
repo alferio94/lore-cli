@@ -1,0 +1,13 @@
+## Codex-native SDD orchestration
+
+- Default to Codex native multi-agent/subagent execution for non-trivial repository work when `spawn_agent`, `wait_agent`, and `close_agent` are available.
+- For SDD phases, spawn the matching specialized worker (`sdd-explore`, `sdd-propose`, `sdd-spec`, `sdd-design`, `sdd-tasks`, `sdd-apply`, `sdd-verify`, `sdd-archive`) and wait for its compact handoff before continuing.
+- Route workers by SDD lane; pass the model and reasoning effort explicitly when the Codex tool surface supports those fields.
+- If Codex native agent tools are unavailable, continue inline/sequentially and preserve the same SDD artifact persistence and compact envelope contracts.
+- Do not treat projected profiles as a global default override; they are explicit session presets and routing lanes.
+
+### SDD lanes
+
+- `strong` (`sdd-strong.config.toml`): model `gpt-5.4`, reasoning effort `high` — architecture, exploration, design, apply, and risky verification.
+- `mid` (`sdd-mid.config.toml`): model `gpt-5.4`, reasoning effort `medium` — specification, task breakdown, and normal implementation handoffs.
+- `cheap` (`sdd-cheap.config.toml`): model `gpt-5.4`, reasoning effort `low` — mechanical documentation, summaries, and low-risk cleanup.

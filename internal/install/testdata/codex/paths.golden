@@ -1,5 +1,8 @@
 AGENTS.md
 config.toml
+sdd-strong.config.toml
+sdd-mid.config.toml
+sdd-cheap.config.toml
 skills/_shared/sdd-phase-common.md
 skills/sdd-apply/SKILL.md
 lore-install.json
