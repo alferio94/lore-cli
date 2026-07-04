@@ -41,21 +41,26 @@ func newViewportDensity(width, height int) viewportDensity {
 	if width <= 0 {
 		width = 80
 	}
-	contentWidth := width - 4
+	compact := width < 72
+	horizontalPadding := 2
+	if compact {
+		horizontalPadding = 1
+	}
+	contentWidth := width - (horizontalPadding * 2) - 2
 	if contentWidth > 76 {
 		contentWidth = 76
 	}
-	if width < 48 {
-		contentWidth = width - 2
+	if contentWidth < 1 {
+		contentWidth = 1
 	}
-	if contentWidth < 24 {
+	if contentWidth < 24 && width >= 28 {
 		contentWidth = 24
 	}
 	return viewportDensity{
 		Width:        width,
 		Height:       height,
 		ContentWidth: contentWidth,
-		Compact:      width < 72,
+		Compact:      compact,
 		Short:        height > 0 && height < 20,
 	}
 }
@@ -188,14 +193,29 @@ func detailPreBodyLineCount(m model, density viewportDensity) int {
 	return lines
 }
 
-func detailBodyViewportHeight(density viewportDensity, preBodyLines, headerLines, footerLines int) int {
+const panelChromeLines = 4 // rounded border top/bottom plus panel vertical padding
+
+func shellBlankLineCount(density viewportDensity) int {
+	if density.Short {
+		return 0
+	}
+	return 2
+}
+
+func shellContentHeight(density viewportDensity, headerLines, footerLines int) int {
 	if density.Height <= 0 {
 		return 999
 	}
 	verticalPadding, _ := density.OuterPadding()
-	const shellBlankLines = 2
-	const panelChromeLines = 4 // rounded border top/bottom plus panel vertical padding
-	available := density.Height - (verticalPadding * 2) - headerLines - footerLines - shellBlankLines - panelChromeLines - preBodyLines
+	available := density.Height - (verticalPadding * 2) - headerLines - footerLines - shellBlankLineCount(density) - panelChromeLines
+	if available < 1 {
+		return 1
+	}
+	return available
+}
+
+func detailBodyViewportHeight(density viewportDensity, preBodyLines, headerLines, footerLines int) int {
+	available := shellContentHeight(density, headerLines, footerLines) - preBodyLines
 	if available < 1 {
 		return 1
 	}
@@ -215,8 +235,35 @@ func renderView(m model) string {
 	body := renderShell(m, density)
 	footer := hintStyle.Render(renderFooter(m))
 	verticalPadding, horizontalPadding := density.OuterPadding()
-	content := lipgloss.JoinVertical(lipgloss.Left, header, "", body, "", footer)
-	return appStyle.Copy().Padding(verticalPadding, horizontalPadding).Render(lipgloss.PlaceHorizontal(density.Width, lipgloss.Center, content))
+	sections := []string{header}
+	if !density.Short {
+		sections = append(sections, "")
+	}
+	sections = append(sections, body)
+	if !density.Short {
+		sections = append(sections, "")
+	}
+	sections = append(sections, footer)
+	content := lipgloss.JoinVertical(lipgloss.Left, sections...)
+	innerWidth := density.Width - (horizontalPadding * 2)
+	if innerWidth < 1 {
+		innerWidth = 1
+	}
+	content = constrainRenderedWidth(content, innerWidth)
+	return appStyle.Copy().Padding(verticalPadding, horizontalPadding).Render(lipgloss.PlaceHorizontal(innerWidth, lipgloss.Center, content))
+}
+
+func constrainRenderedWidth(value string, width int) string {
+	if width < 1 {
+		return ""
+	}
+	lines := strings.Split(value, "\n")
+	for i, line := range lines {
+		if lipgloss.Width(line) > width {
+			lines[i] = lipgloss.NewStyle().MaxWidth(width).Render(line)
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func renderShell(m model, density viewportDensity) string {
@@ -237,31 +284,82 @@ func renderRootPicker(m model, density viewportDensity) string {
 		rows = append(rows, subtitleStyle.Render("Use ↑/↓ to move, Enter to open."))
 	}
 	for i, item := range m.items {
-		prefix := "  "
-		labelStyle := lipgloss.NewStyle()
-		helpStyle := mutedStyle
+		rows = append(rows, renderRootPickerLabel(item, i == m.selected))
 		if i == m.selected {
-			prefix = "› "
-			labelStyle = selectedItemStyle
-			helpStyle = selectedItemStyle.Copy().Bold(false)
-		}
-		label := prefix + item.title
-		if item.disabled {
-			label = disabledStyle.Render(label + " (coming soon)")
-		} else {
-			label = labelStyle.Render(label)
-		}
-		rows = append(rows, label)
-		if i == m.selected {
-			rows = append(rows, helpStyle.Render("  "+truncateLine(item.description, density.ContentWidth-6)))
+			rows = append(rows, selectedItemStyle.Copy().Bold(false).Render("  "+truncateLine(item.description, density.ContentWidth-6)))
 		} else if density.ShowSecondaryCopy() {
 			rows = append(rows, mutedStyle.Render("  "+truncateLine(item.description, density.ContentWidth-6)))
 		}
 	}
+	maxRows := shellContentHeight(density, rootHeaderLineCount(m, density), 1)
+	if len(rows) > maxRows {
+		rows = renderCollapsedRootPicker(m, density, maxRows)
+	}
 	return strings.Join(rows, "\n")
 }
 
+func renderRootPickerLabel(item menuItem, selected bool) string {
+	prefix := "  "
+	labelStyle := lipgloss.NewStyle()
+	if selected {
+		prefix = "› "
+		labelStyle = selectedItemStyle
+	}
+	label := prefix + item.title
+	if item.disabled {
+		return disabledStyle.Render(label + " (coming soon)")
+	}
+	return labelStyle.Render(label)
+}
+
+func renderCollapsedRootPicker(m model, density viewportDensity, maxRows int) []string {
+	if maxRows < 1 {
+		maxRows = 1
+	}
+	selected := m.selected
+	if selected < 0 || selected >= len(m.items) {
+		selected = 0
+	}
+	activeLabel := renderRootPickerLabel(m.items[selected], true)
+	activeHelp := selectedItemStyle.Copy().Bold(false).Render("  " + truncateLine(m.items[selected].description, density.ContentWidth-6))
+	if maxRows == 1 {
+		return []string{activeLabel}
+	}
+	if maxRows == 2 {
+		return []string{activeLabel, activeHelp}
+	}
+
+	rows := []string{titleStyle.Render("Choose an action")}
+	remaining := maxRows - len(rows)
+	if remaining >= 4 && selected > 0 {
+		rows = append(rows, renderRootPickerLabel(m.items[selected-1], false))
+		remaining--
+	}
+	rows = append(rows, activeLabel, activeHelp)
+	remaining -= 2
+	if remaining > 0 && selected < len(m.items)-1 {
+		rows = append(rows, renderRootPickerLabel(m.items[selected+1], false))
+		remaining--
+	}
+	if remaining > 0 {
+		message := ""
+		switch {
+		case selected > 1 && selected < len(m.items)-2:
+			message = "↕ more actions"
+		case selected > 1:
+			message = "↑ more actions"
+		case selected < len(m.items)-2:
+			message = "↓ more actions"
+		}
+		if message != "" {
+			rows = append(rows, hintStyle.Render(message))
+		}
+	}
+	return rows
+}
+
 func renderLoginScreen(m model, density viewportDensity) string {
+	maxRows := shellContentHeight(density, rootHeaderLineCount(m, density), 1)
 	content := []string{renderToneTitle(m.statusTone, m.statusTitle)}
 	if density.ShowSecondaryCopy() {
 		content = append(content, mutedStyle.Render(currentModeLabel(m)), "", mutedStyle.Render(m.statusBody))
@@ -273,8 +371,40 @@ func renderLoginScreen(m model, density viewportDensity) string {
 	if m.loginError != "" {
 		content = append(content, "", errorStyle.Render(m.loginError))
 	}
-	content = append(content, "", hintStyle.Render("Tab fields • Enter submit • --password-stdin • --token compatibility • Esc back • q quit"))
+	if len(content) > maxRows {
+		content = compactLoginContent(m, maxRows)
+	}
+	content = appendLoginHint(content, maxRows)
 	return strings.Join(content, "\n")
+}
+
+func compactLoginContent(m model, maxRows int) []string {
+	inputs := make([]string, 0, len(m.loginInputs))
+	for i := range m.loginInputs {
+		inputs = append(inputs, m.loginInputs[i].View())
+	}
+	if maxRows <= 0 {
+		return nil
+	}
+	if maxRows <= len(inputs) {
+		return inputs[:maxRows]
+	}
+	content := []string{renderToneTitle(m.statusTone, m.statusTitle)}
+	content = append(content, inputs...)
+	if m.loginError != "" && len(content) < maxRows {
+		content = append(content, errorStyle.Render(m.loginError))
+	}
+	return content
+}
+
+func appendLoginHint(content []string, maxRows int) []string {
+	if len(content)+2 <= maxRows {
+		return append(content, "", hintStyle.Render("Tab fields • Enter submit • --password-stdin • --token compatibility • Esc back • q quit"))
+	}
+	if len(content)+1 <= maxRows {
+		return append(content, hintStyle.Render("Tab fields • Enter submit • Esc back • q quit"))
+	}
+	return content
 }
 
 func renderDetailScreen(m model, density viewportDensity) string {
@@ -289,15 +419,30 @@ func renderDetailScreen(m model, density viewportDensity) string {
 	preBodyLines := detailPreBodyLineCount(m, density)
 	bodyHeight := detailBodyViewportHeight(density, preBodyLines, rootHeaderLineCount(m, density), 1)
 	viewport := renderBodyViewport(m.statusBody, density.ContentWidth-4, bodyHeight, m.bodyScroll.Offset)
-	bodyLines := append([]string{}, viewport.Lines...)
-	if viewport.Above {
-		bodyLines = append([]string{hintStyle.Render("↑ more")}, bodyLines...)
-	}
-	if viewport.Below {
-		bodyLines = append(bodyLines, hintStyle.Render("↓ more"))
-	}
+	bodyLines := renderBodyViewportLines(viewport)
 	content = append(content, "", strings.Join(bodyLines, "\n"))
 	return strings.Join(content, "\n")
+}
+
+func renderBodyViewportLines(viewport bodyViewport) []string {
+	bodyLines := append([]string{}, viewport.Lines...)
+	if len(bodyLines) == 0 {
+		return bodyLines
+	}
+	if len(bodyLines) == 1 {
+		return bodyLines
+	}
+	if viewport.Above && viewport.Below && len(bodyLines) == 2 {
+		bodyLines[1] = hintStyle.Render("↕ more")
+		return bodyLines
+	}
+	if viewport.Above {
+		bodyLines[0] = hintStyle.Render("↑ more")
+	}
+	if viewport.Below {
+		bodyLines[len(bodyLines)-1] = hintStyle.Render("↓ more")
+	}
+	return bodyLines
 }
 
 func renderToneTitle(tone, title string) string {
@@ -337,7 +482,7 @@ func currentModeLabel(m model) string {
 func renderUpdateBanner(m model) string {
 	switch {
 	case m.updateAvailable:
-		return successStyle.Render(fmt.Sprintf("Update available: %s → %s • select Update to continue • binary-only, Pi runtime untouched", fallbackUpdateValue(m.updateCurrentVersion, "current"), fallbackUpdateValue(m.updateLatestVersion, "latest")))
+		return successStyle.Render(fmt.Sprintf("Update available: %s → %s • Pi runtime untouched", fallbackUpdateValue(m.updateCurrentVersion, "current"), fallbackUpdateValue(m.updateLatestVersion, "latest")))
 	case !m.updateChecked && m.actions.CheckForUpdate != nil:
 		return mutedStyle.Render("Checking for Lore CLI updates in the background…")
 	case m.updateNotice != "":
@@ -357,7 +502,10 @@ func renderFooter(m model) string {
 		}
 		return "↑/↓ target • Enter confirm • ? details • Esc back • q quit"
 	}
-	if m.installConfirmationPending || m.installBackupDecisionPending || m.updateConfirmationPending {
+	if m.installBackupDecisionPending {
+		return "y/Enter backup • n skip backup • Esc cancel • ↑/↓ scroll • q quit"
+	}
+	if m.installConfirmationPending || m.updateConfirmationPending {
 		return "y/Enter continue • n/Esc cancel • ↑/↓ scroll • q quit"
 	}
 	if m.focus == focusMenu {

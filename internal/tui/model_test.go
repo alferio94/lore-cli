@@ -786,6 +786,75 @@ func TestUpdateSelectionPromptsThenRunsBinaryOnlyApply(t *testing.T) {
 	}
 }
 
+func TestUpdateConfirmationAcceptsEnter(t *testing.T) {
+	calls := 0
+	m := newModel(cli.InteractiveActions{Update: func(context.Context) cli.ActionReport {
+		calls++
+		return cli.ActionReport{Title: "Lore update", ExitCode: 0}
+	}})
+	updated, _ := m.Update(updateCheckMsg{availability: cli.UpdateAvailability{Checked: true, Available: true, CurrentVersion: "v1.0.0", LatestVersion: "v1.1.0"}})
+	m = updated.(model)
+	m = moveSelectionToUpdate(t, m)
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	if cmd != nil || !m.updateConfirmationPending {
+		t.Fatal("selecting update should open confirmation before apply")
+	}
+	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	if cmd == nil || !m.loading {
+		t.Fatal("enter should confirm update and start async apply")
+	}
+	updated, _ = m.Update(cmd())
+	m = updated.(model)
+	if calls != 1 {
+		t.Fatalf("update calls = %d, want 1", calls)
+	}
+}
+
+func TestInstallBackupDecisionAcceptsEnter(t *testing.T) {
+	plan := install.PiInstallPlan{
+		Layout:     install.ResolvePiLayout(t.TempDir()),
+		ExistingPi: install.ExistingPiState{Exists: true, Path: "/tmp/test-home/.pi", Kind: "directory"},
+		FullBackup: &install.FullPiBackupPlan{BackupPath: "/tmp/test-backup", ManifestPath: "/tmp/test-backup/lore-pi-backup.json"},
+	}
+	execCalls := 0
+	var executedPlan install.PiInstallPlan
+	m := newModel(cli.InteractiveActions{
+		PlanPiInstall: func(context.Context) (install.PiInstallPlan, cli.ActionReport, bool) {
+			return plan, cli.ActionReport{Title: "Lore install"}, true
+		},
+		ExecutePiInstall: func(_ context.Context, got install.PiInstallPlan) cli.ActionReport {
+			execCalls++
+			executedPlan = got
+			return cli.ActionReport{Title: "Lore install", ExitCode: 0}
+		},
+	})
+	m = moveSelectionToInstall(t, m)
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	if cmd != nil || !m.installBackupDecisionPending {
+		t.Fatal("enter from install confirmation should open full backup decision")
+	}
+	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	if cmd == nil || !m.loading {
+		t.Fatal("enter should accept full backup decision and start install")
+	}
+	updated, _ = m.Update(cmd())
+	m = updated.(model)
+	if execCalls != 1 {
+		t.Fatalf("exec calls = %d, want 1", execCalls)
+	}
+	if executedPlan.FullBackup == nil {
+		t.Fatal("enter should preserve scheduled full backup")
+	}
+}
+
 func TestUpdateFlowUsesSharedUpdaterWithRealisticService(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("unix self-update test fixture requires shell execution")
@@ -1077,6 +1146,42 @@ func TestBodyScrollResetsOnContentTargetAndScreenChanges(t *testing.T) {
 	m = updated.(model)
 	if got := m.bodyScroll.Offset; got != 0 {
 		t.Fatalf("actionMsg reset offset = %d, want 0", got)
+	}
+
+	m = moveSelectionToInstall(t, newModel(cli.InteractiveActions{}))
+	m.width = 80
+	m.height = 12
+	m.focus = focusDetail
+	m.statusBody = strings.Repeat("old content\n", 20)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyPgDown})
+	m = updated.(model)
+	if m.bodyScroll.Offset == 0 {
+		t.Fatal("expected setup scroll offset before install selection")
+	}
+	m.focus = focusMenu
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	if got := m.bodyScroll.Offset; got != 0 {
+		t.Fatalf("install selection reset offset = %d, want 0", got)
+	}
+
+	m = moveSelectionToUpdate(t, newModel(cli.InteractiveActions{Update: func(context.Context) cli.ActionReport { return cli.ActionReport{Title: "Lore update"} }}))
+	m.width = 80
+	m.height = 12
+	m.updateChecked = true
+	m.updateAvailable = true
+	m.focus = focusDetail
+	m.statusBody = strings.Repeat("old content\n", 20)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyPgDown})
+	m = updated.(model)
+	if m.bodyScroll.Offset == 0 {
+		t.Fatal("expected setup scroll offset before update confirmation")
+	}
+	m.focus = focusMenu
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	if got := m.bodyScroll.Offset; got != 0 {
+		t.Fatalf("update confirmation reset offset = %d, want 0", got)
 	}
 
 	m = moveSelectionToInstall(t, newModel(cli.InteractiveActions{}))

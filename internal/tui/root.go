@@ -209,8 +209,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading = false
 		m.focus = focusDetail
 		m.statusTitle = msg.title
-		m.statusBody = msg.body
-		m.resetBodyScroll()
+		m.replaceStatusBody(msg.body)
 		if msg.isError {
 			m.statusTone = toneError
 		} else {
@@ -290,14 +289,12 @@ func (m model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.installSelectionPending = true
 			m.detailsVisible = false
 			m.statusTitle = "Install Lore"
-			m.statusBody = m.renderInstallTargetSelection()
+			m.replaceStatusBody(m.renderInstallTargetSelection())
 			m.statusTone = toneInfo
-			m.resetBodyScroll()
 			return m, nil
 		case "?":
 			m.detailsVisible = !m.detailsVisible
-			m.statusBody = m.renderInstallConfirmation()
-			m.resetBodyScroll()
+			m.replaceStatusBody(m.renderInstallConfirmation())
 			return m, nil
 		case "ctrl+c", "q":
 			m.quitting = true
@@ -307,7 +304,7 @@ func (m model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.installBackupDecisionPending {
 		switch strings.ToLower(msg.String()) {
-		case "y", "yes":
+		case "y", "yes", "enter":
 			return m.confirmInstallBackupDecision(true)
 		case "n", "no":
 			return m.confirmInstallBackupDecision(false)
@@ -316,9 +313,8 @@ func (m model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.installSelectionPending = true
 			m.installPlan = nil
 			m.statusTitle = "Install Lore"
-			m.statusBody = m.renderInstallTargetSelection()
+			m.replaceStatusBody(m.renderInstallTargetSelection())
 			m.statusTone = toneInfo
-			m.resetBodyScroll()
 			return m, nil
 		case "ctrl+c", "q":
 			m.quitting = true
@@ -328,7 +324,7 @@ func (m model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.updateConfirmationPending {
 		switch strings.ToLower(msg.String()) {
-		case "y", "yes":
+		case "y", "yes", "enter":
 			return m.confirmUpdateDecision(true)
 		case "n", "no", "esc", "left", "h", "backspace":
 			return m.confirmUpdateDecision(false)
@@ -345,35 +341,30 @@ func (m model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.moveInstallTargetSelection(-1)
-			m.statusBody = m.renderInstallTargetSelection()
-			m.resetBodyScroll()
+			m.replaceStatusBody(m.renderInstallTargetSelection())
 			return m, nil
 		case "down", "j":
 			if m.detailsVisible {
 				return m, nil
 			}
 			m.moveInstallTargetSelection(1)
-			m.statusBody = m.renderInstallTargetSelection()
-			m.resetBodyScroll()
+			m.replaceStatusBody(m.renderInstallTargetSelection())
 			return m, nil
 		case "?":
 			m.detailsVisible = !m.detailsVisible
-			m.statusBody = m.renderInstallTargetSelection()
-			m.resetBodyScroll()
+			m.replaceStatusBody(m.renderInstallTargetSelection())
 			return m, nil
 		case "esc", "left", "h", "backspace":
 			if m.detailsVisible {
 				m.detailsVisible = false
-				m.statusBody = m.renderInstallTargetSelection()
-				m.resetBodyScroll()
+				m.replaceStatusBody(m.renderInstallTargetSelection())
 				return m, nil
 			}
 			m.installSelectionPending = false
 			m.focus = focusMenu
 			m.statusTitle = "Welcome to Lore"
-			m.statusBody = "Choose an action. Keyboard hints stay visible, secrets stay masked, and explicit subcommands remain available for automation."
+			m.replaceStatusBody("Choose an action. Keyboard hints stay visible, secrets stay masked, and explicit subcommands remain available for automation.")
 			m.statusTone = toneInfo
-			m.resetBodyScroll()
 			return m, nil
 		}
 	}
@@ -462,6 +453,11 @@ func (m *model) resetBodyScroll() {
 	m.bodyScroll.Offset = 0
 }
 
+func (m *model) replaceStatusBody(body string) {
+	m.statusBody = body
+	m.resetBodyScroll()
+}
+
 func (m model) canScrollBody() bool {
 	if m.focus != focusDetail || m.loading {
 		return false
@@ -535,10 +531,9 @@ func (m model) activateSelection() (tea.Model, tea.Cmd) {
 	item := m.items[m.selected]
 	if item.disabled {
 		m.statusTitle = item.title
-		m.statusBody = item.description
+		m.replaceStatusBody(item.description)
 		m.statusTone = toneMuted
 		m.focus = focusDetail
-		m.resetBodyScroll()
 		return m, nil
 	}
 	switch item.key {
@@ -576,9 +571,8 @@ func (m model) activateSelection() (tea.Model, tea.Cmd) {
 		m.loginInputs[0].Focus()
 		m.loginError = ""
 		m.statusTitle = "Login"
-		m.statusBody = "Enter your server URL, account email, and password. Lore mints a reusable API token, stores only that token in secure credential storage, and keeps CLI --token as the compatibility path for older servers."
+		m.replaceStatusBody("Enter your server URL, account email, and password. Lore mints a reusable API token, stores only that token in secure credential storage, and keeps CLI --token as the compatibility path for older servers.")
 		m.statusTone = toneInfo
-		m.resetBodyScroll()
 		return m, nil
 	case "install":
 		m.updateConfirmationPending = false
@@ -588,14 +582,14 @@ func (m model) activateSelection() (tea.Model, tea.Cmd) {
 			m.installSelectionPending = true
 			m.focus = focusDetail
 			m.statusTitle = "Install Lore"
-			m.statusBody = m.renderInstallTargetSelection()
+			m.replaceStatusBody(m.renderInstallTargetSelection())
 			m.statusTone = toneInfo
 			return m, nil
 		}
 		selectedTarget := m.selectedInstallTarget()
 		if !selectedTarget.Available {
 			m.statusTitle = "Install target unavailable"
-			m.statusBody = fmt.Sprintf("%s is %s. Choose a supported target before continuing.", selectedTarget.Title, selectedTarget.Availability)
+			m.replaceStatusBody(fmt.Sprintf("%s is %s. Choose a supported target before continuing.", selectedTarget.Title, selectedTarget.Availability))
 			m.statusTone = toneMuted
 			return m, nil
 		}
@@ -604,7 +598,7 @@ func (m model) activateSelection() (tea.Model, tea.Cmd) {
 		m.detailsVisible = false
 		m.focus = focusDetail
 		m.statusTitle = "Confirm install"
-		m.statusBody = m.renderInstallConfirmation()
+		m.replaceStatusBody(m.renderInstallConfirmation())
 		m.statusTone = toneInfo
 		return m, nil
 	case "update":
@@ -615,21 +609,21 @@ func (m model) activateSelection() (tea.Model, tea.Cmd) {
 		if !m.updateChecked {
 			m.focus = focusDetail
 			m.statusTitle = "Checking for updates"
-			m.statusBody = "A background binary-only update check is still in progress. Pi runtime and ~/.pi remain untouched."
+			m.replaceStatusBody("A background binary-only update check is still in progress. Pi runtime and ~/.pi remain untouched.")
 			m.statusTone = toneInfo
 			return m, nil
 		}
 		if !m.updateAvailable {
 			m.focus = focusDetail
 			m.statusTitle = "Lore CLI update"
-			m.statusBody = fallbackUpdateDetail(m.updateNotice, "Lore CLI is already current. Pi runtime and ~/.pi remain untouched.")
+			m.replaceStatusBody(fallbackUpdateDetail(m.updateNotice, "Lore CLI is already current. Pi runtime and ~/.pi remain untouched."))
 			m.statusTone = toneInfo
 			return m, nil
 		}
 		m.updateConfirmationPending = true
 		m.focus = focusDetail
 		m.statusTitle = "Confirm Lore CLI update"
-		m.statusBody = fmt.Sprintf("Update only the Lore CLI binary from %s to %s? Press y to continue or n to cancel. Pi runtime and ~/.pi remain untouched.", fallbackUpdateValue(m.updateCurrentVersion, "current"), fallbackUpdateValue(m.updateLatestVersion, "latest"))
+		m.replaceStatusBody(fmt.Sprintf("Update only the Lore CLI binary from %s to %s? Press y to continue or n to cancel. Pi runtime and ~/.pi remain untouched.", fallbackUpdateValue(m.updateCurrentVersion, "current"), fallbackUpdateValue(m.updateLatestVersion, "latest")))
 		m.statusTone = toneInfo
 		return m, nil
 	case "quit":
@@ -649,7 +643,7 @@ func (m model) startInstallFlow() (tea.Model, tea.Cmd) {
 		if !ok {
 			m.focus = focusDetail
 			m.statusTitle = report.Title
-			m.statusBody = renderReport(report)
+			m.replaceStatusBody(renderReport(report))
 			m.statusTone = toneError
 			return m, nil
 		}
@@ -658,7 +652,7 @@ func (m model) startInstallFlow() (tea.Model, tea.Cmd) {
 			m.installBackupDecisionPending = true
 			m.focus = focusDetail
 			m.statusTitle = "Full backup before install?"
-			m.statusBody = fmt.Sprintf("Existing ~/.pi detected at %s. Create a full backup before Lore mutates managed Pi files? Press y to schedule the full backup at %s, or n to continue without it.", plan.ExistingPi.Path, plan.FullBackup.BackupPath)
+			m.replaceStatusBody(fmt.Sprintf("Existing ~/.pi detected at %s. Create a full backup before Lore mutates managed Pi files? Press y to schedule the full backup at %s, or n to continue without it.", plan.ExistingPi.Path, plan.FullBackup.BackupPath))
 			m.statusTone = toneInfo
 			return m, nil
 		}
@@ -675,7 +669,7 @@ func (m model) startInstallFlow() (tea.Model, tea.Cmd) {
 					m.installBackupDecisionPending = true
 					m.focus = focusDetail
 					m.statusTitle = "Full backup before install?"
-					m.statusBody = fmt.Sprintf("Existing ~/.pi detected at %s. Create a full backup before Lore mutates managed Pi files? Press y to continue with a full backup, or n to continue without it.", plan.ExistingPi.Path)
+					m.replaceStatusBody(fmt.Sprintf("Existing ~/.pi detected at %s. Create a full backup before Lore mutates managed Pi files? Press y to continue with a full backup, or n to continue without it.", plan.ExistingPi.Path))
 					m.statusTone = toneInfo
 					return m, nil
 				}
@@ -727,7 +721,7 @@ func (m model) confirmUpdateDecision(confirmed bool) (tea.Model, tea.Cmd) {
 	if !confirmed {
 		m.focus = focusDetail
 		m.statusTitle = "Lore CLI update cancelled"
-		m.statusBody = "Binary-only update cancelled. Pi runtime and ~/.pi remain untouched."
+		m.replaceStatusBody("Binary-only update cancelled. Pi runtime and ~/.pi remain untouched.")
 		m.statusTone = toneInfo
 		return m, nil
 	}
@@ -876,9 +870,8 @@ func (m model) runAsync(kind actionKind, title string, fn func(context.Context) 
 	m.loading = true
 	m.focus = focusDetail
 	m.statusTitle = title
-	m.statusBody = "Please wait…"
+	m.replaceStatusBody("Please wait…")
 	m.statusTone = toneInfo
-	m.resetBodyScroll()
 	return m, func() tea.Msg {
 		msg := fn(context.Background())
 		msg.kind = kind
