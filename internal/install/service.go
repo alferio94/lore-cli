@@ -27,6 +27,8 @@ type Target struct {
 	ID           TargetID
 	Title        string
 	Description  string
+	ShortHelp    string
+	Details      string
 	Recommended  bool
 	Available    bool
 	Availability string
@@ -100,25 +102,31 @@ func supportedTarget(adapter HarnessAdapter) Target {
 	target := Target{ID: adapter.ID(), Title: adapter.Title(), Available: true, Recommended: adapter.ID() == DefaultInstallTarget()}
 	switch adapter.ID() {
 	case TargetPi:
-		target.Description = "Recommended today; uses hosted Lore MCP via pi-mcp-adapter as the default backend, with optional explicit pi-extensions (lore-footer.ts only) via --component pi-extensions. The deprecated lore-memory extension has been removed and is not available."
+		target.ShortHelp = "Recommended default; Pi-native Lore setup."
+		target.Details = "Recommended today; uses hosted Lore MCP via pi-mcp-adapter as the default backend, with optional explicit pi-extensions (lore-footer.ts only) via --component pi-extensions. The deprecated lore-memory extension has been removed and is not available."
 	case TargetAntigravity:
-		target.Description = "Full Antigravity projection with shared ~/.gemini/GEMINI.md prompt, variant-owned skills/manifest, managed Gemini lore agent profile, and optional global ~/.gemini/config/mcp_config.json direct MCP config; no Pi overlays, daemon, or autostart behavior."
+		target.ShortHelp = "Full Gemini prompt/profile projection."
+		target.Details = "Full Antigravity projection with shared ~/.gemini/GEMINI.md prompt, variant-owned skills/manifest, managed Gemini lore agent profile, and optional global ~/.gemini/config/mcp_config.json direct MCP config; no Pi overlays, daemon, or autostart behavior."
 	case TargetOpenCode:
-		target.Description = "Bounded OpenCode projection: manages ~/.config/opencode/AGENTS.md, skills/<phase>/SKILL.md, a native opencode.json (with the documented $schema, default_agent=lore, native `agent` overlay wiring the primary `lore` orchestrator (`mode: \"primary\"`) plus the `lore-worker` repository worker and every SDD phase agent (each non-lore agent uses `mode: \"subagent\"`) to its SKILL.md via {file:...} references, optional native `agent.<name>.variant` preservation from existing opencode.json, and a native `skills` block — no top-level Lore-only `lore` metadata, no `permission: \"allow\"` bypass on `agent.lore`), and manifest. Lore MCP renders by default as a documented top-level mcp.lore remote entry without Lore-only marker fields; the installer fails closed with a typed conflict error and backup-path guidance when the existing mcp.lore block is foreign. tui.json uses the native OpenCode $schema and an empty singular `plugin` string array; Lore-managed plugin files are not copied to ~/.config/opencode/plugins/. Local Lore-owned runtime emulation/statusline plugins (background-agents.ts, lore-models.ts, model-variants.ts, and opencode-subagent-statusline.ts) are backup-deleted through manifest-scoped stale-file cleanup only when prior manifest ownership proves they are safe to remove. Explicit sdd-engram and logo plugins are never bundled or registered. Legacy installs that shipped the previous top-level `lore` block (in opencode.json) or the plural `plugins` array of objects (in tui.json) are silently repaired to the native shape on the next run. config-only projection: no profiles, bootstrap, Pi-like delegation emulation, model hot-edit plugin, or runtime subagents."
+		target.ShortHelp = "Bounded config-only OpenCode projection."
+		target.Details = "Bounded OpenCode projection: manages ~/.config/opencode/AGENTS.md, skills/<phase>/SKILL.md, a native opencode.json (with the documented $schema, default_agent=lore, native `agent` overlay wiring the primary `lore` orchestrator (`mode: \"primary\"`) plus the `lore-worker` repository worker and every SDD phase agent (each non-lore agent uses `mode: \"subagent\"`) to its SKILL.md via {file:...} references, optional native `agent.<name>.variant` preservation from existing opencode.json, and a native `skills` block — no top-level Lore-only `lore` metadata, no `permission: \"allow\"` bypass on `agent.lore`), and manifest. Lore MCP renders by default as a documented top-level mcp.lore remote entry without Lore-only marker fields; the installer fails closed with a typed conflict error and backup-path guidance when the existing mcp.lore block is foreign. tui.json uses the native OpenCode $schema and an empty singular `plugin` string array; Lore-managed plugin files are not copied to ~/.config/opencode/plugins/. Local Lore-owned runtime emulation/statusline plugins (background-agents.ts, lore-models.ts, model-variants.ts, and opencode-subagent-statusline.ts) are backup-deleted through manifest-scoped stale-file cleanup only when prior manifest ownership proves they are safe to remove. Explicit sdd-engram and logo plugins are never bundled or registered. Legacy installs that shipped the previous top-level `lore` block (in opencode.json) or the plural `plugins` array of objects (in tui.json) are silently repaired to the native shape on the next run. config-only projection: no profiles, bootstrap, Pi-like delegation emulation, model hot-edit plugin, or runtime subagents."
 	case TargetCodex:
-		target.Description = "Full Codex projection into ~/.codex with canonical AGENTS.md prompt, skills/*.md, remote Lore MCP config in config.toml, and manifest. No codex exec runner, daemon, Pi overlay, plugin, or bootstrap behavior is installed."
+		target.ShortHelp = "Codex prompt, skills, MCP config, and manifest."
+		target.Details = "Full Codex projection into ~/.codex with canonical AGENTS.md prompt, skills/*.md, remote Lore MCP config in config.toml, and manifest. No codex exec runner, daemon, Pi overlay, plugin, or bootstrap behavior is installed."
 	default:
-		target.Description = "Supported target."
+		target.ShortHelp = "Supported target."
+		target.Details = "Supported target."
 	}
+	target.Description = target.Details
 	return target
 }
 
 func roadmapTarget(id TargetID) Target {
 	switch id {
 	case TargetClaudeCode:
-		return Target{ID: id, Title: "Claude Code", Description: "Listed for roadmap visibility.", Availability: "Coming soon"}
+		return Target{ID: id, Title: "Claude Code", Description: "Listed for roadmap visibility.", ShortHelp: "Roadmap target.", Details: "Listed for roadmap visibility.", Availability: "Coming soon"}
 	default:
-		return Target{ID: id, Title: string(id), Description: "Listed for roadmap visibility.", Availability: "Coming soon"}
+		return Target{ID: id, Title: string(id), Description: "Listed for roadmap visibility.", ShortHelp: "Roadmap target.", Details: "Listed for roadmap visibility.", Availability: "Coming soon"}
 	}
 }
 
@@ -159,11 +167,15 @@ func FormatTargetSelection(targets []Target) string {
 		if target.Recommended {
 			label += " — Recommended"
 		}
+		help := target.ShortHelp
+		if strings.TrimSpace(help) == "" {
+			help = target.Description
+		}
 		if target.Available {
-			fmt.Fprintf(&b, "- %s: %s\n", label, target.Description)
+			fmt.Fprintf(&b, "- %s: %s\n", label, help)
 			continue
 		}
-		fmt.Fprintf(&b, "- %s: %s (%s)\n", label, target.Description, target.Availability)
+		fmt.Fprintf(&b, "- %s: %s (%s)\n", label, help, target.Availability)
 	}
 	b.WriteString("\nPi remains the default recommended path and uses hosted Lore MCP by default. Codex writes ~/.codex/AGENTS.md plus managed remote MCP + skills. Antigravity can write ~/.gemini/config/agents/lore.json and optionally write global ~/.gemini/config/mcp_config.json.")
 	return b.String()

@@ -29,72 +29,153 @@ var (
 	infoStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("117")).Bold(true)
 )
 
-func renderView(m model) string {
-	menu := renderMenuPanel(m)
-	detail := renderDetailPanel(m)
-	headerLines := []string{
-		titleStyle.Render("Lore"),
-		subtitleStyle.Render("Interactive shell for status, login, logout, diagnostics, install, and binary-only updates"),
+type viewportDensity struct {
+	Width        int
+	Height       int
+	ContentWidth int
+	Compact      bool
+	Short        bool
+}
+
+func newViewportDensity(width, height int) viewportDensity {
+	if width <= 0 {
+		width = 80
 	}
-	if banner := renderUpdateBanner(m); banner != "" {
+	contentWidth := width - 4
+	if contentWidth > 76 {
+		contentWidth = 76
+	}
+	if width < 48 {
+		contentWidth = width - 2
+	}
+	if contentWidth < 24 {
+		contentWidth = 24
+	}
+	return viewportDensity{
+		Width:        width,
+		Height:       height,
+		ContentWidth: contentWidth,
+		Compact:      width < 72,
+		Short:        height > 0 && height < 20,
+	}
+}
+
+func (d viewportDensity) OuterPadding() (int, int) {
+	vertical := 1
+	horizontal := 2
+	if d.Compact {
+		horizontal = 1
+	}
+	if d.Short {
+		vertical = 0
+	}
+	return vertical, horizontal
+}
+
+func (d viewportDensity) ShowSecondaryCopy() bool {
+	return !d.Compact && !d.Short
+}
+
+func (d viewportDensity) ShowDecoration() bool {
+	return !d.Compact && !d.Short && (d.Height == 0 || d.Height >= 24)
+}
+
+func truncateLine(value string, limit int) string {
+	if limit <= 0 || len(value) <= limit {
+		return value
+	}
+	if limit <= 1 {
+		return "…"
+	}
+	return strings.TrimSpace(value[:limit-1]) + "…"
+}
+
+func renderView(m model) string {
+	density := newViewportDensity(m.width, m.height)
+	headerLines := []string{titleStyle.Render("Lore")}
+	if density.ShowSecondaryCopy() {
+		headerLines = append(headerLines, subtitleStyle.Render("Interactive shell for status, login, logout, diagnostics, install, and binary-only updates"))
+	}
+	if banner := renderUpdateBanner(m); banner != "" && density.ShowDecoration() {
 		headerLines = append(headerLines, banner)
 	}
 	header := strings.Join(headerLines, "\n")
-	body := lipgloss.JoinHorizontal(lipgloss.Top, menu, detail)
+	body := renderShell(m, density)
 	footer := hintStyle.Render(renderFooter(m))
-	return appStyle.Render(lipgloss.JoinVertical(lipgloss.Left, header, "", body, "", footer))
+	verticalPadding, horizontalPadding := density.OuterPadding()
+	content := lipgloss.JoinVertical(lipgloss.Left, header, "", body, "", footer)
+	return appStyle.Copy().Padding(verticalPadding, horizontalPadding).Render(lipgloss.PlaceHorizontal(density.Width, lipgloss.Center, content))
 }
 
-func renderMenuPanel(m model) string {
-	style := panelStyle
-	if m.focus == focusMenu {
-		style = focusedPanelStyle
+func renderShell(m model, density viewportDensity) string {
+	style := focusedPanelStyle.Width(density.ContentWidth)
+	switch {
+	case m.focus == focusMenu:
+		return style.Render(renderRootPicker(m, density))
+	case m.focus == focusLogin:
+		return style.Render(renderLoginScreen(m, density))
+	default:
+		return style.Render(renderDetailScreen(m, density))
 	}
-	var rows []string
-	rows = append(rows, titleStyle.Render("Actions"))
-	rows = append(rows, subtitleStyle.Render("Use ↑/↓ to move, Enter to open."))
+}
+
+func renderRootPicker(m model, density viewportDensity) string {
+	rows := []string{titleStyle.Render("Choose an action")}
+	if density.ShowSecondaryCopy() {
+		rows = append(rows, subtitleStyle.Render("Use ↑/↓ to move, Enter to open."))
+	}
 	for i, item := range m.items {
 		prefix := "  "
-		lineStyle := lipgloss.NewStyle()
+		labelStyle := lipgloss.NewStyle()
+		helpStyle := mutedStyle
 		if i == m.selected {
 			prefix = "› "
-			lineStyle = selectedItemStyle
+			labelStyle = selectedItemStyle
+			helpStyle = selectedItemStyle.Copy().Bold(false)
 		}
 		label := prefix + item.title
 		if item.disabled {
 			label = disabledStyle.Render(label + " (coming soon)")
 		} else {
-			label = lineStyle.Render(label)
+			label = labelStyle.Render(label)
 		}
 		rows = append(rows, label)
-		rows = append(rows, mutedStyle.Render("  "+item.description))
+		if i == m.selected {
+			rows = append(rows, helpStyle.Render("  "+truncateLine(item.description, density.ContentWidth-6)))
+		} else if density.ShowSecondaryCopy() {
+			rows = append(rows, mutedStyle.Render("  "+truncateLine(item.description, density.ContentWidth-6)))
+		}
 	}
-	return style.Width(menuWidth(m.width)).Render(strings.Join(rows, "\n"))
+	return strings.Join(rows, "\n")
 }
 
-func renderDetailPanel(m model) string {
-	style := panelStyle
-	if m.focus == focusDetail || m.focus == focusLogin {
-		style = focusedPanelStyle
+func renderLoginScreen(m model, density viewportDensity) string {
+	content := []string{renderToneTitle(m.statusTone, m.statusTitle)}
+	if density.ShowSecondaryCopy() {
+		content = append(content, mutedStyle.Render(currentModeLabel(m)), "", mutedStyle.Render(m.statusBody))
 	}
-	content := []string{renderToneTitle(m.statusTone, m.statusTitle), mutedStyle.Render(currentModeLabel(m))}
+	content = append(content, "")
+	for i := range m.loginInputs {
+		content = append(content, m.loginInputs[i].View())
+	}
+	if m.loginError != "" {
+		content = append(content, "", errorStyle.Render(m.loginError))
+	}
+	content = append(content, "", hintStyle.Render("Tab fields • Enter submit • --password-stdin • --token compatibility • Esc back • q quit"))
+	return strings.Join(content, "\n")
+}
+
+func renderDetailScreen(m model, density viewportDensity) string {
+	content := []string{renderToneTitle(m.statusTone, m.statusTitle)}
+	if density.ShowSecondaryCopy() {
+		content = append(content, mutedStyle.Render(currentModeLabel(m)))
+	}
 	if m.loading {
 		content = append(content, "", infoStyle.Render(m.spinner.View()+" Working…"), mutedStyle.Render("You can quit with q if needed."))
-		return style.Width(detailWidth(m.width)).Render(strings.Join(content, "\n"))
-	}
-	if m.focus == focusLogin {
-		content = append(content, "", mutedStyle.Render(m.statusBody), "")
-		for i := range m.loginInputs {
-			content = append(content, m.loginInputs[i].View())
-		}
-		if m.loginError != "" {
-			content = append(content, "", errorStyle.Render(m.loginError))
-		}
-		content = append(content, "", hintStyle.Render("Tab to switch fields • Enter on password submits • Automation: --password-stdin • Compatibility: --token • Esc returns to menu"))
-		return style.Width(detailWidth(m.width)).Render(strings.Join(content, "\n"))
+		return strings.Join(content, "\n")
 	}
 	content = append(content, "", m.statusBody)
-	return style.Width(detailWidth(m.width)).Render(strings.Join(content, "\n"))
+	return strings.Join(content, "\n")
 }
 
 func renderToneTitle(tone, title string) string {
@@ -117,7 +198,11 @@ func currentModeLabel(m model) string {
 	case m.updateConfirmationPending:
 		return "Update confirmation"
 	case m.installBackupDecisionPending:
+		return "Install backup confirmation"
+	case m.installConfirmationPending:
 		return "Install confirmation"
+	case m.installSelectionPending && m.detailsVisible:
+		return "Install target details"
 	case m.installSelectionPending:
 		return "Install target selection"
 	case m.loading:
@@ -142,27 +227,21 @@ func renderUpdateBanner(m model) string {
 
 func renderFooter(m model) string {
 	if m.focus == focusLogin {
-		return "Esc back • Tab next field • Enter submit • --password-stdin for automation • q quit"
+		return "Esc back • Tab next field • Enter submit • --password-stdin • --token • q quit"
 	}
-	return "↑/↓ navigate • Enter select • Tab switch panel • q quit • Explicit subcommands remain available"
-}
-
-func menuWidth(total int) int {
-	if total >= 120 {
-		return 42
+	if m.installSelectionPending {
+		if m.detailsVisible {
+			return "? hide details • Esc back • q quit"
+		}
+		return "↑/↓ target • Enter confirm • ? details • Esc back • q quit"
 	}
-	return 36
-}
-
-func detailWidth(total int) int {
-	if total <= 0 {
-		return 64
+	if m.installConfirmationPending || m.installBackupDecisionPending || m.updateConfirmationPending {
+		return "y/Enter continue • n/Esc cancel • q quit"
 	}
-	width := total - menuWidth(total) - 10
-	if width < 48 {
-		return 48
+	if m.focus == focusMenu {
+		return "↑/↓ navigate • Enter select • q quit • Explicit subcommands remain available"
 	}
-	return width
+	return "Esc back • q quit • Explicit subcommands remain available"
 }
 
 func debugString(m model) string {
