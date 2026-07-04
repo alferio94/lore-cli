@@ -56,6 +56,21 @@ type updateCheckMsg struct {
 	availability cli.UpdateAvailability
 }
 
+type bodyScrollState struct {
+	Offset int
+}
+
+type scrollMove int
+
+const (
+	scrollLineUp scrollMove = iota
+	scrollLineDown
+	scrollPageUp
+	scrollPageDown
+	scrollTop
+	scrollBottom
+)
+
 type model struct {
 	actions                      cli.InteractiveActions
 	items                        []menuItem
@@ -86,6 +101,7 @@ type model struct {
 	updateConfirmationPending    bool
 	spinner                      spinner.Model
 	help                         help.Model
+	bodyScroll                   bodyScrollState
 }
 
 func newModel(actions cli.InteractiveActions) model {
@@ -163,6 +179,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.ready = true
+		m.clampBodyScroll()
 		return m, nil
 	case tea.KeyMsg:
 		if m.loading {
@@ -193,6 +210,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.focus = focusDetail
 		m.statusTitle = msg.title
 		m.statusBody = msg.body
+		m.resetBodyScroll()
 		if msg.isError {
 			m.statusTone = toneError
 		} else {
@@ -257,6 +275,11 @@ func (m model) updateMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.canScrollBody() {
+		if handled := m.handleBodyScrollKey(msg); handled {
+			return m, nil
+		}
+	}
 	if m.installConfirmationPending {
 		switch strings.ToLower(msg.String()) {
 		case "y", "yes", "enter":
@@ -269,10 +292,12 @@ func (m model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.statusTitle = "Install Lore"
 			m.statusBody = m.renderInstallTargetSelection()
 			m.statusTone = toneInfo
+			m.resetBodyScroll()
 			return m, nil
 		case "?":
 			m.detailsVisible = !m.detailsVisible
 			m.statusBody = m.renderInstallConfirmation()
+			m.resetBodyScroll()
 			return m, nil
 		case "ctrl+c", "q":
 			m.quitting = true
@@ -293,6 +318,7 @@ func (m model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.statusTitle = "Install Lore"
 			m.statusBody = m.renderInstallTargetSelection()
 			m.statusTone = toneInfo
+			m.resetBodyScroll()
 			return m, nil
 		case "ctrl+c", "q":
 			m.quitting = true
@@ -320,6 +346,7 @@ func (m model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.moveInstallTargetSelection(-1)
 			m.statusBody = m.renderInstallTargetSelection()
+			m.resetBodyScroll()
 			return m, nil
 		case "down", "j":
 			if m.detailsVisible {
@@ -327,15 +354,18 @@ func (m model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.moveInstallTargetSelection(1)
 			m.statusBody = m.renderInstallTargetSelection()
+			m.resetBodyScroll()
 			return m, nil
 		case "?":
 			m.detailsVisible = !m.detailsVisible
 			m.statusBody = m.renderInstallTargetSelection()
+			m.resetBodyScroll()
 			return m, nil
 		case "esc", "left", "h", "backspace":
 			if m.detailsVisible {
 				m.detailsVisible = false
 				m.statusBody = m.renderInstallTargetSelection()
+				m.resetBodyScroll()
 				return m, nil
 			}
 			m.installSelectionPending = false
@@ -343,6 +373,7 @@ func (m model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.statusTitle = "Welcome to Lore"
 			m.statusBody = "Choose an action. Keyboard hints stay visible, secrets stay masked, and explicit subcommands remain available for automation."
 			m.statusTone = toneInfo
+			m.resetBodyScroll()
 			return m, nil
 		}
 	}
@@ -352,6 +383,7 @@ func (m model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case "left", "h", "tab", "esc":
 		m.focus = focusMenu
+		m.resetBodyScroll()
 	case "enter":
 		return m.activateSelection()
 	}
@@ -423,6 +455,80 @@ func (m *model) resetInstallFlow() {
 	m.installBackupDecisionPending = false
 	m.detailsVisible = false
 	m.installPlan = nil
+	m.resetBodyScroll()
+}
+
+func (m *model) resetBodyScroll() {
+	m.bodyScroll.Offset = 0
+}
+
+func (m model) canScrollBody() bool {
+	if m.focus != focusDetail || m.loading {
+		return false
+	}
+	if m.installSelectionPending {
+		return m.detailsVisible
+	}
+	return strings.TrimSpace(m.statusBody) != ""
+}
+
+func (m *model) handleBodyScrollKey(msg tea.KeyMsg) bool {
+	switch msg.String() {
+	case "up", "k":
+		m.scrollBody(scrollLineUp)
+	case "down", "j":
+		m.scrollBody(scrollLineDown)
+	case "pgup":
+		m.scrollBody(scrollPageUp)
+	case "pgdown":
+		m.scrollBody(scrollPageDown)
+	case "g":
+		m.scrollBody(scrollTop)
+	case "G":
+		m.scrollBody(scrollBottom)
+	default:
+		return false
+	}
+	return true
+}
+
+func (m *model) scrollBody(move scrollMove) {
+	viewport := m.currentBodyViewport()
+	page := viewport.Height
+	if page < 1 {
+		page = 1
+	}
+	switch move {
+	case scrollLineUp:
+		m.bodyScroll.Offset--
+	case scrollLineDown:
+		m.bodyScroll.Offset++
+	case scrollPageUp:
+		m.bodyScroll.Offset -= page
+	case scrollPageDown:
+		m.bodyScroll.Offset += page
+	case scrollTop:
+		m.bodyScroll.Offset = 0
+	case scrollBottom:
+		m.bodyScroll.Offset = viewport.maxOffset()
+	}
+	m.clampBodyScroll()
+}
+
+func (m *model) clampBodyScroll() {
+	if !m.canScrollBody() {
+		m.resetBodyScroll()
+		return
+	}
+	viewport := m.currentBodyViewport()
+	m.bodyScroll.Offset = viewport.Offset
+}
+
+func (m model) currentBodyViewport() bodyViewport {
+	density := newViewportDensity(m.width, m.height)
+	preBodyLines := detailPreBodyLineCount(m, density)
+	bodyHeight := detailBodyViewportHeight(density, preBodyLines, rootHeaderLineCount(m, density), 1)
+	return renderBodyViewport(m.statusBody, density.ContentWidth-4, bodyHeight, m.bodyScroll.Offset)
 }
 
 func (m model) activateSelection() (tea.Model, tea.Cmd) {
@@ -432,6 +538,7 @@ func (m model) activateSelection() (tea.Model, tea.Cmd) {
 		m.statusBody = item.description
 		m.statusTone = toneMuted
 		m.focus = focusDetail
+		m.resetBodyScroll()
 		return m, nil
 	}
 	switch item.key {
@@ -471,6 +578,7 @@ func (m model) activateSelection() (tea.Model, tea.Cmd) {
 		m.statusTitle = "Login"
 		m.statusBody = "Enter your server URL, account email, and password. Lore mints a reusable API token, stores only that token in secure credential storage, and keeps CLI --token as the compatibility path for older servers."
 		m.statusTone = toneInfo
+		m.resetBodyScroll()
 		return m, nil
 	case "install":
 		m.updateConfirmationPending = false
@@ -770,6 +878,7 @@ func (m model) runAsync(kind actionKind, title string, fn func(context.Context) 
 	m.statusTitle = title
 	m.statusBody = "Please wait…"
 	m.statusTone = toneInfo
+	m.resetBodyScroll()
 	return m, func() tea.Msg {
 		msg := fn(context.Background())
 		msg.kind = kind

@@ -90,6 +90,118 @@ func truncateLine(value string, limit int) string {
 	return strings.TrimSpace(value[:limit-1]) + "…"
 }
 
+type bodyViewport struct {
+	Lines  []string
+	Offset int
+	Height int
+	Total  int
+	Above  bool
+	Below  bool
+}
+
+func (v bodyViewport) maxOffset() int {
+	if v.Height <= 0 || v.Total <= v.Height {
+		return 0
+	}
+	return v.Total - v.Height
+}
+
+func renderBodyViewport(body string, width, height, offset int) bodyViewport {
+	if width < 1 {
+		width = 1
+	}
+	if height < 1 {
+		height = 1
+	}
+	wrapped := wrapBodyLines(body, width)
+	if len(wrapped) == 0 {
+		wrapped = []string{""}
+	}
+	viewport := bodyViewport{Height: height, Total: len(wrapped)}
+	maxOffset := viewport.maxOffset()
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > maxOffset {
+		offset = maxOffset
+	}
+	viewport.Offset = offset
+	end := offset + height
+	if end > len(wrapped) {
+		end = len(wrapped)
+	}
+	viewport.Lines = wrapped[offset:end]
+	viewport.Above = offset > 0
+	viewport.Below = end < len(wrapped)
+	return viewport
+}
+
+func wrapBodyLines(body string, width int) []string {
+	if width < 1 {
+		width = 1
+	}
+	rawLines := strings.Split(strings.ReplaceAll(body, "\r\n", "\n"), "\n")
+	wrapped := make([]string, 0, len(rawLines))
+	for _, raw := range rawLines {
+		if raw == "" {
+			wrapped = append(wrapped, "")
+			continue
+		}
+		runes := []rune(raw)
+		for len(runes) > width {
+			cut := width
+			for i := width; i > 0; i-- {
+				if runes[i-1] == ' ' || runes[i-1] == '\t' {
+					cut = i
+					break
+				}
+			}
+			line := strings.TrimRight(string(runes[:cut]), " \t")
+			if line == "" {
+				line = string(runes[:width])
+				cut = width
+			}
+			wrapped = append(wrapped, line)
+			runes = []rune(strings.TrimLeft(string(runes[cut:]), " \t"))
+		}
+		wrapped = append(wrapped, string(runes))
+	}
+	return wrapped
+}
+
+func rootHeaderLineCount(m model, density viewportDensity) int {
+	lines := 1
+	if density.ShowSecondaryCopy() {
+		lines++
+	}
+	if renderUpdateBanner(m) != "" && density.ShowDecoration() {
+		lines++
+	}
+	return lines
+}
+
+func detailPreBodyLineCount(m model, density viewportDensity) int {
+	lines := 2 // title plus blank before body
+	if density.ShowSecondaryCopy() {
+		lines++
+	}
+	return lines
+}
+
+func detailBodyViewportHeight(density viewportDensity, preBodyLines, headerLines, footerLines int) int {
+	if density.Height <= 0 {
+		return 999
+	}
+	verticalPadding, _ := density.OuterPadding()
+	const shellBlankLines = 2
+	const panelChromeLines = 4 // rounded border top/bottom plus panel vertical padding
+	available := density.Height - (verticalPadding * 2) - headerLines - footerLines - shellBlankLines - panelChromeLines - preBodyLines
+	if available < 1 {
+		return 1
+	}
+	return available
+}
+
 func renderView(m model) string {
 	density := newViewportDensity(m.width, m.height)
 	headerLines := []string{titleStyle.Render("Lore")}
@@ -174,7 +286,17 @@ func renderDetailScreen(m model, density viewportDensity) string {
 		content = append(content, "", infoStyle.Render(m.spinner.View()+" Working…"), mutedStyle.Render("You can quit with q if needed."))
 		return strings.Join(content, "\n")
 	}
-	content = append(content, "", m.statusBody)
+	preBodyLines := detailPreBodyLineCount(m, density)
+	bodyHeight := detailBodyViewportHeight(density, preBodyLines, rootHeaderLineCount(m, density), 1)
+	viewport := renderBodyViewport(m.statusBody, density.ContentWidth-4, bodyHeight, m.bodyScroll.Offset)
+	bodyLines := append([]string{}, viewport.Lines...)
+	if viewport.Above {
+		bodyLines = append([]string{hintStyle.Render("↑ more")}, bodyLines...)
+	}
+	if viewport.Below {
+		bodyLines = append(bodyLines, hintStyle.Render("↓ more"))
+	}
+	content = append(content, "", strings.Join(bodyLines, "\n"))
 	return strings.Join(content, "\n")
 }
 
@@ -231,15 +353,18 @@ func renderFooter(m model) string {
 	}
 	if m.installSelectionPending {
 		if m.detailsVisible {
-			return "? hide details • Esc back • q quit"
+			return "↑/↓ or j/k scroll • PgUp/PgDn • g/G • ? hide • Esc back • q quit"
 		}
 		return "↑/↓ target • Enter confirm • ? details • Esc back • q quit"
 	}
 	if m.installConfirmationPending || m.installBackupDecisionPending || m.updateConfirmationPending {
-		return "y/Enter continue • n/Esc cancel • q quit"
+		return "y/Enter continue • n/Esc cancel • ↑/↓ scroll • q quit"
 	}
 	if m.focus == focusMenu {
 		return "↑/↓ navigate • Enter select • q quit • Explicit subcommands remain available"
+	}
+	if m.canScrollBody() {
+		return "Esc back • ↑/↓ or j/k scroll • PgUp/PgDn • g/G • q quit"
 	}
 	return "Esc back • q quit • Explicit subcommands remain available"
 }

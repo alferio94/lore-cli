@@ -52,3 +52,52 @@ func TestTruncateLine(t *testing.T) {
 		t.Fatalf("truncateLine tiny = %q", got)
 	}
 }
+
+func TestRenderBodyViewportWrapsSlicesAndIndicators(t *testing.T) {
+	viewport := renderBodyViewport("alpha beta gamma delta", 10, 2, 0)
+	if viewport.Total <= 2 {
+		t.Fatalf("Total = %d, want wrapped/clipped content", viewport.Total)
+	}
+	if viewport.Above || !viewport.Below {
+		t.Fatalf("top indicators above=%v below=%v, want only below", viewport.Above, viewport.Below)
+	}
+	viewport = renderBodyViewport("alpha beta gamma delta", 10, 2, 99)
+	if !viewport.Above || viewport.Below {
+		t.Fatalf("bottom indicators above=%v below=%v, want only above", viewport.Above, viewport.Below)
+	}
+	if viewport.Offset != viewport.maxOffset() {
+		t.Fatalf("Offset = %d, want clamped max %d", viewport.Offset, viewport.maxOffset())
+	}
+}
+
+func TestRenderBodyViewportNoIndicatorWhenContentFits(t *testing.T) {
+	viewport := renderBodyViewport("short\nbody", 20, 5, 0)
+	if viewport.Above || viewport.Below {
+		t.Fatalf("fit indicators above=%v below=%v, want none", viewport.Above, viewport.Below)
+	}
+	if got := len(viewport.Lines); got != 2 {
+		t.Fatalf("visible lines = %d, want 2", got)
+	}
+}
+
+func TestDetailBodyViewportHeightAdaptsToTinyTerminal(t *testing.T) {
+	comfortable := newViewportDensity(100, 30)
+	short := newViewportDensity(100, 8)
+	comfortableHeight := detailBodyViewportHeight(comfortable, 3, 2, 1)
+	shortHeight := detailBodyViewportHeight(short, 2, 1, 1)
+	if comfortableHeight <= shortHeight {
+		t.Fatalf("comfortable height = %d, short height = %d; want adaptive reduction", comfortableHeight, shortHeight)
+	}
+	if shortHeight < 1 {
+		t.Fatalf("short height = %d, want functional minimum", shortHeight)
+	}
+}
+
+func TestNarrowWrappingChangesScrollableLineCount(t *testing.T) {
+	body := "one two three four five six seven eight"
+	wide := renderBodyViewport(body, 80, 10, 0)
+	narrow := renderBodyViewport(body, 8, 10, 0)
+	if narrow.Total <= wide.Total {
+		t.Fatalf("narrow total = %d, wide total = %d; want more wrapped lines", narrow.Total, wide.Total)
+	}
+}

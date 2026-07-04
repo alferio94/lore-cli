@@ -993,6 +993,131 @@ func TestLoginSuccessAndFailureStates(t *testing.T) {
 	})
 }
 
+func TestDetailBodyScrollKeysClampAndJump(t *testing.T) {
+	m := newModel(cli.InteractiveActions{})
+	m.width = 80
+	m.height = 12
+	m.focus = focusDetail
+	m.statusTitle = "Long report"
+	m.statusBody = strings.Join([]string{"line 01", "line 02", "line 03", "line 04", "line 05", "line 06", "line 07", "line 08", "line 09", "line 10", "line 11", "line 12"}, "\n")
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = updated.(model)
+	if got := m.bodyScroll.Offset; got != 1 {
+		t.Fatalf("down offset = %d, want 1", got)
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	m = updated.(model)
+	if got := m.bodyScroll.Offset; got != 0 {
+		t.Fatalf("k offset = %d, want 0", got)
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyPgDown})
+	m = updated.(model)
+	if m.bodyScroll.Offset <= 0 {
+		t.Fatalf("pgdown offset = %d, want advanced", m.bodyScroll.Offset)
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
+	m = updated.(model)
+	bottom := m.currentBodyViewport().maxOffset()
+	if got := m.bodyScroll.Offset; got != bottom {
+		t.Fatalf("G offset = %d, want bottom %d", got, bottom)
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	m = updated.(model)
+	if got := m.bodyScroll.Offset; got != 0 {
+		t.Fatalf("g offset = %d, want top", got)
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	m = updated.(model)
+	if got := m.bodyScroll.Offset; got != 0 {
+		t.Fatalf("up at top offset = %d, want clamped top", got)
+	}
+}
+
+func TestPickerKeysDoNotScrollUntilInstallDetailsVisible(t *testing.T) {
+	m := moveSelectionToInstall(t, newModel(cli.InteractiveActions{}))
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	startTarget := m.installTargetIndex
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = updated.(model)
+	if m.installTargetIndex == startTarget {
+		t.Fatalf("down should move install picker selection while details hidden")
+	}
+	if got := m.bodyScroll.Offset; got != 0 {
+		t.Fatalf("picker offset = %d, want 0", got)
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	m = updated.(model)
+	detailTarget := m.installTargetIndex
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = updated.(model)
+	if got := m.installTargetIndex; got != detailTarget {
+		t.Fatalf("down in details changed target to %d, want %d", got, detailTarget)
+	}
+	if m.bodyScroll.Offset == 0 && m.currentBodyViewport().maxOffset() > 0 {
+		t.Fatalf("down in details should scroll when details are longer than viewport")
+	}
+}
+
+func TestBodyScrollResetsOnContentTargetAndScreenChanges(t *testing.T) {
+	m := newModel(cli.InteractiveActions{})
+	m.width = 80
+	m.height = 12
+	m.focus = focusDetail
+	m.statusTitle = "Long report"
+	m.statusBody = strings.Repeat("long report line\n", 20)
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyPgDown})
+	m = updated.(model)
+	if m.bodyScroll.Offset == 0 {
+		t.Fatal("expected setup scroll offset")
+	}
+	updated, _ = m.Update(actionMsg{kind: actionStatus, title: "New report", body: "short report"})
+	m = updated.(model)
+	if got := m.bodyScroll.Offset; got != 0 {
+		t.Fatalf("actionMsg reset offset = %d, want 0", got)
+	}
+
+	m = moveSelectionToInstall(t, newModel(cli.InteractiveActions{}))
+	m.width = 80
+	m.height = 12
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	m = updated.(model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyPgDown})
+	m = updated.(model)
+	if m.bodyScroll.Offset == 0 && m.currentBodyViewport().maxOffset() > 0 {
+		t.Fatal("expected details scroll offset")
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	m = updated.(model)
+	if got := m.bodyScroll.Offset; got != 0 {
+		t.Fatalf("hide details reset offset = %d, want 0", got)
+	}
+}
+
+func TestWindowResizeClampsBodyScroll(t *testing.T) {
+	m := newModel(cli.InteractiveActions{})
+	m.width = 80
+	m.height = 10
+	m.focus = focusDetail
+	m.statusTitle = "Long report"
+	m.statusBody = strings.Repeat("long report line\n", 30)
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
+	m = updated.(model)
+	if m.bodyScroll.Offset == 0 {
+		t.Fatal("expected bottom offset before resize")
+	}
+	updated, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 40})
+	m = updated.(model)
+	maxOffset := m.currentBodyViewport().maxOffset()
+	if m.bodyScroll.Offset > maxOffset {
+		t.Fatalf("resize offset = %d, want <= %d", m.bodyScroll.Offset, maxOffset)
+	}
+}
+
 func moveSelectionToInstall(t *testing.T, m model) model {
 	t.Helper()
 	for i := 0; i < 4; i++ {
