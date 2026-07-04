@@ -178,8 +178,8 @@ func TestAntigravityMCPConfigMergePreservesExistingServersAndTreatsEmptyAsObject
 	if err != nil {
 		t.Fatalf("mergeAntigravityMCPConfig(empty) error = %v, want nil", err)
 	}
-	if !containsAll(string(emptyMerged), `"mcpServers"`, `"lore"`, `"serverUrl": "https://example.test/v1/mcp"`, `"Authorization": "Bearer secret-token"`) {
-		t.Fatalf("empty merge = %q, want Lore MCP config written over empty file", string(emptyMerged))
+	if !containsAll(string(emptyMerged), `"mcpServers"`, `"lore"`, `"serverUrl": "https://example.test/v1/mcp"`, `"Authorization": "Bearer secret-token"`, `"context7"`, `"serverUrl": "https://mcp.context7.com/mcp"`) {
+		t.Fatalf("empty merge = %q, want Lore and Context7 MCP config written over empty file", string(emptyMerged))
 	}
 
 	existing := []byte(`{"mcpServers":{"existing":{"command":"keep-me"}},"topLevel":true}`)
@@ -187,8 +187,27 @@ func TestAntigravityMCPConfigMergePreservesExistingServersAndTreatsEmptyAsObject
 	if err != nil {
 		t.Fatalf("mergeAntigravityMCPConfig(existing) error = %v, want nil", err)
 	}
-	if !containsAll(string(merged), `"existing"`, `"keep-me"`, `"lore"`, `"serverUrl": "https://example.test/v1/mcp"`, `"Authorization": "Bearer secret-token"`, `"topLevel": true`) {
-		t.Fatalf("merged config = %q, want existing servers preserved plus Lore MCP entry", string(merged))
+	if !containsAll(string(merged), `"existing"`, `"keep-me"`, `"lore"`, `"serverUrl": "https://example.test/v1/mcp"`, `"Authorization": "Bearer secret-token"`, `"context7"`, `"serverUrl": "https://mcp.context7.com/mcp"`, `"topLevel": true`) {
+		t.Fatalf("merged config = %q, want existing servers preserved plus Lore and Context7 MCP entries", string(merged))
+	}
+}
+
+func TestAntigravityMCPConfigMergeRejectsForeignContext7Server(t *testing.T) {
+	managed, err := renderAntigravityMCPConfig("https://example.test", "secret-token")
+	if err != nil {
+		t.Fatalf("renderAntigravityMCPConfig() error = %v, want nil", err)
+	}
+	existing := []byte(`{"mcpServers":{"context7":{"command":"npx","args":["context7"]},"existing":{"command":"keep-me"}}}`)
+	if _, err := mergeAntigravityMCPConfig(existing, managed); err == nil || !strings.Contains(err.Error(), "mcpServers.context7") {
+		t.Fatalf("mergeAntigravityMCPConfig(foreign context7) error = %v, want fail-closed context7 conflict", err)
+	}
+	managedExisting := []byte(`{"mcpServers":{"context7":{"serverUrl":"https://mcp.context7.com/mcp"},"existing":{"command":"keep-me"}}}`)
+	merged, err := mergeAntigravityMCPConfig(managedExisting, managed)
+	if err != nil {
+		t.Fatalf("mergeAntigravityMCPConfig(managed context7) error = %v, want nil", err)
+	}
+	if !containsAll(string(merged), `"context7"`, `"serverUrl": "https://mcp.context7.com/mcp"`, `"existing"`) {
+		t.Fatalf("merged managed context7 config = %q, want context7 refreshed and existing preserved", string(merged))
 	}
 }
 

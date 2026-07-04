@@ -28,4 +28,7 @@ approval_mode = "approve"
 
 [mcp_servers.lore.tools.lore_project_list]
 approval_mode = "approve"
+
+[mcp_servers.context7]
+url = "https://mcp.context7.com/mcp"
 # END lore-cli managed Lore MCP

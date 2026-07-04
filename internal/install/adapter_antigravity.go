@@ -50,6 +50,12 @@ func defaultAntigravityAdapter() HarnessAdapter {
 				Optional:         true,
 				EnabledByDefault: true,
 			},
+			CapabilityContext7MCP: {
+				ID:               CapabilityContext7MCP,
+				Component:        ComponentContext7MCP,
+				Description:      "Managed Context7 remote MCP config for Antigravity using the public no-auth remote endpoint.",
+				EnabledByDefault: true,
+			},
 			CapabilityExtendedSkills: {
 				ID:               CapabilityExtendedSkills,
 				Component:        ComponentExtendedSkills,
@@ -310,15 +316,19 @@ func renderAntigravityMCPConfig(serverURL, token string) ([]byte, error) {
 	if trimmedToken == "" {
 		return nil, fmt.Errorf("saved token is required")
 	}
-	payload := map[string]any{
-		"mcpServers": map[string]any{
-			"lore": map[string]any{
-				"serverUrl": normalizedServerURL + "/v1/mcp",
-				"headers": map[string]any{
-					"Authorization": "Bearer " + trimmedToken,
-				},
+	servers := map[string]any{
+		"lore": map[string]any{
+			"serverUrl": normalizedServerURL + "/v1/mcp",
+			"headers": map[string]any{
+				"Authorization": "Bearer " + trimmedToken,
 			},
 		},
+		Context7MCPServerName: map[string]any{
+			"serverUrl": Context7MCPRemoteURL,
+		},
+	}
+	payload := map[string]any{
+		"mcpServers": servers,
 	}
 	data, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {

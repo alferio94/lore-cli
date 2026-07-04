@@ -11,22 +11,22 @@ import (
 )
 
 func TestDefaultComponentSelectionUsesHostedMCPForPiCodexAndAntigravity(t *testing.T) {
-	// Pi default: hosted Lore MCP via pi-mcp-adapter (lore-server-mcp), not lore-memory extensions.
-	if got := DefaultComponentSelection(TargetPi); !equalComponentIDs(got, []ComponentID{ComponentCorePack, ComponentLoreServerMCP, ComponentExtendedSkills}) {
-		t.Fatalf("DefaultComponentSelection(pi) = %v, want core-pack + lore-server-mcp + extended-skills (hosted MCP default)", got)
+	// Pi default: hosted Lore MCP via pi-mcp-adapter (lore-server-mcp) plus Context7, not lore-memory extensions.
+	if got := DefaultComponentSelection(TargetPi); !equalComponentIDs(got, []ComponentID{ComponentCorePack, ComponentLoreServerMCP, ComponentContext7MCP, ComponentExtendedSkills}) {
+		t.Fatalf("DefaultComponentSelection(pi) = %v, want core-pack + lore-server-mcp + context7-mcp + extended-skills (hosted MCP default)", got)
 	}
-	// Antigravity: lore-server-mcp + core-pack + extended-skills.
-	if got := DefaultComponentSelection(TargetAntigravity); !equalComponentIDs(got, []ComponentID{ComponentCorePack, ComponentLoreServerMCP, ComponentExtendedSkills}) {
-		t.Fatalf("DefaultComponentSelection(antigravity) = %v, want core-pack + lore-server-mcp + extended-skills", got)
+	// Antigravity: lore-server-mcp + context7-mcp + core-pack + extended-skills.
+	if got := DefaultComponentSelection(TargetAntigravity); !equalComponentIDs(got, []ComponentID{ComponentCorePack, ComponentLoreServerMCP, ComponentContext7MCP, ComponentExtendedSkills}) {
+		t.Fatalf("DefaultComponentSelection(antigravity) = %v, want core-pack + lore-server-mcp + context7-mcp + extended-skills", got)
 	}
-	if got := DefaultComponentSelection(TargetCodex); !equalComponentIDs(got, []ComponentID{ComponentCorePack, ComponentLoreServerMCP, ComponentExtendedSkills}) {
-		t.Fatalf("DefaultComponentSelection(codex) = %v, want core-pack + lore-server-mcp + extended-skills", got)
+	if got := DefaultComponentSelection(TargetCodex); !equalComponentIDs(got, []ComponentID{ComponentCorePack, ComponentLoreServerMCP, ComponentContext7MCP, ComponentExtendedSkills}) {
+		t.Fatalf("DefaultComponentSelection(codex) = %v, want core-pack + lore-server-mcp + context7-mcp + extended-skills", got)
 	}
-	// OpenCode: core-pack + hosted Lore MCP + opencode-plugins by
+	// OpenCode: core-pack + hosted Lore MCP + Context7 + opencode-plugins by
 	// default, matching the hosted-MCP default behavior used by Pi,
 	// Codex, and Antigravity.
-	if got := DefaultComponentSelection(TargetOpenCode); !equalComponentIDs(got, []ComponentID{ComponentCorePack, ComponentLoreServerMCP, ComponentOpenCodePlugins}) {
-		t.Fatalf("DefaultComponentSelection(opencode) = %v, want core-pack + lore-server-mcp + opencode-plugins", got)
+	if got := DefaultComponentSelection(TargetOpenCode); !equalComponentIDs(got, []ComponentID{ComponentCorePack, ComponentLoreServerMCP, ComponentContext7MCP, ComponentOpenCodePlugins}) {
+		t.Fatalf("DefaultComponentSelection(opencode) = %v, want core-pack + lore-server-mcp + context7-mcp + opencode-plugins", got)
 	}
 	// Other bounded targets: core-pack only.
 	for _, target := range []TargetID{TargetClaudeCode} {
@@ -42,6 +42,14 @@ func TestDefaultComponentSelectionUsesHostedMCPForPiCodexAndAntigravity(t *testi
 	}
 	if !equalComponentIDs(resolved, []ComponentID{ComponentCorePack, ComponentLoreServerMCP}) {
 		t.Fatalf("NormalizeComponentSelection(pi) = %v, want deduped ordered components", resolved)
+	}
+
+	resolved, err = NormalizeComponentSelection(TargetCodex, []ComponentID{ComponentContext7MCP})
+	if err != nil {
+		t.Fatalf("NormalizeComponentSelection(codex, context7-mcp) error = %v, want nil", err)
+	}
+	if !equalComponentIDs(resolved, []ComponentID{ComponentCorePack, ComponentContext7MCP}) {
+		t.Fatalf("NormalizeComponentSelection(codex, context7-mcp) = %v, want core-pack + context7-mcp", resolved)
 	}
 
 	// pi-extensions is now optional for Pi; explicitly selecting it is valid.
@@ -78,6 +86,15 @@ func TestRenderRequestValidateRejectsUnknownComponentsAndWrongSchema(t *testing.
 	request.Definition.SchemaVersion = 99
 	if err := request.Validate(); err == nil {
 		t.Fatal("Validate error = nil, want schema version rejection")
+	}
+
+	request = RenderRequest{
+		Target:     TargetCodex,
+		Definition: agentpack.DefaultDefinition(),
+		Components: []ComponentID{ComponentCorePack, ComponentContext7MCP},
+	}
+	if err := request.Validate(); err != nil {
+		t.Fatalf("Validate(context7-mcp without Lore token) error = %v, want nil", err)
 	}
 
 	request = RenderRequest{
@@ -121,6 +138,9 @@ func TestRegistryResolveReturnsTargetAdapterAndCapabilities(t *testing.T) {
 	if !adapter.Supports(ComponentLoreServerMCP) {
 		t.Fatal("Supports(lore-server-mcp) = false, want true for hosted MCP default")
 	}
+	if !adapter.Supports(ComponentContext7MCP) {
+		t.Fatal("Supports(context7-mcp) = false, want true for default Context7 MCP")
+	}
 
 	adapter, err = registry.Resolve(TargetAntigravity)
 	if err != nil {
@@ -136,11 +156,17 @@ func TestRegistryResolveReturnsTargetAdapterAndCapabilities(t *testing.T) {
 	if got := antigravityCapabilities[CapabilityLoreServerMCP]; got.Component != ComponentLoreServerMCP || !got.Optional {
 		t.Fatalf("CapabilityLoreServerMCP = %+v, want optional MCP capability mapping", got)
 	}
+	if got := antigravityCapabilities[CapabilityContext7MCP]; got.Component != ComponentContext7MCP || !got.EnabledByDefault {
+		t.Fatalf("CapabilityContext7MCP = %+v, want enabled Context7 MCP capability mapping", got)
+	}
 	if adapter.Supports(ComponentPiExtensions) {
 		t.Fatal("Supports(pi-extensions) = true, want false for Antigravity groundwork")
 	}
 	if !adapter.Supports(ComponentLoreServerMCP) {
 		t.Fatal("Supports(lore-server-mcp) = false, want true for optional Antigravity MCP groundwork")
+	}
+	if !adapter.Supports(ComponentContext7MCP) {
+		t.Fatal("Supports(context7-mcp) = false, want true for Antigravity Context7 MCP")
 	}
 
 	adapter, err = registry.Resolve(TargetCodex)
@@ -149,6 +175,9 @@ func TestRegistryResolveReturnsTargetAdapterAndCapabilities(t *testing.T) {
 	}
 	if !adapter.Supports(ComponentLoreServerMCP) {
 		t.Fatal("Supports(lore-server-mcp) = false, want true for Codex remote MCP")
+	}
+	if !adapter.Supports(ComponentContext7MCP) {
+		t.Fatal("Supports(context7-mcp) = false, want true for Codex Context7 MCP")
 	}
 
 	// OpenCode is supported again: the registry must contain an OpenCode
@@ -165,6 +194,9 @@ func TestRegistryResolveReturnsTargetAdapterAndCapabilities(t *testing.T) {
 	}
 	if !adapter.Supports(ComponentLoreServerMCP) {
 		t.Fatal("Supports(lore-server-mcp) = false, want true for OpenCode optional MCP")
+	}
+	if !adapter.Supports(ComponentContext7MCP) {
+		t.Fatal("Supports(context7-mcp) = false, want true for OpenCode Context7 MCP")
 	}
 }
 

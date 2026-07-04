@@ -40,6 +40,12 @@ func defaultPiAdapter() HarnessAdapter {
 				Description:      "Hosted Lore MCP via pi-mcp-adapter — the default Pi backend.",
 				EnabledByDefault: true,
 			},
+			CapabilityContext7MCP: {
+				ID:               CapabilityContext7MCP,
+				Component:        ComponentContext7MCP,
+				Description:      "Managed Context7 remote MCP config using the public no-auth remote endpoint.",
+				EnabledByDefault: true,
+			},
 			CapabilityPiExtensions: {
 				ID:          CapabilityPiExtensions,
 				Component:   ComponentPiExtensions,

@@ -40,6 +40,12 @@ func defaultCodexAdapter() HarnessAdapter {
 				Description:      "Managed remote Lore MCP config for Codex.",
 				EnabledByDefault: true,
 			},
+			CapabilityContext7MCP: {
+				ID:               CapabilityContext7MCP,
+				Component:        ComponentContext7MCP,
+				Description:      "Managed Context7 remote MCP config for Codex without tool auto-approvals.",
+				EnabledByDefault: true,
+			},
 			CapabilityExtendedSkills: {
 				ID:               CapabilityExtendedSkills,
 				Component:        ComponentExtendedSkills,
@@ -239,6 +245,9 @@ func renderCodexMCPConfig(serverURL, token string) ([]byte, error) {
 		fmt.Sprintf("Authorization = %q", "Bearer "+trimmedToken),
 		"",
 		approvalFragment,
+		"",
+		"[mcp_servers.context7]",
+		fmt.Sprintf("url = %q", Context7MCPRemoteURL),
 		codexMCPBlockEndMarker,
 		"",
 	}, "\n")

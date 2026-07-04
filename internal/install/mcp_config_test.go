@@ -68,6 +68,13 @@ func TestPiAdapterRenderMaterializesBearerTokenPlaintext(t *testing.T) {
 	if !strings.Contains(mcpContent, "https://lore.example.test/v1/mcp") {
 		t.Fatalf("mcp.json missing server URL, want https://lore.example.test/v1/mcp")
 	}
+	if !strings.Contains(mcpContent, `"context7"`) || !strings.Contains(mcpContent, Context7MCPRemoteURL) {
+		t.Fatalf("mcp.json missing Context7 server URL %q; got:\n%s", Context7MCPRemoteURL, mcpContent)
+	}
+	context7Index := strings.Index(mcpContent, `"context7"`)
+	if context7Index >= 0 && strings.Contains(mcpContent[context7Index:], "Authorization") {
+		t.Fatalf("mcp.json Context7 block unexpectedly contains Authorization header; got:\n%s", mcpContent)
+	}
 }
 
 // TestPiAdapterRenderRedactsTokenInOtherFiles verifies that no other rendered file

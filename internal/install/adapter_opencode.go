@@ -169,6 +169,12 @@ func defaultOpenCodeAdapter() HarnessAdapter {
 				Description: "Optional Lore MCP configuration support for OpenCode (shaped like Pi/Antigravity remote MCP).",
 				Optional:    true,
 			},
+			CapabilityContext7MCP: {
+				ID:               CapabilityContext7MCP,
+				Component:        ComponentContext7MCP,
+				Description:      "Managed Context7 remote MCP config for OpenCode using the public no-auth remote endpoint.",
+				EnabledByDefault: true,
+			},
 			CapabilityExtendedSkills: {
 				ID:          CapabilityExtendedSkills,
 				Component:   ComponentExtendedSkills,
@@ -1059,13 +1065,18 @@ func renderOpenCodeMCPConfigWithExisting(definition agentpack.Definition, cfg ag
 		return nil, fmt.Errorf("saved token is required for OpenCode MCP config")
 	}
 
-	mcpPayload := map[string]any{
+	loreMCPPayload := map[string]any{
 		"type":    "remote",
 		"url":     normalizedServerURL + "/v1/mcp",
 		"enabled": true,
 		"headers": map[string]any{
 			"Authorization": "Bearer " + trimmedToken,
 		},
+	}
+	context7MCPPayload := map[string]any{
+		"type":    "remote",
+		"url":     Context7MCPRemoteURL,
+		"enabled": true,
 	}
 
 	payload := map[string]any{
@@ -1074,7 +1085,10 @@ func renderOpenCodeMCPConfigWithExisting(definition agentpack.Definition, cfg ag
 		opencodeDefaultAgentKey: opencodePrimaryAgentName,
 		opencodeAgentsKey:       opencodeAgentOverlay(definition, cfg, existingAgent),
 		opencodeSkillsDirKey:    opencodeSkillsBlock(),
-		opencodeMCPBlockKey:     map[string]any{opencodeMCPLoreKey: mcpPayload},
+		opencodeMCPBlockKey: map[string]any{
+			opencodeMCPLoreKey:    loreMCPPayload,
+			Context7MCPServerName: context7MCPPayload,
+		},
 	}
 
 	data, err := json.MarshalIndent(payload, "", "  ")

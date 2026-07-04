@@ -86,7 +86,7 @@ func TestInstallCommandAcceptsOpenCodeTarget(t *testing.T) {
 	for _, want := range []string{
 		"install_target=opencode",
 		"runtime=opencode-config-only",
-		"components=core-pack,lore-server-mcp,opencode-plugins",
+		"components=core-pack,lore-server-mcp,context7-mcp,opencode-plugins",
 		"mcp=remote",
 		"opencode_background_subagents_env=OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true",
 		"prompts=~/.config/opencode/prompts",
@@ -164,7 +164,7 @@ func TestInstallCommandSupportsAntigravityDryRunAndApply(t *testing.T) {
 			t.Fatalf("install --dry-run --target antigravity exitCode = %d, want 0, stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
 		}
 		out := stdout.String()
-		for _, want := range []string{"install_target=antigravity", "runtime=antigravity-prompt-skills", "components=core-pack,lore-server-mcp", "mode=dry-run", "managed_action=create:../GEMINI.md", "managed_action=create:../config/agents/lore.json", "managed_action=create:../config/mcp_config.json", "managed_action=create:skills/sdd-apply/SKILL.md", "managed_action=create:lore-install.json"} {
+		for _, want := range []string{"install_target=antigravity", "runtime=antigravity-prompt-skills", "components=core-pack,lore-server-mcp,context7-mcp", "mode=dry-run", "managed_action=create:../GEMINI.md", "managed_action=create:../config/agents/lore.json", "managed_action=create:../config/mcp_config.json", "managed_action=create:skills/sdd-apply/SKILL.md", "managed_action=create:lore-install.json"} {
 			if !strings.Contains(out, want) {
 				t.Fatalf("stdout = %q, want substring %q", out, want)
 			}
@@ -247,7 +247,7 @@ func TestInstallCommandSupportsAntigravityDryRunAndApply(t *testing.T) {
 			t.Fatalf("ReadFile(mcp_config.json) error = %v", err)
 		}
 		mcpText := string(mcpBody)
-		for _, want := range []string{`"serverUrl": "https://example.test/v1/mcp"`, `"headers": {`, `"Authorization": "Bearer secret-token=antigravity-wording"`} {
+		for _, want := range []string{`"serverUrl": "https://example.test/v1/mcp"`, `"headers": {`, `"Authorization": "Bearer secret-token=antigravity-wording"`, `"context7"`, `"serverUrl": "https://mcp.context7.com/mcp"`} {
 			if !strings.Contains(mcpText, want) {
 				t.Fatalf("mcp_config.json = %q, want substring %q", mcpText, want)
 			}
@@ -342,7 +342,7 @@ func TestInstallUsageIncludesTargetAndComponentFlags(t *testing.T) {
 		// resolution in the test surface).
 		"Usage: lore install [--dry-run] [--yes] [--target pi|opencode|codex|antigravity] [--component <id>]",
 		"Pi stays the default recommended target; OpenCode, Codex, and Antigravity are supported managed targets",
-		"Pi, OpenCode, Codex, and Antigravity support core-pack; Pi/Codex/Antigravity/OpenCode also support lore-server-mcp; OpenCode also supports opencode-plugins",
+		"Pi, OpenCode, Codex, and Antigravity support core-pack; Pi/Codex/Antigravity/OpenCode also support lore-server-mcp and context7-mcp; OpenCode also supports opencode-plugins",
 	} {
 		if !strings.Contains(stderr.String(), want) {
 			t.Fatalf("stderr = %q, want substring %q", stderr.String(), want)

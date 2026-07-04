@@ -560,6 +560,57 @@ func TestOpenCodeConfigJSONMergeFailsClosedOnForeignMcpLoreBlock(t *testing.T) {
 	}
 }
 
+func TestOpenCodeConfigJSONMergeFailsClosedOnForeignContext7Block(t *testing.T) {
+	desired, err := renderOpenCodeMCPConfig(agentpack.DefaultDefinition(), agentconfig.Config{}, "https://lore.example", "ultra-secret-token")
+	if err != nil {
+		t.Fatalf("renderOpenCodeMCPConfig() error = %v, want nil", err)
+	}
+	existing := []byte(`{"mcp":{"context7":{"type":"stdio","command":"npx","args":["context7"],"env":{"TOKEN":"foreign-context7-token"}}}}`)
+	_, mergeErr := mergeOpenCodeConfigJSON(existing, desired, "opencode.json")
+	if mergeErr == nil {
+		t.Fatal("mergeOpenCodeConfigJSON(foreign mcp.context7) error = nil, want fail-closed ownership conflict")
+	}
+	conflict := AsOpenCodeMCPConfigOwnershipConflict(mergeErr)
+	if conflict == nil {
+		t.Fatalf("mergeOpenCodeConfigJSON(foreign mcp.context7) error = %v, want *OpenCodeMCPConfigOwnershipError", mergeErr)
+	}
+	if conflict.ServerName != Context7MCPServerName {
+		t.Fatalf("conflict.ServerName = %q, want %q", conflict.ServerName, Context7MCPServerName)
+	}
+	errorText := mergeErr.Error()
+	for _, forbidden := range []string{"foreign-context7-token", "ultra-secret-token"} {
+		if strings.Contains(errorText, forbidden) {
+			t.Fatalf("conflict error leaked token %q; got %q", forbidden, errorText)
+		}
+	}
+	for _, want := range []string{"mcp.context7", "https://mcp.context7.com/mcp", "Resolution"} {
+		if !strings.Contains(errorText, want) {
+			t.Fatalf("conflict error missing %q substring; got %q", want, errorText)
+		}
+	}
+
+	managedExisting := []byte(`{"mcp":{"context7":{"type":"remote","url":"https://mcp.context7.com/mcp","enabled":false},"existing":{"type":"stdio","command":"keep-me"}}}`)
+	merged, err := mergeOpenCodeConfigJSON(managedExisting, desired, "opencode.json")
+	if err != nil {
+		t.Fatalf("mergeOpenCodeConfigJSON(managed mcp.context7) error = %v, want nil", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(merged, &payload); err != nil {
+		t.Fatalf("json.Unmarshal(merged) error = %v", err)
+	}
+	mcp := payload["mcp"].(map[string]any)
+	context7 := mcp[Context7MCPServerName].(map[string]any)
+	if got := context7["url"]; got != Context7MCPRemoteURL {
+		t.Fatalf("mcp.context7.url = %v, want %q", got, Context7MCPRemoteURL)
+	}
+	if _, present := context7["headers"]; present {
+		t.Fatalf("mcp.context7 unexpectedly carries headers after managed merge: %v", context7)
+	}
+	if _, ok := mcp["existing"]; !ok {
+		t.Fatalf("merged payload dropped unrelated MCP entry: %v", mcp)
+	}
+}
+
 // TestOpenCodeConfigJSONMergeAllowsLoreOwnedMcpLoreBlock verifies the
 // additive merge PROCEEDS when the existing mcp.lore block is already
 // Lore-owned (legacy managed_by marker or native remote /v1/mcp with

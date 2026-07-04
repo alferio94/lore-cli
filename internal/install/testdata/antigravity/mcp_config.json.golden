@@ -1,5 +1,8 @@
 {
   "mcpServers": {
+    "context7": {
+      "serverUrl": "https://mcp.context7.com/mcp"
+    },
     "lore": {
       "headers": {
         "Authorization": "Bearer secret-token"

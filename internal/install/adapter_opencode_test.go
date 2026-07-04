@@ -338,6 +338,19 @@ func TestOpenCodeMCPConfigRendersRemoteMCPBlock(t *testing.T) {
 	if got := headers["Authorization"]; got != "Bearer secret-token" {
 		t.Fatalf("mcp.lore.headers.Authorization = %v, want Bearer secret-token", got)
 	}
+	context7MCP, ok := mcp[Context7MCPServerName].(map[string]any)
+	if !ok {
+		t.Fatalf("payload missing mcp.context7 entry: %v", mcp)
+	}
+	if got := context7MCP["type"]; got != "remote" {
+		t.Fatalf("mcp.context7.type = %v, want remote", got)
+	}
+	if got := context7MCP["url"]; got != Context7MCPRemoteURL {
+		t.Fatalf("mcp.context7.url = %v, want %q", got, Context7MCPRemoteURL)
+	}
+	if _, present := context7MCP["headers"]; present {
+		t.Fatalf("mcp.context7 unexpectedly carries headers: %v", context7MCP)
+	}
 	if got := payload[opencodeDefaultAgentKey]; got != opencodePrimaryAgentName {
 		t.Fatalf("payload default_agent = %v, want %q", got, opencodePrimaryAgentName)
 	}
@@ -667,6 +680,16 @@ func TestOpenCodeNativeConfigRegressionCoversManagedAgentShape(t *testing.T) {
 	}
 	if _, present := loreMCP[opencodeManagedByKey]; present {
 		t.Fatalf("mcp.lore carries Lore-only ownership marker; native OpenCode schema must stay clean: %v", loreMCP)
+	}
+	context7MCP, ok := mcp[Context7MCPServerName].(map[string]any)
+	if !ok {
+		t.Fatalf("rendered mcp missing context7 entry: %v", mcp)
+	}
+	if got := context7MCP["url"]; got != Context7MCPRemoteURL {
+		t.Fatalf("mcp.context7.url = %v, want %q", got, Context7MCPRemoteURL)
+	}
+	if _, present := context7MCP["headers"]; present {
+		t.Fatalf("mcp.context7 unexpectedly carries headers: %v", context7MCP)
 	}
 
 	agents, ok := payload[opencodeAgentsKey].(map[string]any)

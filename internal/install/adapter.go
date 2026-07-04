@@ -18,6 +18,7 @@ const (
 	CapabilityPrompt         CapabilityID = "prompt"
 	CapabilitySkills         CapabilityID = "skills"
 	CapabilityLoreServerMCP  CapabilityID = "lore-server-mcp"
+	CapabilityContext7MCP    CapabilityID = "context7-mcp"
 	CapabilityExtendedSkills CapabilityID = "extended-skills"
 
 	MergeModeReplace      MergeMode = "replace"
