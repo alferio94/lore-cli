@@ -25,7 +25,7 @@ type piAdapter struct {
 
 func defaultPiAdapter() HarnessAdapter {
 	return piAdapter{
-		target: TargetPi,
+		target: TargetID(agentpack.HarnessPi),
 		title:  "Pi",
 		capabilities: map[CapabilityID]Capability{
 			CapabilityAgentPack: {
@@ -242,8 +242,8 @@ func renderManagedAgentMarkdown(agent agentpack.ManagedAgent, packID string, con
 	if strings.TrimSpace(agent.Role) != "" {
 		builder.WriteString(fmt.Sprintf("role: %s\n", agent.Role))
 	}
-	if agent.Phase != "" {
-		builder.WriteString(fmt.Sprintf("phase: %s\n", renderManagedAgentPhase(agent.Phase)))
+	if phaseName := agentpack.PhaseEnvelopeName(agent.Phase); phaseName != "" {
+		builder.WriteString(fmt.Sprintf("phase: %s\n", phaseName))
 	}
 	if strings.TrimSpace(agent.RequiredEnvelope) != "" {
 		builder.WriteString(fmt.Sprintf("requiredEnvelope: %s\n", agent.RequiredEnvelope))
@@ -270,13 +270,6 @@ func renderManagedAgentMarkdown(agent agentpack.ManagedAgent, packID string, con
 		builder.WriteByte('\n')
 	}
 	return builder.String()
-}
-
-func renderManagedAgentPhase(phase agentpack.PhaseID) string {
-	if phase == agentpack.PhaseProposal {
-		return "propose"
-	}
-	return string(phase)
 }
 
 func piTemplateReplacements(definition agentpack.Definition, components []ComponentID) (map[string]string, error) {

@@ -41,6 +41,8 @@ func SDDDependencyGraph() string {
 	return "init -> explore -> propose -> [spec || design] -> tasks -> apply -> verify -> archive"
 }
 
+// LoreMCPGuidance contains retrieval guidance shared by every role. Persistence
+// duties are intentionally separate because only artifact owners may save.
 func LoreMCPGuidance() []string {
 	return []string{
 		"Prefer MCP Lore Server tools over deprecated harness-local memory extensions. The Pi-native `lore-memory.ts` extension was removed and is not available in any install path. Tool names may be exposed with harness-specific namespace prefixes; follow the Lore MCP descriptions for the active harness.",
@@ -54,12 +56,38 @@ func LoreMCPGuidance() []string {
 	}
 }
 
+// LoreArtifactPersistenceGuidance is projected only to roles that own durable artifacts.
+func LoreArtifactPersistenceGuidance() []string {
+	return []string{
+		"Persist durable artifacts with `lore_memory_save` using the configured artifact authority; do not silently change Lore/OpenSpec authority.",
+	}
+}
+
+// SkillResolutionGuidance is shared by role projections that resolve repository standards.
+func SkillResolutionGuidance() []string {
+	return []string{
+		"Resolve a project-local skill registry first when present.",
+		"Otherwise load relevant project-local skills from `.ai/skills/`, `.pi/skills/`, or `.agents/skills/` before Lore-wide managed skills.",
+		"Do not load legacy Claude-scoped skills unless the user explicitly asks.",
+	}
+}
+
+// RepositoryMarkdownRuntimeBoundary makes the ownership boundary explicit: rendered
+// repository instructions guide agents but do not implement host-runtime behavior.
+func RepositoryMarkdownRuntimeBoundary() string {
+	return "Repository Markdown defines agent duties; host runtime execution, delegation, retries, artifact read-back, terminal propagation, and interrupted-apply recovery are external runtime responsibilities, not guarantees implemented here."
+}
+
 func RuntimeOwnershipGuidance() string {
-	return "Delegation is provided by the `lore-pi-runtime` package (active Pi runtime). The legacy `lore-delegation.ts` Pi extension is currently disabled/blocked in `~/.pi/agent/extensions/`. The package runtime injects the canonical final response contract when the child launches; if the injected section is present, follow it as the authoritative contract."
+	return "Delegation is provided by the `lore-pi-runtime` package (active Pi runtime). When the runtime injects a response contract, it is authoritative."
 }
 
 func OpenCodeRuntimeOwnershipGuidance() string {
 	return "OpenCode owns native agent execution through `agent` entries, `task`, and `question`; do not describe or depend on Pi runtime ownership or Pi-injected child contracts."
+}
+
+func OpenCodeRuntimeContractGuidance() string {
+	return OpenCodeRuntimeOwnershipGuidance() + " " + RepositoryMarkdownRuntimeBoundary()
 }
 
 func EnvelopeFieldList(fields []string) string {

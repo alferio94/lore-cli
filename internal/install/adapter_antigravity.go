@@ -26,7 +26,7 @@ type antigravityAdapter struct {
 
 func defaultAntigravityAdapter() HarnessAdapter {
 	return antigravityAdapter{
-		target: TargetAntigravity,
+		target: TargetID(agentpack.HarnessAntigravity),
 		title:  "Antigravity",
 		capabilities: map[CapabilityID]Capability{
 			CapabilityAgentPack: {
@@ -216,19 +216,23 @@ func renderAntigravitySkills(req RenderRequest) []RenderedFile {
 	managedAgents := req.effectiveManagedAgents(antigravitySkillPathResolver(req))
 	rendered := make([]RenderedFile, 0, len(managedAgents))
 	for _, agent := range managedAgents {
+		name := agent.Name
+		if phase, ok := agentpack.PhaseForAgentName(agent.Name); ok {
+			name = agentpack.PhaseAgentName(phase)
+		}
 		content := strings.Join([]string{
 			"---",
-			fmt.Sprintf("name: %s", agent.Name),
+			fmt.Sprintf("name: %s", name),
 			fmt.Sprintf("description: %s", agent.Description),
 			"---",
-			agent.Body,
+			agentpack.ProjectNativeHarnessManagedAgentPrompt(agentpack.HarnessAntigravity, agent.Body),
 		}, "\n")
 		if !strings.HasSuffix(content, "\n") {
 			content += "\n"
 		}
 		rendered = append(rendered, RenderedFile{
 			Component:    ComponentCorePack,
-			RelativePath: filepath.ToSlash(filepath.Join("skills", agent.Name, "SKILL.md")),
+			RelativePath: filepath.ToSlash(filepath.Join("skills", name, "SKILL.md")),
 			MergeMode:    MergeModeReplace,
 			Content:      []byte(content),
 		})

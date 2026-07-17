@@ -60,8 +60,34 @@ func TestAntigravityAdapterRenderProducesPromptSkillsAndOptionalMCPWithoutPiArti
 			t.Fatalf("sdd-apply skill = %q, want %q omitted from Antigravity skill output", string(applySkill.Content), forbidden)
 		}
 	}
-	if _, ok := byPath[filepath.ToSlash(filepath.Join("skills", "lore-worker", "SKILL.md"))]; !ok {
-		t.Fatalf("Render(core-pack) paths = %v, want skills/lore-worker/SKILL.md", sortedRenderedPaths(files))
+	for _, forbidden := range []string{"lore-pi-runtime", "Pi Lore delegation adapter contract", "runtime injects a response contract"} {
+		if strings.Contains(string(applySkill.Content), forbidden) {
+			t.Fatalf("sdd-apply skill = %q, want Pi-only runtime contract %q omitted", string(applySkill.Content), forbidden)
+		}
+	}
+	if !containsAll(string(applySkill.Content), "set `phase` to `apply`", "`status`, `phase`, `summary`, `artifacts`, `files`, `validations`, `risks`, `next_step`, `continuation`, `question`, `options`, `skill_resolution`") {
+		t.Fatalf("sdd-apply skill = %q, want canonical phase/envelope semantics", string(applySkill.Content))
+	}
+	workerPath := filepath.ToSlash(filepath.Join("skills", "lore-worker", "SKILL.md"))
+	worker, ok := byPath[workerPath]
+	if !ok {
+		t.Fatalf("Render(core-pack) paths = %v, want %s", sortedRenderedPaths(files), workerPath)
+	}
+	if !containsAll(string(worker.Content), "You are the canonical Lore repository worker.", "`status`, `summary`, `artifacts`, `files`, `validations`, `risks`, `next_step`, `continuation`, `question`, `options`, `skill_resolution`") {
+		t.Fatalf("lore-worker skill = %q, want canonical role/envelope semantics", string(worker.Content))
+	}
+	for _, forbidden := range []string{"lore-pi-runtime", "Pi Lore delegation adapter contract", "runtime injects a response contract"} {
+		if strings.Contains(string(worker.Content), forbidden) {
+			t.Fatalf("lore-worker skill = %q, want Pi-only runtime contract %q omitted", string(worker.Content), forbidden)
+		}
+	}
+	proposePath := filepath.ToSlash(filepath.Join("skills", "sdd-propose", "SKILL.md"))
+	propose, ok := byPath[proposePath]
+	if !ok || strings.Contains(string(propose.Content), "name: sdd-proposal") {
+		t.Fatalf("Render(core-pack) canonical proposal skill = %q ok=%v, want %s with canonical name", string(propose.Content), ok, proposePath)
+	}
+	if _, ok := byPath[filepath.ToSlash(filepath.Join("skills", "sdd-proposal", "SKILL.md"))]; ok {
+		t.Fatalf("Render(core-pack) paths = %v, want no non-canonical sdd-proposal skill", sortedRenderedPaths(files))
 	}
 	if shared, ok := byPath[filepath.ToSlash(filepath.Join("skills", "_shared", "sdd-phase-common.md"))]; !ok || !strings.Contains(string(shared.Content), "SDD Phase Common Protocol") {
 		t.Fatalf("Render(core-pack) shared skill = %q ok=%v, want installed shared SDD phase protocol", string(shared.Content), ok)

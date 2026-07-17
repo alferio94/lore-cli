@@ -2,9 +2,11 @@ package install
 
 import (
 	"context"
+	"encoding/json"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -284,6 +286,268 @@ func renderedContent(files []RenderedFile) string {
 		b.WriteByte('\n')
 	}
 	return b.String()
+}
+
+// TestCrossHarnessCanonicalRoleContractParity guards the role-level semantic
+// contract, not byte layout: each harness owns its wrappers, while the
+// canonical behavior remains equivalent for every rendered role.
+func TestCrossHarnessCanonicalRoleContractParity(t *testing.T) {
+	roles := renderCrossHarnessRoleContracts(t)
+	phases := agentpack.OrderedPhaseIDs()
+
+	for _, target := range []TargetID{TargetPi, TargetOpenCode, TargetCodex, TargetAntigravity} {
+		target := target
+		t.Run(string(target), func(t *testing.T) {
+			canonical, ok := agentpack.NormalizeHarnessPrompt(string(target))
+			if !ok || string(canonical) != string(target) {
+				t.Fatalf("NormalizeHarnessPrompt(%q) = %q, %t; want canonical target", target, canonical, ok)
+			}
+
+			wantRoles := []string{agentpack.RoleLoreWorker}
+			if target != TargetPi { // Pi has managed role overlays but no CLI-rendered orchestrator.
+				wantRoles = append([]string{agentpack.RoleOrchestrator}, wantRoles...)
+			}
+			for _, phase := range phases {
+				wantRoles = append(wantRoles, agentpack.PhaseAgentName(phase))
+			}
+			for _, role := range wantRoles {
+				content, exists := roles[target][role]
+				if !exists {
+					t.Fatalf("missing rendered target-role contract target=%s role=%s; got roles %v", target, role, sortedCrossHarnessRoles(roles[target]))
+				}
+				if role == agentpack.RoleOrchestrator {
+					assertCanonicalOrchestratorContract(t, target, content)
+					continue
+				}
+
+				assertCanonicalLoreMCPRetrievalContract(t, target, role, content)
+				assertCanonicalSkillContract(t, target, role, content)
+				assertCanonicalEnvelopeContract(t, target, role, content)
+				if phase, isPhase := agentpack.PhaseForAgentName(role); isPhase {
+					assertCanonicalArtifactOwnerPersistence(t, target, role, content)
+					assertCanonicalPhaseContract(t, target, role, phase, content)
+				} else {
+					assertGenericWorkerLeastPrivilege(t, target, role, content)
+				}
+			}
+		})
+	}
+
+	for _, unknown := range []string{"", "claude-code", "unknown"} {
+		if target, ok := agentpack.NormalizeHarnessPrompt(unknown); ok || target != "" {
+			t.Fatalf("NormalizeHarnessPrompt(%q) = %q, %t; want deterministic rejection", unknown, target, ok)
+		}
+	}
+	for _, unknown := range []string{"", "proposal", "propose", "sdd-proposal", "sdd-unknown"} {
+		if phase, ok := agentpack.PhaseForAgentName(unknown); ok || phase != "" {
+			t.Fatalf("PhaseForAgentName(%q) = %q, %t; want deterministic rejection", unknown, phase, ok)
+		}
+	}
+}
+
+func renderCrossHarnessRoleContracts(t *testing.T) map[TargetID]map[string]string {
+	t.Helper()
+	request := func(target TargetID) RenderRequest {
+		return RenderRequest{Target: target, Definition: agentpack.DefaultDefinition(), Components: []ComponentID{ComponentCorePack}}
+	}
+	contracts := make(map[TargetID]map[string]string, 4)
+
+	piFiles, err := defaultPiAdapter().RenderManagedAgents(context.Background(), request(TargetPi))
+	if err != nil {
+		t.Fatalf("render Pi managed agents: %v", err)
+	}
+	contracts[TargetPi] = make(map[string]string, len(piFiles))
+	for _, file := range piFiles {
+		role := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(file.RelativePath), "lore-managed-"), ".md")
+		contracts[TargetPi][role] = string(file.Content)
+	}
+
+	for _, tc := range []struct {
+		target  TargetID
+		adapter HarnessAdapter
+	}{
+		{TargetOpenCode, defaultOpenCodeAdapter()},
+		{TargetCodex, defaultCodexAdapter()},
+		{TargetAntigravity, defaultAntigravityAdapter()},
+	} {
+		files, err := tc.adapter.Render(context.Background(), request(tc.target))
+		if err != nil {
+			t.Fatalf("render %s contracts: %v", tc.target, err)
+		}
+		contracts[tc.target] = extractCrossHarnessRoleContracts(t, tc.target, files)
+	}
+	return contracts
+}
+
+func extractCrossHarnessRoleContracts(t *testing.T, target TargetID, files []RenderedFile) map[string]string {
+	t.Helper()
+	byPath := make(map[string]RenderedFile, len(files))
+	for _, file := range files {
+		byPath[filepath.ToSlash(file.RelativePath)] = file
+	}
+	roles := map[string]string{}
+	switch target {
+	case TargetOpenCode:
+		roles[agentpack.RoleOrchestrator] = string(byPath["AGENTS.md"].Content)
+		roles[agentpack.RoleLoreWorker] = string(byPath["prompts/lore-worker.md"].Content)
+		for _, phase := range agentpack.OrderedPhaseIDs() {
+			path := "prompts/sdd/" + agentpack.PhaseEnvelopeName(phase) + ".md"
+			roles[agentpack.PhaseAgentName(phase)] = string(byPath[path].Content)
+		}
+	case TargetCodex:
+		roles[agentpack.RoleOrchestrator] = string(byPath["AGENTS.md"].Content)
+		for _, role := range append([]string{agentpack.RoleLoreWorker}, agentpack.SDDPhaseAgentNames()...) {
+			roles[role] = string(byPath["skills/"+role+"/SKILL.md"].Content)
+		}
+	case TargetAntigravity:
+		var profile antigravityAgentProfile
+		if err := json.Unmarshal(byPath["../config/agents/lore.json"].Content, &profile); err != nil {
+			t.Fatalf("decode Antigravity agent profile: %v", err)
+		}
+		roles[agentpack.RoleOrchestrator] = profile.SystemInstruction
+		for _, role := range append([]string{agentpack.RoleLoreWorker}, agentpack.SDDPhaseAgentNames()...) {
+			roles[role] = string(byPath["skills/"+role+"/SKILL.md"].Content)
+		}
+	default:
+		t.Fatalf("unsupported cross-harness target %q", target)
+	}
+	return roles
+}
+
+func assertCanonicalOrchestratorContract(t *testing.T, target TargetID, content string) {
+	if strings.Contains(content, "`lore_memory_save`") {
+		t.Fatalf("target=%s orchestrator has an overbroad lore_memory_save requirement without artifact ownership", target)
+	}
+	t.Helper()
+	for _, marker := range []string{"orchestrator", "SDD"} {
+		if !strings.Contains(strings.ToLower(content), strings.ToLower(marker)) {
+			t.Fatalf("target=%s orchestrator missing semantic marker %q", target, marker)
+		}
+	}
+}
+
+func assertCanonicalLoreMCPRetrievalContract(t *testing.T, target TargetID, role, content string) {
+	t.Helper()
+	for _, marker := range []string{
+		"`lore_project_activity`", "`lore_project_context`", "`lore_memory_search`", "`lore_memory_get`",
+		"activity", "do not pass query text", "exactly one project identity",
+	} {
+		if !strings.Contains(content, marker) {
+			t.Fatalf("target=%s role=%s missing canonical Lore MCP retrieval marker %q", target, role, marker)
+		}
+	}
+	if !strings.Contains(content, "OMIT full `content`") && !strings.Contains(content, "OMITS full `content`") {
+		t.Fatalf("target=%s role=%s omits preview-versus-full-body retrieval semantics", target, role)
+	}
+	if !strings.Contains(content, "full body") && !strings.Contains(content, "full memory body") {
+		t.Fatalf("target=%s role=%s omits full-body retrieval semantics", target, role)
+	}
+}
+
+func assertCanonicalSkillContract(t *testing.T, target TargetID, role, content string) {
+	t.Helper()
+	for _, marker := range []string{"skill", "`skill_resolution`"} {
+		if !strings.Contains(strings.ToLower(content), strings.ToLower(marker)) {
+			t.Fatalf("target=%s role=%s missing skill-resolution marker %q", target, role, marker)
+		}
+	}
+	if role == agentpack.RoleLoreWorker {
+		for _, marker := range []string{"project-local", "Lore-wide", "legacy Claude"} {
+			if !strings.Contains(content, marker) {
+				t.Fatalf("target=%s generic worker missing skill-precedence marker %q", target, marker)
+			}
+		}
+		return
+	}
+	for _, marker := range []string{"project-local before Lore-wide", "MUST load and follow", "phase skill"} {
+		if !strings.Contains(content, marker) {
+			t.Fatalf("target=%s SDD role=%s missing mandatory skill-resolution marker %q", target, role, marker)
+		}
+	}
+}
+
+func assertCanonicalArtifactOwnerPersistence(t *testing.T, target TargetID, role, content string) {
+	t.Helper()
+	for _, marker := range []string{"`lore_memory_save`", "configured artifact authority", "Persist durable artifacts"} {
+		if !strings.Contains(content, marker) {
+			t.Fatalf("target=%s SDD artifact owner role=%s missing persistence contract marker %q", target, role, marker)
+		}
+	}
+	if strings.Contains(content, "Persist the full") {
+		return
+	}
+	if phase, ok := agentpack.PhaseForAgentName(role); !ok || phase != agentpack.PhaseApply || !strings.Contains(content, "Persist `apply-started`") {
+		t.Fatalf("target=%s SDD artifact owner role=%s lacks full-artifact persistence semantics", target, role)
+	}
+}
+
+func assertGenericWorkerLeastPrivilege(t *testing.T, target TargetID, role, content string) {
+	t.Helper()
+	if role != agentpack.RoleLoreWorker {
+		t.Fatalf("target=%s expected generic worker role, got %s", target, role)
+	}
+	if strings.Contains(content, "`lore_memory_save`") {
+		t.Fatalf("target=%s generic worker role=%s has an overbroad lore_memory_save requirement without artifact ownership", target, role)
+	}
+	if !strings.Contains(content, "prefer repository evidence over assumptions") {
+		t.Fatalf("target=%s generic worker role=%s lacks evidence-first guidance", target, role)
+	}
+}
+
+func assertCanonicalEnvelopeContract(t *testing.T, target TargetID, role, content string) {
+	t.Helper()
+	for _, field := range agentpack.WorkerEnvelopeFields {
+		if !strings.Contains(content, "`"+field+"`") {
+			t.Fatalf("target=%s role=%s missing envelope field %q", target, role, field)
+		}
+	}
+	for _, status := range agentpack.FinalStatusValues {
+		if !strings.Contains(content, "`"+status+"`") {
+			t.Fatalf("target=%s role=%s missing allowed final status %q", target, role, status)
+		}
+	}
+	for _, stale := range []string{"`running`", "`next`", "`executive_summary`", "`next_recommended`"} {
+		if !strings.Contains(content, stale) {
+			t.Fatalf("target=%s role=%s missing stale-envelope field prohibition %q", target, role, stale)
+		}
+	}
+	if !strings.Contains(content, "Do not use `running`") && !strings.Contains(content, "`running` is reserved") {
+		t.Fatalf("target=%s role=%s does not prohibit running as a final envelope status", target, role)
+	}
+	if phase, isPhase := agentpack.PhaseForAgentName(role); isPhase {
+		if !strings.Contains(content, "`phase`") || !strings.Contains(content, "set `phase` to `"+agentpack.PhaseEnvelopeName(phase)+"`") {
+			t.Fatalf("target=%s role=%s missing canonical SDD phase envelope", target, role)
+		}
+	} else if strings.Contains(content, "exactly these keys: `status`, `phase`") {
+		t.Fatalf("target=%s worker incorrectly declares SDD phase envelope", target)
+	}
+}
+
+func assertCanonicalPhaseContract(t *testing.T, target TargetID, role string, phase agentpack.PhaseID, content string) {
+	t.Helper()
+	phaseName := agentpack.PhaseEnvelopeName(phase)
+	if !strings.Contains(content, "set `phase` to `"+phaseName+"`") {
+		t.Fatalf("target=%s role=%s missing canonical envelope phase %q", target, role, phaseName)
+	}
+	if !strings.Contains(strings.ToLower(content), "sdd "+strings.ToLower(phaseName)) {
+		t.Fatalf("target=%s role=%s missing canonical SDD phase semantic marker %q", target, role, phaseName)
+	}
+	if phase == agentpack.PhaseApply {
+		for _, marker := range []string{"apply-started", "apply-partial", "apply-progress", "apply-report"} {
+			if !strings.Contains(content, marker) {
+				t.Fatalf("target=%s role=%s missing apply recovery marker %q", target, role, marker)
+			}
+		}
+	}
+}
+
+func sortedCrossHarnessRoles(roles map[string]string) []string {
+	values := make([]string, 0, len(roles))
+	for role := range roles {
+		values = append(values, role)
+	}
+	sort.Strings(values)
+	return values
 }
 
 func TestOpenCodeBundledPluginAssetsNoGentleWordingLeakage(t *testing.T) {

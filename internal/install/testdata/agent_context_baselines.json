@@ -1,0 +1,1886 @@
+{
+  "version": 1,
+  "budget_review": "Judgment Day Round 4: role-scoped persistence guidance and aggregate Unicode bundle token estimates.",
+  "units": [
+    {
+      "target": "antigravity",
+      "role": "lore-worker",
+      "path": "skills/lore-worker/SKILL.md",
+      "measured": {
+        "bytes": 4575,
+        "chars": 4575,
+        "lines": 48,
+        "estimated_tokens": 1144
+      },
+      "budget": {
+        "bytes": 4575,
+        "chars": 4575,
+        "lines": 48,
+        "estimated_tokens": 1144
+      }
+    },
+    {
+      "target": "antigravity",
+      "role": "orchestrator",
+      "path": "../GEMINI.md",
+      "measured": {
+        "bytes": 1437,
+        "chars": 1437,
+        "lines": 16,
+        "estimated_tokens": 360
+      },
+      "budget": {
+        "bytes": 1437,
+        "chars": 1437,
+        "lines": 16,
+        "estimated_tokens": 360
+      }
+    },
+    {
+      "target": "antigravity",
+      "role": "orchestrator",
+      "path": "../config/agents/lore.json",
+      "measured": {
+        "bytes": 5204,
+        "chars": 5204,
+        "lines": 7,
+        "estimated_tokens": 1301
+      },
+      "budget": {
+        "bytes": 5204,
+        "chars": 5204,
+        "lines": 7,
+        "estimated_tokens": 1301
+      }
+    },
+    {
+      "target": "antigravity",
+      "role": "sdd-apply",
+      "path": "skills/sdd-apply/SKILL.md",
+      "measured": {
+        "bytes": 3214,
+        "chars": 3214,
+        "lines": 27,
+        "estimated_tokens": 804
+      },
+      "budget": {
+        "bytes": 3214,
+        "chars": 3214,
+        "lines": 27,
+        "estimated_tokens": 804
+      }
+    },
+    {
+      "target": "antigravity",
+      "role": "sdd-archive",
+      "path": "skills/sdd-archive/SKILL.md",
+      "measured": {
+        "bytes": 3079,
+        "chars": 3079,
+        "lines": 26,
+        "estimated_tokens": 770
+      },
+      "budget": {
+        "bytes": 3079,
+        "chars": 3079,
+        "lines": 26,
+        "estimated_tokens": 770
+      }
+    },
+    {
+      "target": "antigravity",
+      "role": "sdd-design",
+      "path": "skills/sdd-design/SKILL.md",
+      "measured": {
+        "bytes": 3052,
+        "chars": 3052,
+        "lines": 26,
+        "estimated_tokens": 763
+      },
+      "budget": {
+        "bytes": 3052,
+        "chars": 3052,
+        "lines": 26,
+        "estimated_tokens": 763
+      }
+    },
+    {
+      "target": "antigravity",
+      "role": "sdd-explore",
+      "path": "skills/sdd-explore/SKILL.md",
+      "measured": {
+        "bytes": 3092,
+        "chars": 3092,
+        "lines": 26,
+        "estimated_tokens": 773
+      },
+      "budget": {
+        "bytes": 3092,
+        "chars": 3092,
+        "lines": 26,
+        "estimated_tokens": 773
+      }
+    },
+    {
+      "target": "antigravity",
+      "role": "sdd-init",
+      "path": "skills/sdd-init/SKILL.md",
+      "measured": {
+        "bytes": 3061,
+        "chars": 3061,
+        "lines": 26,
+        "estimated_tokens": 766
+      },
+      "budget": {
+        "bytes": 3061,
+        "chars": 3061,
+        "lines": 26,
+        "estimated_tokens": 766
+      }
+    },
+    {
+      "target": "antigravity",
+      "role": "sdd-propose",
+      "path": "skills/sdd-propose/SKILL.md",
+      "measured": {
+        "bytes": 3025,
+        "chars": 3025,
+        "lines": 26,
+        "estimated_tokens": 757
+      },
+      "budget": {
+        "bytes": 3025,
+        "chars": 3025,
+        "lines": 26,
+        "estimated_tokens": 757
+      }
+    },
+    {
+      "target": "antigravity",
+      "role": "sdd-spec",
+      "path": "skills/sdd-spec/SKILL.md",
+      "measured": {
+        "bytes": 3046,
+        "chars": 3046,
+        "lines": 26,
+        "estimated_tokens": 762
+      },
+      "budget": {
+        "bytes": 3046,
+        "chars": 3046,
+        "lines": 26,
+        "estimated_tokens": 762
+      }
+    },
+    {
+      "target": "antigravity",
+      "role": "sdd-tasks",
+      "path": "skills/sdd-tasks/SKILL.md",
+      "measured": {
+        "bytes": 3050,
+        "chars": 3050,
+        "lines": 26,
+        "estimated_tokens": 763
+      },
+      "budget": {
+        "bytes": 3050,
+        "chars": 3050,
+        "lines": 26,
+        "estimated_tokens": 763
+      }
+    },
+    {
+      "target": "antigravity",
+      "role": "sdd-verify",
+      "path": "skills/sdd-verify/SKILL.md",
+      "measured": {
+        "bytes": 3155,
+        "chars": 3155,
+        "lines": 26,
+        "estimated_tokens": 789
+      },
+      "budget": {
+        "bytes": 3155,
+        "chars": 3155,
+        "lines": 26,
+        "estimated_tokens": 789
+      }
+    },
+    {
+      "target": "antigravity",
+      "role": "shared",
+      "path": "skills/_shared/sdd-phase-common.md",
+      "measured": {
+        "bytes": 442,
+        "chars": 442,
+        "lines": 9,
+        "estimated_tokens": 111
+      },
+      "budget": {
+        "bytes": 442,
+        "chars": 442,
+        "lines": 9,
+        "estimated_tokens": 111
+      }
+    },
+    {
+      "target": "codex",
+      "role": "lore-worker",
+      "path": "skills/lore-worker/SKILL.md",
+      "measured": {
+        "bytes": 4575,
+        "chars": 4575,
+        "lines": 48,
+        "estimated_tokens": 1144
+      },
+      "budget": {
+        "bytes": 4575,
+        "chars": 4575,
+        "lines": 48,
+        "estimated_tokens": 1144
+      }
+    },
+    {
+      "target": "codex",
+      "role": "orchestrator",
+      "path": "AGENTS.md",
+      "measured": {
+        "bytes": 6367,
+        "chars": 6361,
+        "lines": 93,
+        "estimated_tokens": 1591
+      },
+      "budget": {
+        "bytes": 6367,
+        "chars": 6361,
+        "lines": 93,
+        "estimated_tokens": 1591
+      }
+    },
+    {
+      "target": "codex",
+      "role": "sdd-apply",
+      "path": "skills/sdd-apply/SKILL.md",
+      "measured": {
+        "bytes": 3214,
+        "chars": 3214,
+        "lines": 27,
+        "estimated_tokens": 804
+      },
+      "budget": {
+        "bytes": 3214,
+        "chars": 3214,
+        "lines": 27,
+        "estimated_tokens": 804
+      }
+    },
+    {
+      "target": "codex",
+      "role": "sdd-archive",
+      "path": "skills/sdd-archive/SKILL.md",
+      "measured": {
+        "bytes": 3079,
+        "chars": 3079,
+        "lines": 26,
+        "estimated_tokens": 770
+      },
+      "budget": {
+        "bytes": 3079,
+        "chars": 3079,
+        "lines": 26,
+        "estimated_tokens": 770
+      }
+    },
+    {
+      "target": "codex",
+      "role": "sdd-design",
+      "path": "skills/sdd-design/SKILL.md",
+      "measured": {
+        "bytes": 3052,
+        "chars": 3052,
+        "lines": 26,
+        "estimated_tokens": 763
+      },
+      "budget": {
+        "bytes": 3052,
+        "chars": 3052,
+        "lines": 26,
+        "estimated_tokens": 763
+      }
+    },
+    {
+      "target": "codex",
+      "role": "sdd-explore",
+      "path": "skills/sdd-explore/SKILL.md",
+      "measured": {
+        "bytes": 3092,
+        "chars": 3092,
+        "lines": 26,
+        "estimated_tokens": 773
+      },
+      "budget": {
+        "bytes": 3092,
+        "chars": 3092,
+        "lines": 26,
+        "estimated_tokens": 773
+      }
+    },
+    {
+      "target": "codex",
+      "role": "sdd-init",
+      "path": "skills/sdd-init/SKILL.md",
+      "measured": {
+        "bytes": 3061,
+        "chars": 3061,
+        "lines": 26,
+        "estimated_tokens": 766
+      },
+      "budget": {
+        "bytes": 3061,
+        "chars": 3061,
+        "lines": 26,
+        "estimated_tokens": 766
+      }
+    },
+    {
+      "target": "codex",
+      "role": "sdd-propose",
+      "path": "skills/sdd-propose/SKILL.md",
+      "measured": {
+        "bytes": 3025,
+        "chars": 3025,
+        "lines": 26,
+        "estimated_tokens": 757
+      },
+      "budget": {
+        "bytes": 3025,
+        "chars": 3025,
+        "lines": 26,
+        "estimated_tokens": 757
+      }
+    },
+    {
+      "target": "codex",
+      "role": "sdd-spec",
+      "path": "skills/sdd-spec/SKILL.md",
+      "measured": {
+        "bytes": 3046,
+        "chars": 3046,
+        "lines": 26,
+        "estimated_tokens": 762
+      },
+      "budget": {
+        "bytes": 3046,
+        "chars": 3046,
+        "lines": 26,
+        "estimated_tokens": 762
+      }
+    },
+    {
+      "target": "codex",
+      "role": "sdd-tasks",
+      "path": "skills/sdd-tasks/SKILL.md",
+      "measured": {
+        "bytes": 3050,
+        "chars": 3050,
+        "lines": 26,
+        "estimated_tokens": 763
+      },
+      "budget": {
+        "bytes": 3050,
+        "chars": 3050,
+        "lines": 26,
+        "estimated_tokens": 763
+      }
+    },
+    {
+      "target": "codex",
+      "role": "sdd-verify",
+      "path": "skills/sdd-verify/SKILL.md",
+      "measured": {
+        "bytes": 3155,
+        "chars": 3155,
+        "lines": 26,
+        "estimated_tokens": 789
+      },
+      "budget": {
+        "bytes": 3155,
+        "chars": 3155,
+        "lines": 26,
+        "estimated_tokens": 789
+      }
+    },
+    {
+      "target": "codex",
+      "role": "shared",
+      "path": "skills/_shared/sdd-phase-common.md",
+      "measured": {
+        "bytes": 442,
+        "chars": 442,
+        "lines": 9,
+        "estimated_tokens": 111
+      },
+      "budget": {
+        "bytes": 442,
+        "chars": 442,
+        "lines": 9,
+        "estimated_tokens": 111
+      }
+    },
+    {
+      "target": "opencode",
+      "role": "lore-worker",
+      "path": "prompts/lore-worker.md",
+      "measured": {
+        "bytes": 5311,
+        "chars": 5311,
+        "lines": 55,
+        "estimated_tokens": 1328
+      },
+      "budget": {
+        "bytes": 5311,
+        "chars": 5311,
+        "lines": 55,
+        "estimated_tokens": 1328
+      }
+    },
+    {
+      "target": "opencode",
+      "role": "lore-worker",
+      "path": "skills/lore-worker/SKILL.md",
+      "measured": {
+        "bytes": 5439,
+        "chars": 5439,
+        "lines": 59,
+        "estimated_tokens": 1360
+      },
+      "budget": {
+        "bytes": 5439,
+        "chars": 5439,
+        "lines": 59,
+        "estimated_tokens": 1360
+      }
+    },
+    {
+      "target": "opencode",
+      "role": "orchestrator",
+      "path": "AGENTS.md",
+      "measured": {
+        "bytes": 9836,
+        "chars": 9834,
+        "lines": 77,
+        "estimated_tokens": 2459
+      },
+      "budget": {
+        "bytes": 9836,
+        "chars": 9834,
+        "lines": 77,
+        "estimated_tokens": 2459
+      }
+    },
+    {
+      "target": "opencode",
+      "role": "orchestrator",
+      "path": "prompts/lore.md",
+      "measured": {
+        "bytes": 4932,
+        "chars": 4932,
+        "lines": 59,
+        "estimated_tokens": 1233
+      },
+      "budget": {
+        "bytes": 4932,
+        "chars": 4932,
+        "lines": 59,
+        "estimated_tokens": 1233
+      }
+    },
+    {
+      "target": "opencode",
+      "role": "sdd-apply",
+      "path": "prompts/sdd/apply.md",
+      "measured": {
+        "bytes": 3881,
+        "chars": 3881,
+        "lines": 40,
+        "estimated_tokens": 971
+      },
+      "budget": {
+        "bytes": 3881,
+        "chars": 3881,
+        "lines": 40,
+        "estimated_tokens": 971
+      }
+    },
+    {
+      "target": "opencode",
+      "role": "sdd-apply",
+      "path": "skills/sdd-apply/SKILL.md",
+      "measured": {
+        "bytes": 3975,
+        "chars": 3975,
+        "lines": 44,
+        "estimated_tokens": 994
+      },
+      "budget": {
+        "bytes": 3975,
+        "chars": 3975,
+        "lines": 44,
+        "estimated_tokens": 994
+      }
+    },
+    {
+      "target": "opencode",
+      "role": "sdd-archive",
+      "path": "prompts/sdd/archive.md",
+      "measured": {
+        "bytes": 3742,
+        "chars": 3742,
+        "lines": 39,
+        "estimated_tokens": 936
+      },
+      "budget": {
+        "bytes": 3742,
+        "chars": 3742,
+        "lines": 39,
+        "estimated_tokens": 936
+      }
+    },
+    {
+      "target": "opencode",
+      "role": "sdd-archive",
+      "path": "skills/sdd-archive/SKILL.md",
+      "measured": {
+        "bytes": 3852,
+        "chars": 3852,
+        "lines": 43,
+        "estimated_tokens": 963
+      },
+      "budget": {
+        "bytes": 3852,
+        "chars": 3852,
+        "lines": 43,
+        "estimated_tokens": 963
+      }
+    },
+    {
+      "target": "opencode",
+      "role": "sdd-design",
+      "path": "prompts/sdd/design.md",
+      "measured": {
+        "bytes": 3728,
+        "chars": 3728,
+        "lines": 39,
+        "estimated_tokens": 932
+      },
+      "budget": {
+        "bytes": 3728,
+        "chars": 3728,
+        "lines": 39,
+        "estimated_tokens": 932
+      }
+    },
+    {
+      "target": "opencode",
+      "role": "sdd-design",
+      "path": "skills/sdd-design/SKILL.md",
+      "measured": {
+        "bytes": 3819,
+        "chars": 3819,
+        "lines": 43,
+        "estimated_tokens": 955
+      },
+      "budget": {
+        "bytes": 3819,
+        "chars": 3819,
+        "lines": 43,
+        "estimated_tokens": 955
+      }
+    },
+    {
+      "target": "opencode",
+      "role": "sdd-explore",
+      "path": "prompts/sdd/explore.md",
+      "measured": {
+        "bytes": 3763,
+        "chars": 3763,
+        "lines": 39,
+        "estimated_tokens": 941
+      },
+      "budget": {
+        "bytes": 3763,
+        "chars": 3763,
+        "lines": 39,
+        "estimated_tokens": 941
+      }
+    },
+    {
+      "target": "opencode",
+      "role": "sdd-explore",
+      "path": "skills/sdd-explore/SKILL.md",
+      "measured": {
+        "bytes": 3865,
+        "chars": 3865,
+        "lines": 43,
+        "estimated_tokens": 967
+      },
+      "budget": {
+        "bytes": 3865,
+        "chars": 3865,
+        "lines": 43,
+        "estimated_tokens": 967
+      }
+    },
+    {
+      "target": "opencode",
+      "role": "sdd-init",
+      "path": "prompts/sdd/init.md",
+      "measured": {
+        "bytes": 3726,
+        "chars": 3726,
+        "lines": 39,
+        "estimated_tokens": 932
+      },
+      "budget": {
+        "bytes": 3726,
+        "chars": 3726,
+        "lines": 39,
+        "estimated_tokens": 932
+      }
+    },
+    {
+      "target": "opencode",
+      "role": "sdd-init",
+      "path": "skills/sdd-init/SKILL.md",
+      "measured": {
+        "bytes": 3816,
+        "chars": 3816,
+        "lines": 43,
+        "estimated_tokens": 954
+      },
+      "budget": {
+        "bytes": 3816,
+        "chars": 3816,
+        "lines": 43,
+        "estimated_tokens": 954
+      }
+    },
+    {
+      "target": "opencode",
+      "role": "sdd-propose",
+      "path": "prompts/sdd/propose.md",
+      "measured": {
+        "bytes": 3722,
+        "chars": 3722,
+        "lines": 39,
+        "estimated_tokens": 931
+      },
+      "budget": {
+        "bytes": 3722,
+        "chars": 3722,
+        "lines": 39,
+        "estimated_tokens": 931
+      }
+    },
+    {
+      "target": "opencode",
+      "role": "sdd-propose",
+      "path": "skills/sdd-propose/SKILL.md",
+      "measured": {
+        "bytes": 3798,
+        "chars": 3798,
+        "lines": 43,
+        "estimated_tokens": 950
+      },
+      "budget": {
+        "bytes": 3798,
+        "chars": 3798,
+        "lines": 43,
+        "estimated_tokens": 950
+      }
+    },
+    {
+      "target": "opencode",
+      "role": "sdd-spec",
+      "path": "prompts/sdd/spec.md",
+      "measured": {
+        "bytes": 3704,
+        "chars": 3704,
+        "lines": 39,
+        "estimated_tokens": 926
+      },
+      "budget": {
+        "bytes": 3704,
+        "chars": 3704,
+        "lines": 39,
+        "estimated_tokens": 926
+      }
+    },
+    {
+      "target": "opencode",
+      "role": "sdd-spec",
+      "path": "skills/sdd-spec/SKILL.md",
+      "measured": {
+        "bytes": 3801,
+        "chars": 3801,
+        "lines": 43,
+        "estimated_tokens": 951
+      },
+      "budget": {
+        "bytes": 3801,
+        "chars": 3801,
+        "lines": 43,
+        "estimated_tokens": 951
+      }
+    },
+    {
+      "target": "opencode",
+      "role": "sdd-tasks",
+      "path": "prompts/sdd/tasks.md",
+      "measured": {
+        "bytes": 3713,
+        "chars": 3713,
+        "lines": 39,
+        "estimated_tokens": 929
+      },
+      "budget": {
+        "bytes": 3713,
+        "chars": 3713,
+        "lines": 39,
+        "estimated_tokens": 929
+      }
+    },
+    {
+      "target": "opencode",
+      "role": "sdd-tasks",
+      "path": "skills/sdd-tasks/SKILL.md",
+      "measured": {
+        "bytes": 3811,
+        "chars": 3811,
+        "lines": 43,
+        "estimated_tokens": 953
+      },
+      "budget": {
+        "bytes": 3811,
+        "chars": 3811,
+        "lines": 43,
+        "estimated_tokens": 953
+      }
+    },
+    {
+      "target": "opencode",
+      "role": "sdd-verify",
+      "path": "prompts/sdd/verify.md",
+      "measured": {
+        "bytes": 3820,
+        "chars": 3820,
+        "lines": 39,
+        "estimated_tokens": 955
+      },
+      "budget": {
+        "bytes": 3820,
+        "chars": 3820,
+        "lines": 39,
+        "estimated_tokens": 955
+      }
+    },
+    {
+      "target": "opencode",
+      "role": "sdd-verify",
+      "path": "skills/sdd-verify/SKILL.md",
+      "measured": {
+        "bytes": 3922,
+        "chars": 3922,
+        "lines": 43,
+        "estimated_tokens": 981
+      },
+      "budget": {
+        "bytes": 3922,
+        "chars": 3922,
+        "lines": 43,
+        "estimated_tokens": 981
+      }
+    },
+    {
+      "target": "pi",
+      "role": "lore-worker",
+      "path": "agents/lore-managed-lore-worker.md",
+      "measured": {
+        "bytes": 5384,
+        "chars": 5384,
+        "lines": 65,
+        "estimated_tokens": 1346
+      },
+      "budget": {
+        "bytes": 5384,
+        "chars": 5384,
+        "lines": 65,
+        "estimated_tokens": 1346
+      }
+    },
+    {
+      "target": "pi",
+      "role": "sdd-apply",
+      "path": "agents/lore-managed-sdd-apply.md",
+      "measured": {
+        "bytes": 3643,
+        "chars": 3643,
+        "lines": 42,
+        "estimated_tokens": 911
+      },
+      "budget": {
+        "bytes": 3643,
+        "chars": 3643,
+        "lines": 42,
+        "estimated_tokens": 911
+      }
+    },
+    {
+      "target": "pi",
+      "role": "sdd-archive",
+      "path": "agents/lore-managed-sdd-archive.md",
+      "measured": {
+        "bytes": 3512,
+        "chars": 3512,
+        "lines": 41,
+        "estimated_tokens": 878
+      },
+      "budget": {
+        "bytes": 3512,
+        "chars": 3512,
+        "lines": 41,
+        "estimated_tokens": 878
+      }
+    },
+    {
+      "target": "pi",
+      "role": "sdd-design",
+      "path": "agents/lore-managed-sdd-design.md",
+      "measured": {
+        "bytes": 3483,
+        "chars": 3483,
+        "lines": 41,
+        "estimated_tokens": 871
+      },
+      "budget": {
+        "bytes": 3483,
+        "chars": 3483,
+        "lines": 41,
+        "estimated_tokens": 871
+      }
+    },
+    {
+      "target": "pi",
+      "role": "sdd-explore",
+      "path": "agents/lore-managed-sdd-explore.md",
+      "measured": {
+        "bytes": 3525,
+        "chars": 3525,
+        "lines": 41,
+        "estimated_tokens": 882
+      },
+      "budget": {
+        "bytes": 3525,
+        "chars": 3525,
+        "lines": 41,
+        "estimated_tokens": 882
+      }
+    },
+    {
+      "target": "pi",
+      "role": "sdd-init",
+      "path": "agents/lore-managed-sdd-init.md",
+      "measured": {
+        "bytes": 3488,
+        "chars": 3488,
+        "lines": 41,
+        "estimated_tokens": 872
+      },
+      "budget": {
+        "bytes": 3488,
+        "chars": 3488,
+        "lines": 41,
+        "estimated_tokens": 872
+      }
+    },
+    {
+      "target": "pi",
+      "role": "sdd-propose",
+      "path": "agents/lore-managed-sdd-propose.md",
+      "measured": {
+        "bytes": 3458,
+        "chars": 3458,
+        "lines": 41,
+        "estimated_tokens": 865
+      },
+      "budget": {
+        "bytes": 3458,
+        "chars": 3458,
+        "lines": 41,
+        "estimated_tokens": 865
+      }
+    },
+    {
+      "target": "pi",
+      "role": "sdd-spec",
+      "path": "agents/lore-managed-sdd-spec.md",
+      "measured": {
+        "bytes": 3473,
+        "chars": 3473,
+        "lines": 41,
+        "estimated_tokens": 869
+      },
+      "budget": {
+        "bytes": 3473,
+        "chars": 3473,
+        "lines": 41,
+        "estimated_tokens": 869
+      }
+    },
+    {
+      "target": "pi",
+      "role": "sdd-tasks",
+      "path": "agents/lore-managed-sdd-tasks.md",
+      "measured": {
+        "bytes": 3479,
+        "chars": 3479,
+        "lines": 41,
+        "estimated_tokens": 870
+      },
+      "budget": {
+        "bytes": 3479,
+        "chars": 3479,
+        "lines": 41,
+        "estimated_tokens": 870
+      }
+    },
+    {
+      "target": "pi",
+      "role": "sdd-verify",
+      "path": "agents/lore-managed-sdd-verify.md",
+      "measured": {
+        "bytes": 3586,
+        "chars": 3586,
+        "lines": 41,
+        "estimated_tokens": 897
+      },
+      "budget": {
+        "bytes": 3586,
+        "chars": 3586,
+        "lines": 41,
+        "estimated_tokens": 897
+      }
+    }
+  ],
+  "bundles": [
+    {
+      "target": "antigravity",
+      "role": "lore-worker",
+      "name": "effective-context",
+      "paths": [
+        "../GEMINI.md",
+        "../config/agents/lore.json",
+        "skills/lore-worker/SKILL.md"
+      ],
+      "measured": {
+        "bytes": 11216,
+        "chars": 11216,
+        "lines": 71,
+        "estimated_tokens": 2804
+      },
+      "budget": {
+        "bytes": 11216,
+        "chars": 11216,
+        "lines": 71,
+        "estimated_tokens": 2804
+      }
+    },
+    {
+      "target": "antigravity",
+      "role": "orchestrator",
+      "name": "effective-context",
+      "paths": [
+        "../GEMINI.md",
+        "../config/agents/lore.json"
+      ],
+      "measured": {
+        "bytes": 6641,
+        "chars": 6641,
+        "lines": 23,
+        "estimated_tokens": 1661
+      },
+      "budget": {
+        "bytes": 6641,
+        "chars": 6641,
+        "lines": 23,
+        "estimated_tokens": 1661
+      }
+    },
+    {
+      "target": "antigravity",
+      "role": "sdd-apply",
+      "name": "effective-context",
+      "paths": [
+        "../GEMINI.md",
+        "../config/agents/lore.json",
+        "skills/_shared/sdd-phase-common.md",
+        "skills/sdd-apply/SKILL.md"
+      ],
+      "measured": {
+        "bytes": 10297,
+        "chars": 10297,
+        "lines": 59,
+        "estimated_tokens": 2575
+      },
+      "budget": {
+        "bytes": 10297,
+        "chars": 10297,
+        "lines": 59,
+        "estimated_tokens": 2575
+      }
+    },
+    {
+      "target": "antigravity",
+      "role": "sdd-archive",
+      "name": "effective-context",
+      "paths": [
+        "../GEMINI.md",
+        "../config/agents/lore.json",
+        "skills/_shared/sdd-phase-common.md",
+        "skills/sdd-archive/SKILL.md"
+      ],
+      "measured": {
+        "bytes": 10162,
+        "chars": 10162,
+        "lines": 58,
+        "estimated_tokens": 2541
+      },
+      "budget": {
+        "bytes": 10162,
+        "chars": 10162,
+        "lines": 58,
+        "estimated_tokens": 2541
+      }
+    },
+    {
+      "target": "antigravity",
+      "role": "sdd-design",
+      "name": "effective-context",
+      "paths": [
+        "../GEMINI.md",
+        "../config/agents/lore.json",
+        "skills/_shared/sdd-phase-common.md",
+        "skills/sdd-design/SKILL.md"
+      ],
+      "measured": {
+        "bytes": 10135,
+        "chars": 10135,
+        "lines": 58,
+        "estimated_tokens": 2534
+      },
+      "budget": {
+        "bytes": 10135,
+        "chars": 10135,
+        "lines": 58,
+        "estimated_tokens": 2534
+      }
+    },
+    {
+      "target": "antigravity",
+      "role": "sdd-explore",
+      "name": "effective-context",
+      "paths": [
+        "../GEMINI.md",
+        "../config/agents/lore.json",
+        "skills/_shared/sdd-phase-common.md",
+        "skills/sdd-explore/SKILL.md"
+      ],
+      "measured": {
+        "bytes": 10175,
+        "chars": 10175,
+        "lines": 58,
+        "estimated_tokens": 2544
+      },
+      "budget": {
+        "bytes": 10175,
+        "chars": 10175,
+        "lines": 58,
+        "estimated_tokens": 2544
+      }
+    },
+    {
+      "target": "antigravity",
+      "role": "sdd-init",
+      "name": "effective-context",
+      "paths": [
+        "../GEMINI.md",
+        "../config/agents/lore.json",
+        "skills/_shared/sdd-phase-common.md",
+        "skills/sdd-init/SKILL.md"
+      ],
+      "measured": {
+        "bytes": 10144,
+        "chars": 10144,
+        "lines": 58,
+        "estimated_tokens": 2536
+      },
+      "budget": {
+        "bytes": 10144,
+        "chars": 10144,
+        "lines": 58,
+        "estimated_tokens": 2536
+      }
+    },
+    {
+      "target": "antigravity",
+      "role": "sdd-propose",
+      "name": "effective-context",
+      "paths": [
+        "../GEMINI.md",
+        "../config/agents/lore.json",
+        "skills/_shared/sdd-phase-common.md",
+        "skills/sdd-propose/SKILL.md"
+      ],
+      "measured": {
+        "bytes": 10108,
+        "chars": 10108,
+        "lines": 58,
+        "estimated_tokens": 2527
+      },
+      "budget": {
+        "bytes": 10108,
+        "chars": 10108,
+        "lines": 58,
+        "estimated_tokens": 2527
+      }
+    },
+    {
+      "target": "antigravity",
+      "role": "sdd-spec",
+      "name": "effective-context",
+      "paths": [
+        "../GEMINI.md",
+        "../config/agents/lore.json",
+        "skills/_shared/sdd-phase-common.md",
+        "skills/sdd-spec/SKILL.md"
+      ],
+      "measured": {
+        "bytes": 10129,
+        "chars": 10129,
+        "lines": 58,
+        "estimated_tokens": 2533
+      },
+      "budget": {
+        "bytes": 10129,
+        "chars": 10129,
+        "lines": 58,
+        "estimated_tokens": 2533
+      }
+    },
+    {
+      "target": "antigravity",
+      "role": "sdd-tasks",
+      "name": "effective-context",
+      "paths": [
+        "../GEMINI.md",
+        "../config/agents/lore.json",
+        "skills/_shared/sdd-phase-common.md",
+        "skills/sdd-tasks/SKILL.md"
+      ],
+      "measured": {
+        "bytes": 10133,
+        "chars": 10133,
+        "lines": 58,
+        "estimated_tokens": 2534
+      },
+      "budget": {
+        "bytes": 10133,
+        "chars": 10133,
+        "lines": 58,
+        "estimated_tokens": 2534
+      }
+    },
+    {
+      "target": "antigravity",
+      "role": "sdd-verify",
+      "name": "effective-context",
+      "paths": [
+        "../GEMINI.md",
+        "../config/agents/lore.json",
+        "skills/_shared/sdd-phase-common.md",
+        "skills/sdd-verify/SKILL.md"
+      ],
+      "measured": {
+        "bytes": 10238,
+        "chars": 10238,
+        "lines": 58,
+        "estimated_tokens": 2560
+      },
+      "budget": {
+        "bytes": 10238,
+        "chars": 10238,
+        "lines": 58,
+        "estimated_tokens": 2560
+      }
+    },
+    {
+      "target": "codex",
+      "role": "lore-worker",
+      "name": "effective-context",
+      "paths": [
+        "AGENTS.md",
+        "skills/lore-worker/SKILL.md"
+      ],
+      "measured": {
+        "bytes": 10942,
+        "chars": 10936,
+        "lines": 141,
+        "estimated_tokens": 2734
+      },
+      "budget": {
+        "bytes": 10942,
+        "chars": 10936,
+        "lines": 141,
+        "estimated_tokens": 2734
+      }
+    },
+    {
+      "target": "codex",
+      "role": "orchestrator",
+      "name": "effective-context",
+      "paths": [
+        "AGENTS.md"
+      ],
+      "measured": {
+        "bytes": 6367,
+        "chars": 6361,
+        "lines": 93,
+        "estimated_tokens": 1591
+      },
+      "budget": {
+        "bytes": 6367,
+        "chars": 6361,
+        "lines": 93,
+        "estimated_tokens": 1591
+      }
+    },
+    {
+      "target": "codex",
+      "role": "sdd-apply",
+      "name": "effective-context",
+      "paths": [
+        "AGENTS.md",
+        "skills/_shared/sdd-phase-common.md",
+        "skills/sdd-apply/SKILL.md"
+      ],
+      "measured": {
+        "bytes": 10023,
+        "chars": 10017,
+        "lines": 129,
+        "estimated_tokens": 2505
+      },
+      "budget": {
+        "bytes": 10023,
+        "chars": 10017,
+        "lines": 129,
+        "estimated_tokens": 2505
+      }
+    },
+    {
+      "target": "codex",
+      "role": "sdd-archive",
+      "name": "effective-context",
+      "paths": [
+        "AGENTS.md",
+        "skills/_shared/sdd-phase-common.md",
+        "skills/sdd-archive/SKILL.md"
+      ],
+      "measured": {
+        "bytes": 9888,
+        "chars": 9882,
+        "lines": 128,
+        "estimated_tokens": 2471
+      },
+      "budget": {
+        "bytes": 9888,
+        "chars": 9882,
+        "lines": 128,
+        "estimated_tokens": 2471
+      }
+    },
+    {
+      "target": "codex",
+      "role": "sdd-design",
+      "name": "effective-context",
+      "paths": [
+        "AGENTS.md",
+        "skills/_shared/sdd-phase-common.md",
+        "skills/sdd-design/SKILL.md"
+      ],
+      "measured": {
+        "bytes": 9861,
+        "chars": 9855,
+        "lines": 128,
+        "estimated_tokens": 2464
+      },
+      "budget": {
+        "bytes": 9861,
+        "chars": 9855,
+        "lines": 128,
+        "estimated_tokens": 2464
+      }
+    },
+    {
+      "target": "codex",
+      "role": "sdd-explore",
+      "name": "effective-context",
+      "paths": [
+        "AGENTS.md",
+        "skills/_shared/sdd-phase-common.md",
+        "skills/sdd-explore/SKILL.md"
+      ],
+      "measured": {
+        "bytes": 9901,
+        "chars": 9895,
+        "lines": 128,
+        "estimated_tokens": 2474
+      },
+      "budget": {
+        "bytes": 9901,
+        "chars": 9895,
+        "lines": 128,
+        "estimated_tokens": 2474
+      }
+    },
+    {
+      "target": "codex",
+      "role": "sdd-init",
+      "name": "effective-context",
+      "paths": [
+        "AGENTS.md",
+        "skills/_shared/sdd-phase-common.md",
+        "skills/sdd-init/SKILL.md"
+      ],
+      "measured": {
+        "bytes": 9870,
+        "chars": 9864,
+        "lines": 128,
+        "estimated_tokens": 2466
+      },
+      "budget": {
+        "bytes": 9870,
+        "chars": 9864,
+        "lines": 128,
+        "estimated_tokens": 2466
+      }
+    },
+    {
+      "target": "codex",
+      "role": "sdd-propose",
+      "name": "effective-context",
+      "paths": [
+        "AGENTS.md",
+        "skills/_shared/sdd-phase-common.md",
+        "skills/sdd-propose/SKILL.md"
+      ],
+      "measured": {
+        "bytes": 9834,
+        "chars": 9828,
+        "lines": 128,
+        "estimated_tokens": 2457
+      },
+      "budget": {
+        "bytes": 9834,
+        "chars": 9828,
+        "lines": 128,
+        "estimated_tokens": 2457
+      }
+    },
+    {
+      "target": "codex",
+      "role": "sdd-spec",
+      "name": "effective-context",
+      "paths": [
+        "AGENTS.md",
+        "skills/_shared/sdd-phase-common.md",
+        "skills/sdd-spec/SKILL.md"
+      ],
+      "measured": {
+        "bytes": 9855,
+        "chars": 9849,
+        "lines": 128,
+        "estimated_tokens": 2463
+      },
+      "budget": {
+        "bytes": 9855,
+        "chars": 9849,
+        "lines": 128,
+        "estimated_tokens": 2463
+      }
+    },
+    {
+      "target": "codex",
+      "role": "sdd-tasks",
+      "name": "effective-context",
+      "paths": [
+        "AGENTS.md",
+        "skills/_shared/sdd-phase-common.md",
+        "skills/sdd-tasks/SKILL.md"
+      ],
+      "measured": {
+        "bytes": 9859,
+        "chars": 9853,
+        "lines": 128,
+        "estimated_tokens": 2464
+      },
+      "budget": {
+        "bytes": 9859,
+        "chars": 9853,
+        "lines": 128,
+        "estimated_tokens": 2464
+      }
+    },
+    {
+      "target": "codex",
+      "role": "sdd-verify",
+      "name": "effective-context",
+      "paths": [
+        "AGENTS.md",
+        "skills/_shared/sdd-phase-common.md",
+        "skills/sdd-verify/SKILL.md"
+      ],
+      "measured": {
+        "bytes": 9964,
+        "chars": 9958,
+        "lines": 128,
+        "estimated_tokens": 2490
+      },
+      "budget": {
+        "bytes": 9964,
+        "chars": 9958,
+        "lines": 128,
+        "estimated_tokens": 2490
+      }
+    },
+    {
+      "target": "opencode",
+      "role": "lore-worker",
+      "name": "referenced-prompt",
+      "paths": [
+        "prompts/lore-worker.md"
+      ],
+      "measured": {
+        "bytes": 5311,
+        "chars": 5311,
+        "lines": 55,
+        "estimated_tokens": 1328
+      },
+      "budget": {
+        "bytes": 5311,
+        "chars": 5311,
+        "lines": 55,
+        "estimated_tokens": 1328
+      }
+    },
+    {
+      "target": "opencode",
+      "role": "orchestrator",
+      "name": "referenced-prompt",
+      "paths": [
+        "prompts/lore.md"
+      ],
+      "measured": {
+        "bytes": 4932,
+        "chars": 4932,
+        "lines": 59,
+        "estimated_tokens": 1233
+      },
+      "budget": {
+        "bytes": 4932,
+        "chars": 4932,
+        "lines": 59,
+        "estimated_tokens": 1233
+      }
+    },
+    {
+      "target": "opencode",
+      "role": "sdd-apply",
+      "name": "referenced-prompt",
+      "paths": [
+        "prompts/sdd/apply.md"
+      ],
+      "measured": {
+        "bytes": 3881,
+        "chars": 3881,
+        "lines": 40,
+        "estimated_tokens": 971
+      },
+      "budget": {
+        "bytes": 3881,
+        "chars": 3881,
+        "lines": 40,
+        "estimated_tokens": 971
+      }
+    },
+    {
+      "target": "opencode",
+      "role": "sdd-archive",
+      "name": "referenced-prompt",
+      "paths": [
+        "prompts/sdd/archive.md"
+      ],
+      "measured": {
+        "bytes": 3742,
+        "chars": 3742,
+        "lines": 39,
+        "estimated_tokens": 936
+      },
+      "budget": {
+        "bytes": 3742,
+        "chars": 3742,
+        "lines": 39,
+        "estimated_tokens": 936
+      }
+    },
+    {
+      "target": "opencode",
+      "role": "sdd-design",
+      "name": "referenced-prompt",
+      "paths": [
+        "prompts/sdd/design.md"
+      ],
+      "measured": {
+        "bytes": 3728,
+        "chars": 3728,
+        "lines": 39,
+        "estimated_tokens": 932
+      },
+      "budget": {
+        "bytes": 3728,
+        "chars": 3728,
+        "lines": 39,
+        "estimated_tokens": 932
+      }
+    },
+    {
+      "target": "opencode",
+      "role": "sdd-explore",
+      "name": "referenced-prompt",
+      "paths": [
+        "prompts/sdd/explore.md"
+      ],
+      "measured": {
+        "bytes": 3763,
+        "chars": 3763,
+        "lines": 39,
+        "estimated_tokens": 941
+      },
+      "budget": {
+        "bytes": 3763,
+        "chars": 3763,
+        "lines": 39,
+        "estimated_tokens": 941
+      }
+    },
+    {
+      "target": "opencode",
+      "role": "sdd-init",
+      "name": "referenced-prompt",
+      "paths": [
+        "prompts/sdd/init.md"
+      ],
+      "measured": {
+        "bytes": 3726,
+        "chars": 3726,
+        "lines": 39,
+        "estimated_tokens": 932
+      },
+      "budget": {
+        "bytes": 3726,
+        "chars": 3726,
+        "lines": 39,
+        "estimated_tokens": 932
+      }
+    },
+    {
+      "target": "opencode",
+      "role": "sdd-propose",
+      "name": "referenced-prompt",
+      "paths": [
+        "prompts/sdd/propose.md"
+      ],
+      "measured": {
+        "bytes": 3722,
+        "chars": 3722,
+        "lines": 39,
+        "estimated_tokens": 931
+      },
+      "budget": {
+        "bytes": 3722,
+        "chars": 3722,
+        "lines": 39,
+        "estimated_tokens": 931
+      }
+    },
+    {
+      "target": "opencode",
+      "role": "sdd-spec",
+      "name": "referenced-prompt",
+      "paths": [
+        "prompts/sdd/spec.md"
+      ],
+      "measured": {
+        "bytes": 3704,
+        "chars": 3704,
+        "lines": 39,
+        "estimated_tokens": 926
+      },
+      "budget": {
+        "bytes": 3704,
+        "chars": 3704,
+        "lines": 39,
+        "estimated_tokens": 926
+      }
+    },
+    {
+      "target": "opencode",
+      "role": "sdd-tasks",
+      "name": "referenced-prompt",
+      "paths": [
+        "prompts/sdd/tasks.md"
+      ],
+      "measured": {
+        "bytes": 3713,
+        "chars": 3713,
+        "lines": 39,
+        "estimated_tokens": 929
+      },
+      "budget": {
+        "bytes": 3713,
+        "chars": 3713,
+        "lines": 39,
+        "estimated_tokens": 929
+      }
+    },
+    {
+      "target": "opencode",
+      "role": "sdd-verify",
+      "name": "referenced-prompt",
+      "paths": [
+        "prompts/sdd/verify.md"
+      ],
+      "measured": {
+        "bytes": 3820,
+        "chars": 3820,
+        "lines": 39,
+        "estimated_tokens": 955
+      },
+      "budget": {
+        "bytes": 3820,
+        "chars": 3820,
+        "lines": 39,
+        "estimated_tokens": 955
+      }
+    },
+    {
+      "target": "pi",
+      "role": "lore-worker",
+      "name": "overlay",
+      "paths": [
+        "agents/lore-managed-lore-worker.md"
+      ],
+      "measured": {
+        "bytes": 5384,
+        "chars": 5384,
+        "lines": 65,
+        "estimated_tokens": 1346
+      },
+      "budget": {
+        "bytes": 5384,
+        "chars": 5384,
+        "lines": 65,
+        "estimated_tokens": 1346
+      }
+    },
+    {
+      "target": "pi",
+      "role": "sdd-apply",
+      "name": "overlay",
+      "paths": [
+        "agents/lore-managed-sdd-apply.md"
+      ],
+      "measured": {
+        "bytes": 3643,
+        "chars": 3643,
+        "lines": 42,
+        "estimated_tokens": 911
+      },
+      "budget": {
+        "bytes": 3643,
+        "chars": 3643,
+        "lines": 42,
+        "estimated_tokens": 911
+      }
+    },
+    {
+      "target": "pi",
+      "role": "sdd-archive",
+      "name": "overlay",
+      "paths": [
+        "agents/lore-managed-sdd-archive.md"
+      ],
+      "measured": {
+        "bytes": 3512,
+        "chars": 3512,
+        "lines": 41,
+        "estimated_tokens": 878
+      },
+      "budget": {
+        "bytes": 3512,
+        "chars": 3512,
+        "lines": 41,
+        "estimated_tokens": 878
+      }
+    },
+    {
+      "target": "pi",
+      "role": "sdd-design",
+      "name": "overlay",
+      "paths": [
+        "agents/lore-managed-sdd-design.md"
+      ],
+      "measured": {
+        "bytes": 3483,
+        "chars": 3483,
+        "lines": 41,
+        "estimated_tokens": 871
+      },
+      "budget": {
+        "bytes": 3483,
+        "chars": 3483,
+        "lines": 41,
+        "estimated_tokens": 871
+      }
+    },
+    {
+      "target": "pi",
+      "role": "sdd-explore",
+      "name": "overlay",
+      "paths": [
+        "agents/lore-managed-sdd-explore.md"
+      ],
+      "measured": {
+        "bytes": 3525,
+        "chars": 3525,
+        "lines": 41,
+        "estimated_tokens": 882
+      },
+      "budget": {
+        "bytes": 3525,
+        "chars": 3525,
+        "lines": 41,
+        "estimated_tokens": 882
+      }
+    },
+    {
+      "target": "pi",
+      "role": "sdd-init",
+      "name": "overlay",
+      "paths": [
+        "agents/lore-managed-sdd-init.md"
+      ],
+      "measured": {
+        "bytes": 3488,
+        "chars": 3488,
+        "lines": 41,
+        "estimated_tokens": 872
+      },
+      "budget": {
+        "bytes": 3488,
+        "chars": 3488,
+        "lines": 41,
+        "estimated_tokens": 872
+      }
+    },
+    {
+      "target": "pi",
+      "role": "sdd-propose",
+      "name": "overlay",
+      "paths": [
+        "agents/lore-managed-sdd-propose.md"
+      ],
+      "measured": {
+        "bytes": 3458,
+        "chars": 3458,
+        "lines": 41,
+        "estimated_tokens": 865
+      },
+      "budget": {
+        "bytes": 3458,
+        "chars": 3458,
+        "lines": 41,
+        "estimated_tokens": 865
+      }
+    },
+    {
+      "target": "pi",
+      "role": "sdd-spec",
+      "name": "overlay",
+      "paths": [
+        "agents/lore-managed-sdd-spec.md"
+      ],
+      "measured": {
+        "bytes": 3473,
+        "chars": 3473,
+        "lines": 41,
+        "estimated_tokens": 869
+      },
+      "budget": {
+        "bytes": 3473,
+        "chars": 3473,
+        "lines": 41,
+        "estimated_tokens": 869
+      }
+    },
+    {
+      "target": "pi",
+      "role": "sdd-tasks",
+      "name": "overlay",
+      "paths": [
+        "agents/lore-managed-sdd-tasks.md"
+      ],
+      "measured": {
+        "bytes": 3479,
+        "chars": 3479,
+        "lines": 41,
+        "estimated_tokens": 870
+      },
+      "budget": {
+        "bytes": 3479,
+        "chars": 3479,
+        "lines": 41,
+        "estimated_tokens": 870
+      }
+    },
+    {
+      "target": "pi",
+      "role": "sdd-verify",
+      "name": "overlay",
+      "paths": [
+        "agents/lore-managed-sdd-verify.md"
+      ],
+      "measured": {
+        "bytes": 3586,
+        "chars": 3586,
+        "lines": 41,
+        "estimated_tokens": 897
+      },
+      "budget": {
+        "bytes": 3586,
+        "chars": 3586,
+        "lines": 41,
+        "estimated_tokens": 897
+      }
+    }
+  ]
+}

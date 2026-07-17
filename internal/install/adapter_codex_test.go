@@ -175,6 +175,39 @@ func TestCodexAdapterRenderWithExtendedSkills(t *testing.T) {
 	if !hasSkillFiles {
 		t.Fatal("Render should produce skill files")
 	}
+	filesByPath := make(map[string]RenderedFile, len(files))
+	for _, file := range files {
+		filesByPath[filepath.ToSlash(file.RelativePath)] = file
+	}
+	proposePath := "skills/sdd-propose/SKILL.md"
+	propose, ok := filesByPath[proposePath]
+	if !ok {
+		t.Fatalf("Render paths = %v, want %s", sortedRenderedPaths(files), proposePath)
+	}
+	if strings.Contains(string(propose.Content), "name: sdd-proposal") {
+		t.Fatalf("%s uses a non-canonical proposal agent name", proposePath)
+	}
+	if _, ok := filesByPath["skills/sdd-proposal/SKILL.md"]; ok {
+		t.Fatalf("Render produced non-canonical proposal path: %v", sortedRenderedPaths(files))
+	}
+	for path, required := range map[string][]string{
+		"skills/lore-worker/SKILL.md": {"You are the canonical Lore repository worker.", "`status`, `summary`, `artifacts`, `files`, `validations`, `risks`, `next_step`, `continuation`, `question`, `options`, `skill_resolution`"},
+		"skills/sdd-apply/SKILL.md":   {"You execute the SDD apply phase.", "set `phase` to `apply`", "`status`, `phase`, `summary`, `artifacts`, `files`, `validations`, `risks`, `next_step`, `continuation`, `question`, `options`, `skill_resolution`"},
+	} {
+		file, ok := filesByPath[path]
+		if !ok {
+			t.Fatalf("Render paths = %v, want %s", sortedRenderedPaths(files), path)
+		}
+		content := string(file.Content)
+		if !containsAll(content, required...) {
+			t.Fatalf("%s omitted canonical role/envelope semantics: %s", path, content)
+		}
+		for _, forbidden := range []string{"lore-pi-runtime", "Pi Lore delegation adapter contract", "runtime injects a response contract"} {
+			if strings.Contains(content, forbidden) {
+				t.Fatalf("%s leaked Pi-only runtime contract %q: %s", path, forbidden, content)
+			}
+		}
+	}
 }
 
 func TestCodexAdapterRenderWithManagedRemoteMCP(t *testing.T) {

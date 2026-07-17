@@ -5,15 +5,6 @@ import (
 	"strings"
 )
 
-type HarnessPrompt string
-
-const (
-	HarnessOpenCode    HarnessPrompt = "opencode"
-	HarnessPi          HarnessPrompt = "pi"
-	HarnessCodex       HarnessPrompt = "codex"
-	HarnessAntigravity HarnessPrompt = "antigravity"
-)
-
 func RenderLoreWorkerPrompt(resolver SkillPathResolver) string {
 	assets := DefaultOperationalAssets().ManagedAgents(resolver)
 	for _, agent := range assets {
@@ -64,15 +55,6 @@ func RenderOpenCodeWorkerPrompt() string {
 		"",
 		"You are the canonical Lore repository worker running as a native OpenCode subagent.",
 		"",
-		"## Final compact JSON envelope",
-		"Return the canonical compact worker JSON envelope described below.",
-		"",
-		"## Native OpenCode role",
-		"- Execute the assigned repository task yourself; do not orchestrate, delegate, or launch other workers.",
-		"- Inspect current status/diffs before editing. Stay bounded to the request and make the smallest safe change set.",
-		"- Run focused validation for touched packages only unless the user asks for broader checks.",
-		"- Use native OpenCode task/question behavior only when the primary agent invokes you; do not emulate Pi runtime delegation.",
-		"",
 		"## Canonical worker contract",
 		strings.TrimRight(workerContract, "\n"),
 	}, "\n"))
@@ -85,28 +67,56 @@ func RenderOpenCodeSDDPrompt(phase PhaseID) (string, error) {
 	}
 	body = projectOpenCodeSDDContract(body, phase)
 	return ensureTrailingNewline(strings.Join([]string{
-		fmt.Sprintf("# SDD %s Prompt for OpenCode", renderSDDPhaseName(phase)),
+		fmt.Sprintf("# SDD %s Prompt for OpenCode", PhaseEnvelopeName(phase)),
 		"",
-		fmt.Sprintf("You execute the SDD `%s` phase as the native OpenCode `%s` subagent.", renderSDDPhaseName(phase), PhaseAgentName(phase)),
+		fmt.Sprintf("You execute the SDD `%s` phase as the native OpenCode `%s` subagent. SDD phase: `%s`.", PhaseEnvelopeName(phase), PhaseAgentName(phase), PhaseEnvelopeName(phase)),
 		"",
 		"## Phase identity",
 		fmt.Sprintf("- Agent identity: `%s`.", PhaseAgentName(phase)),
-		fmt.Sprintf("- SDD phase: `%s` only.", renderSDDPhaseName(phase)),
+		fmt.Sprintf("- SDD phase: `%s` only.", PhaseEnvelopeName(phase)),
 		"",
 		"## SDD graph",
 		"Use the SDD graph: `" + SDDDependencyGraph() + "`.",
 		"Persist the full phase artifact before returning.",
 		"",
 		"## Final compact JSON envelope",
-		"Return the canonical compact SDD JSON envelope described below.",
-		"",
-		"## Native OpenCode role",
-		"- Use OpenCode native task/question/subagent behavior only; do not emulate Pi delegation or plugin runtime behavior.",
-		"- Preserve Lore MCP when available and follow the canonical SDD phase skill contract below.",
+		"Return the canonical compact SDD JSON envelope below.",
 		"",
 		"## Canonical SDD phase contract",
 		strings.TrimRight(body, "\n"),
 	}, "\n")), nil
+}
+
+// ProjectNativeHarnessManagedAgentPrompt projects the canonical Pi-authored
+// managed-agent body for harnesses that do not consume Pi runtime contracts.
+// It preserves the portable role and envelope obligations while removing
+// Pi-runtime ownership and injected-contract assertions.
+func ProjectNativeHarnessManagedAgentPrompt(harness HarnessPrompt, canonical string) string {
+	switch harness {
+	case HarnessCodex, HarnessAntigravity:
+		return projectNativeHarnessContract(canonical)
+	default:
+		return ensureTrailingNewline(canonical)
+	}
+}
+
+func projectNativeHarnessContract(canonical string) string {
+	contract := strings.TrimRight(canonical, "\n")
+	contract = replaceMarkdownSection(contract, "## Response contract (Pi Lore delegation adapter contract)", strings.Join([]string{
+		"## Final compact JSON envelope",
+		"Return ONLY one compact JSON object with exactly these keys: " + EnvelopeFieldList(WorkerEnvelopeFields) + ".",
+		"- `status`: `completed` | `needs_user_input` | `failed` (final only; Do not use `running`).",
+		"- `summary`: one compact operational line, <= 280 chars.",
+		"- `artifacts`, `files`, `validations`, `risks`, and `options`: string arrays.",
+		"- `next_step`, `continuation`, and `question`: string or null.",
+		"- `skill_resolution`: `injected` | `fallback-registry` | `fallback-path` | `none`.",
+		"- Persist or reference long details in artifacts; do not embed long logs, diffs, or narratives in the envelope itself.",
+		"- The canonical envelope is a repository handoff format; do not use `next`, `executive_summary`, or `next_recommended` as response-contract fields.",
+	}, "\n"))
+	contract = strings.ReplaceAll(contract, "This is the Pi Lore delegation adapter contract.", "This is the canonical compact SDD envelope.")
+	contract = strings.ReplaceAll(contract, "## Runtime ownership\n"+RuntimeOwnershipGuidance()+"\n"+RepositoryMarkdownRuntimeBoundary(), "## Runtime boundary\n"+RepositoryMarkdownRuntimeBoundary())
+	contract = strings.ReplaceAll(contract, RuntimeOwnershipGuidance()+"\n"+RepositoryMarkdownRuntimeBoundary(), RepositoryMarkdownRuntimeBoundary())
+	return ensureTrailingNewline(contract)
 }
 
 func projectOpenCodeWorkerContract(canonical string) string {
@@ -127,7 +137,7 @@ func projectOpenCodeWorkerContract(canonical string) string {
 		"- `skill_resolution`: `injected` | `fallback-registry` | `fallback-path` | `none`.",
 		"- This is the OpenCode native subagent handoff envelope. Do not use `next`, `executive_summary`, or `next_recommended` as response-contract fields.",
 	}, "\n"))
-	contract = strings.ReplaceAll(contract, "## Runtime ownership\n"+RuntimeOwnershipGuidance(), "## Native OpenCode runtime ownership\n"+OpenCodeRuntimeOwnershipGuidance())
+	contract = strings.ReplaceAll(contract, "## Runtime ownership\n"+RuntimeOwnershipGuidance(), "## Native OpenCode runtime ownership\n"+OpenCodeRuntimeContractGuidance())
 	return contract
 }
 
@@ -135,11 +145,11 @@ func projectOpenCodeSDDContract(body string, phase PhaseID) string {
 	phaseSkillPath := openCodePromptSkillPathResolver{}.ResolveSkillRef(Skill(PhaseAgentName(phase)))
 	sharedSkillPath := openCodePromptSkillPathResolver{}.ResolveSkillRef(SharedSkill("_shared/sdd-phase-common"))
 	body = strings.ReplaceAll(body,
-		fmt.Sprintf("Before substantial work, load and follow exactly:\n- `%s`\n- `%s`", phaseSkillPath, sharedSkillPath),
-		fmt.Sprintf("Before substantial work, use this prompt as the self-contained OpenCode SDD contract and load the phase skill when skill loading is available:\n- `%s`\n\nThe phase obligations, Lore MCP rules, and final envelope are inlined here; do not reference a separate shared phase-common file.", phaseSkillPath),
+		fmt.Sprintf("You execute the SDD %s phase.\nBefore work, MUST load and follow the resolved phase skill; resolve project-local before Lore-wide:\n- `%s`\n- `%s`", PhaseEnvelopeName(phase), phaseSkillPath, sharedSkillPath),
+		fmt.Sprintf("SDD %s. Before work, MUST load and follow the resolved phase skill; resolve project-local before Lore-wide:\n- `%s`\n\nPhase obligations, Lore MCP rules, and the final envelope are inlined here; do not reference a shared phase-common file.", PhaseEnvelopeName(phase), phaseSkillPath),
 	)
 	body = strings.ReplaceAll(body,
-		"This is the Pi Lore delegation adapter contract; Codex/Antigravity do not consume this exact JSON shape.",
+		"This is the Pi Lore delegation adapter contract.",
 		"This is the compact OpenCode SDD handoff envelope for native OpenCode subagents.",
 	)
 	body = strings.ReplaceAll(body, RuntimeOwnershipGuidance(), OpenCodeRuntimeOwnershipGuidance())
