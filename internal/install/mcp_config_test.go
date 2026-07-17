@@ -2,6 +2,7 @@ package install
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -71,9 +72,37 @@ func TestPiAdapterRenderMaterializesBearerTokenPlaintext(t *testing.T) {
 	if !strings.Contains(mcpContent, `"context7"`) || !strings.Contains(mcpContent, Context7MCPRemoteURL) {
 		t.Fatalf("mcp.json missing Context7 server URL %q; got:\n%s", Context7MCPRemoteURL, mcpContent)
 	}
+	if !strings.Contains(mcpContent, `"lifecycle": "keep-alive"`) {
+		t.Fatalf("mcp.json Context7 block missing lifecycle keep-alive; got:\n%s", mcpContent)
+	}
 	context7Index := strings.Index(mcpContent, `"context7"`)
 	if context7Index >= 0 && strings.Contains(mcpContent[context7Index:], "Authorization") {
 		t.Fatalf("mcp.json Context7 block unexpectedly contains Authorization header; got:\n%s", mcpContent)
+	}
+}
+
+func TestPiMCPAdditiveMergeAddsContext7KeepAliveOnRerun(t *testing.T) {
+	existing := []byte(`{"mcpServers":{"lore":{"url":"https://old.example/v1/mcp","headers":{"Authorization":"Bearer old-token"}},"context7":{"url":"https://mcp.context7.com/mcp"}},"userOwned":true}`)
+	desired := []byte(`{"mcpServers":{"context7":{"url":"https://mcp.context7.com/mcp","lifecycle":"keep-alive"}}}`)
+	merged, err := mergeJSONAdditive(existing, desired)
+	if err != nil {
+		t.Fatalf("mergeJSONAdditive error = %v, want nil", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(merged, &payload); err != nil {
+		t.Fatalf("Unmarshal merged mcp.json: %v", err)
+	}
+	servers := payload["mcpServers"].(map[string]any)
+	context7 := servers[Context7MCPServerName].(map[string]any)
+	if got := context7["lifecycle"]; got != "keep-alive" {
+		t.Fatalf("mcpServers.context7.lifecycle = %v, want keep-alive; merged:\n%s", got, merged)
+	}
+	if _, present := context7["headers"]; present {
+		t.Fatalf("mcpServers.context7 unexpectedly carries headers: %v", context7)
+	}
+	if payload["userOwned"] != true {
+		t.Fatalf("merged mcp.json dropped user-owned key; merged:\n%s", merged)
 	}
 }
 
