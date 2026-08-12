@@ -13,13 +13,14 @@ type CapabilityID string
 type MergeMode string
 
 const (
-	CapabilityAgentPack      CapabilityID = "agent-pack"
-	CapabilityPiExtensions   CapabilityID = "pi-extensions"
-	CapabilityPrompt         CapabilityID = "prompt"
-	CapabilitySkills         CapabilityID = "skills"
-	CapabilityLoreServerMCP  CapabilityID = "lore-server-mcp"
-	CapabilityContext7MCP    CapabilityID = "context7-mcp"
-	CapabilityExtendedSkills CapabilityID = "extended-skills"
+	CapabilityAgentPack               CapabilityID = "agent-pack"
+	CapabilityPiExtensions            CapabilityID = "pi-extensions"
+	CapabilityPrompt                  CapabilityID = "prompt"
+	CapabilitySkills                  CapabilityID = "skills"
+	CapabilityLoreServerMCP           CapabilityID = "lore-server-mcp"
+	CapabilityContext7MCP             CapabilityID = "context7-mcp"
+	CapabilityExtendedSkills          CapabilityID = "extended-skills"
+	CapabilityBoundedReviewProjection CapabilityID = "bounded-review-projection"
 
 	MergeModeReplace      MergeMode = "replace"
 	MergeModeAdditiveJSON MergeMode = "additive-json"

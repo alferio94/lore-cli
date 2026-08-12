@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "candidate_status": "compatible-candidate-staged",
+  "runtime_activation": "disabled",
+  "runtime_dynamic_prompt_cost": "unavailable",
+  "existing_installation_change": "reinstall-or-regeneration-required",
+  "cases": [
+    {
+      "name": "exact_runtime_handshake_and_digest_vectors",
+      "expected": "pass"
+    },
+    {
+      "name": "complete_judge_fix_pair_and_manifest_coherence",
+      "expected": "pass"
+    },
+    {
+      "name": "authority_shaped_child_result_vectors",
+      "expected": "pass"
+    },
+    {
+      "name": "semantic_invariant_parity",
+      "expected": "pass"
+    },
+    {
+      "name": "self_contained_fallback_requires_fresh_blind_rejudgment",
+      "expected": "pass"
+    },
+    {
+      "name": "independent_schema_inclusive_static_asset_reduction",
+      "expected": "pass"
+    },
+    {
+      "name": "staged_candidate_is_not_runtime_active",
+      "expected": "pass"
+    },
+    {
+      "name": "pi_only_paths_metadata_and_non_pi_isolation",
+      "expected": "pass"
+    },
+    {
+      "name": "no_opencode_codex_or_antigravity_native_claims",
+      "expected": "pass"
+    },
+    {
+      "name": "install_reinstall_upgrade_rollback_and_failure_preserve_fallback",
+      "expected": "pass"
+    },
+    {
+      "name": "missing_mismatched_or_partial_pair_falls_back",
+      "expected": "pass"
+    },
+    {
+      "name": "static_assets_exclude_machine_paths_secrets_and_dynamic_user_content",
+      "expected": "pass"
+    },
+    {
+      "name": "runtime_discovery_is_absent_and_requires_explicit_follow_up",
+      "expected": "pass"
+    }
+  ]
+}

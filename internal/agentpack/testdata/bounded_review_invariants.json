@@ -1,0 +1,236 @@
+{
+  "version": 1,
+  "runtime_source": "lore-pi-runtime/src/runtime/judgment-review-config.ts@c48d306f66f125903aca93f5969747ff6e6e5605",
+  "scope": "static Pi Judge/Fix handshake metadata; no activation or installation behavior",
+  "canonical": {
+    "family": "judgment-day",
+    "projection_id": "lore.judgment-day.bounded-review",
+    "contract_version": "1.0.0",
+    "harness": "pi",
+    "result_schema_version": "judgment-review-result/v1",
+    "static_contract_version": "judgment-day-static/v1",
+    "static_contract_digest": "cc888a92b03cc2f4bed8abd0a5efe1bd010d94d1ff6a56cfbeda82c65ed57283",
+    "manifest_revision": 1,
+    "roles": [
+      "judge",
+      "fix"
+    ],
+    "capabilities": [
+      "native-session-v1",
+      "judge-v1",
+      "fix-v1",
+      "severity-semantics-v1",
+      "blind-pair-v1",
+      "approval-allowlist-v1",
+      "mandatory-rejudgment-v1",
+      "privacy-safe-metrics-v1"
+    ],
+    "severity_vocabulary": [
+      "CRITICAL",
+      "WARNING (real)",
+      "WARNING (theoretical)",
+      "SUGGESTION"
+    ],
+    "fallback": false
+  },
+  "compatibility_cases": [
+    {
+      "name": "canonical_pair",
+      "class": "accepted",
+      "mutation": "none",
+      "expected": "compatible"
+    },
+    {
+      "name": "projection_id_content_relaxed",
+      "class": "accepted_runtime_relaxed",
+      "target": "fix",
+      "field": "projection_id",
+      "value": "runtime-accepted-id",
+      "expected": "compatible",
+      "note": "The pinned runtime type-checks this field but does not require canonical content equality; lore-cli still emits the canonical projection_id."
+    },
+    {
+      "name": "projection_id_non_string",
+      "class": "rejected",
+      "target": "fix",
+      "field": "projection_id",
+      "value_type": "number",
+      "expected": "malformed",
+      "note": "Runtime relaxation is content-only: projection_id remains a string field."
+    },
+    {
+      "name": "missing_judge",
+      "class": "rejected",
+      "mutation": "remove_judge",
+      "expected": "partial_asset"
+    },
+    {
+      "name": "missing_fix",
+      "class": "rejected",
+      "mutation": "remove_fix",
+      "expected": "partial_asset"
+    },
+    {
+      "name": "duplicated_role",
+      "class": "rejected",
+      "target": "fix",
+      "field": "role",
+      "value": "judge",
+      "expected": "malformed"
+    },
+    {
+      "name": "version_skew",
+      "class": "rejected",
+      "target": "fix",
+      "field": "contract_version",
+      "value": "1.1.0",
+      "expected": "version_skew"
+    },
+    {
+      "name": "unsupported_version",
+      "class": "rejected",
+      "target": "both",
+      "field": "contract_version",
+      "value": "2.0.0",
+      "expected": "unsupported_version"
+    },
+    {
+      "name": "capability_superset_relaxed",
+      "class": "accepted_runtime_relaxed",
+      "target": "fix",
+      "field": "capabilities",
+      "mutation": "append:future-capability-v1",
+      "expected": "compatible",
+      "note": "The pinned runtime accepts unique capability supersets; lore-cli continues to emit the closed canonical capability list."
+    },
+    {
+      "name": "missing_capability",
+      "class": "rejected",
+      "target": "fix",
+      "field": "capabilities",
+      "mutation": "remove:judge-v1",
+      "expected": "missing_capability"
+    },
+    {
+      "name": "duplicated_capability",
+      "class": "rejected",
+      "target": "fix",
+      "field": "capabilities",
+      "mutation": "duplicate:native-session-v1",
+      "expected": "malformed"
+    },
+    {
+      "name": "missing_schema",
+      "class": "rejected",
+      "target": "fix",
+      "field": "result_schema_version",
+      "value": "",
+      "expected": "malformed"
+    },
+    {
+      "name": "duplicated_severity",
+      "class": "rejected",
+      "target": "fix",
+      "field": "severity_vocabulary",
+      "mutation": "duplicate:CRITICAL",
+      "expected": "malformed"
+    },
+    {
+      "name": "wrong_schema",
+      "class": "rejected",
+      "target": "fix",
+      "field": "result_schema_version",
+      "value": "wrong-schema",
+      "expected": "malformed"
+    },
+    {
+      "name": "severity_order_skew",
+      "class": "rejected",
+      "target": "fix",
+      "field": "severity_vocabulary",
+      "mutation": "swap:0:1",
+      "expected": "malformed"
+    },
+    {
+      "name": "severity_vocabulary_skew",
+      "class": "rejected",
+      "target": "fix",
+      "field": "severity_vocabulary",
+      "mutation": "replace:3:INFO",
+      "expected": "malformed"
+    },
+    {
+      "name": "missing_digest",
+      "class": "rejected",
+      "target": "fix",
+      "field": "static_contract_digest",
+      "value": "",
+      "expected": "malformed"
+    },
+    {
+      "name": "malformed_digest",
+      "class": "rejected",
+      "target": "fix",
+      "field": "static_contract_digest",
+      "value": "not-a-digest",
+      "expected": "malformed"
+    },
+    {
+      "name": "stale_digest",
+      "class": "rejected",
+      "target": "fix",
+      "field": "static_contract_digest",
+      "value": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "expected": "stale_digest"
+    },
+    {
+      "name": "missing_target",
+      "class": "rejected",
+      "target": "fix",
+      "field": "harness",
+      "value": "",
+      "expected": "target_mismatch"
+    },
+    {
+      "name": "wrong_target",
+      "class": "rejected",
+      "target": "fix",
+      "field": "harness",
+      "value": "codex",
+      "expected": "target_mismatch"
+    },
+    {
+      "name": "fallback_true",
+      "class": "rejected",
+      "target": "fix",
+      "field": "fallback",
+      "value": true,
+      "expected": "fallback_only"
+    },
+    {
+      "name": "manifest_revision_skew",
+      "class": "rejected",
+      "target": "fix",
+      "field": "manifest_revision",
+      "value": 2,
+      "expected": "stale_manifest"
+    },
+    {
+      "name": "malformed_metadata_unknown_field",
+      "class": "rejected",
+      "target": "judge",
+      "field": "keys",
+      "mutation": "append:unexpected",
+      "expected": "malformed"
+    },
+    {
+      "name": "malformed_metadata_missing_field",
+      "class": "rejected",
+      "target": "judge",
+      "field": "keys",
+      "mutation": "remove:manifest_revision",
+      "expected": "malformed"
+    }
+  ],
+  "result_validator_source": "lore-pi-runtime/src/runtime/judgment-review-envelopes.ts@c48d306f66f125903aca93f5969747ff6e6e5605"
+}

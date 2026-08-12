@@ -13,6 +13,8 @@ const (
 	ComponentPiExtensions     ComponentID = "pi-extensions"
 	ComponentExtendedSkills   ComponentID = "extended-skills"
 	ComponentCodexAgentConfig ComponentID = "codex-agent-config"
+	// ComponentBoundedReviewProjection installs disabled Pi-only Judge/Fix release data.
+	ComponentBoundedReviewProjection ComponentID = "bounded-review-projection"
 
 	Context7MCPServerName = "context7"
 	Context7MCPRemoteURL  = "https://mcp.context7.com/mcp"
@@ -106,6 +108,12 @@ func ComponentCatalog() map[ComponentID]Component {
 				TargetCodex:       true,
 			},
 		},
+		ComponentBoundedReviewProjection: {
+			ID:               ComponentBoundedReviewProjection,
+			Title:            "Bounded Review Projection",
+			Description:      "Disabled Pi-only bounded Judge/Fix release metadata; it never enables runtime mode.",
+			DefaultForTarget: map[TargetID]bool{TargetPi: true},
+		},
 		ComponentCodexAgentConfig: {
 			ID:          ComponentCodexAgentConfig,
 			Title:       "Codex Agent Config",
@@ -129,7 +137,7 @@ func ComponentCatalog() map[ComponentID]Component {
 
 func DefaultComponentSelection(target TargetID) []ComponentID {
 	catalog := ComponentCatalog()
-	ordered := []ComponentID{ComponentCorePack, ComponentPiExtensions, ComponentLoreServerMCP, ComponentContext7MCP, ComponentExtendedSkills, ComponentOpenCodePlugins}
+	ordered := []ComponentID{ComponentCorePack, ComponentPiExtensions, ComponentLoreServerMCP, ComponentContext7MCP, ComponentExtendedSkills, ComponentBoundedReviewProjection, ComponentOpenCodePlugins}
 	supported := supportedComponentsForTarget(target)
 	selection := make([]ComponentID, 0, len(ordered))
 	for _, id := range ordered {

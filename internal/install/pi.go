@@ -332,6 +332,18 @@ func (s Service) InstallPi(req PiInstallRequest) (PiInstallResult, error) {
 	}
 	manifest.ManagedFiles = buildManagedFileRecords(rendered, validatedContents)
 
+	if containsComponent(components, ComponentBoundedReviewProjection) {
+		if err := ApplyBoundedReviewRelease(layout); err != nil {
+			return PiInstallResult{}, err
+		}
+		manifest.BoundedReviewRelease = &BoundedReviewReleaseRecord{
+			Version: agentpack.BoundedReviewContractVersion, Revision: agentpack.BoundedReviewManifestRevision,
+			CurrentPath:  filepath.ToSlash(filepath.Join(boundedReviewReleaseRootRelativePath, "current.json")),
+			ManifestPath: filepath.ToSlash(filepath.Join("releases", fmt.Sprintf("%s-r%d", agentpack.BoundedReviewContractVersion, agentpack.BoundedReviewManifestRevision), "manifest.json")),
+			Status:       boundedReviewReleaseStatusCompatibleCandidateStaged, RuntimeActive: false,
+		}
+	}
+
 	existingManifest, _ := LoadManifest(layout.ManifestPath)
 	managedOverlayRecords, managedOverlaySummary, err := applyManagedAgentOverlays(layout, req, existingManifest, backupRoot)
 	if err != nil {

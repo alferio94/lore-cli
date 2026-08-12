@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "algorithm": "sha-256",
+  "encoding": "utf-8",
+  "hex_encoding": "lowercase",
+  "runtime_source": "lore-pi-runtime/src/runtime/judgment-review-config.ts@c48d306f66f125903aca93f5969747ff6e6e5605",
+  "semantics": "Node crypto.createHash(\"sha256\").update(version).digest(\"hex\"): UTF-8 bytes of the exact version string only; no BOM, newline, normalization, JSON, ordering, target, diff, or dynamic prompt material.",
+  "vectors": [
+    {
+      "name": "canonical_static_contract_version",
+      "input": "judgment-day-static/v1",
+      "input_utf8_hex": "6a7564676d656e742d6461792d7374617469632f7631",
+      "sha256": "cc888a92b03cc2f4bed8abd0a5efe1bd010d94d1ff6a56cfbeda82c65ed57283",
+      "matches_canonical": true
+    },
+    {
+      "name": "newline_drift",
+      "input": "judgment-day-static/v1\n",
+      "input_utf8_hex": "6a7564676d656e742d6461792d7374617469632f76310a",
+      "sha256": "133843c66aa2f4633aa2695911ff068156010e4bac0d00aecd02f6a3f7db95c7",
+      "matches_canonical": false
+    },
+    {
+      "name": "unicode_drift",
+      "input": "judgment-day-static/v1é",
+      "input_utf8_hex": "6a7564676d656e742d6461792d7374617469632f7631c3a9",
+      "sha256": "72623dd52c194020e21eee8709d508b2217d7d4bac5015c7b4eba88ba5be8254",
+      "matches_canonical": false
+    },
+    {
+      "name": "order_drift",
+      "input": "static/judgment-day/v1",
+      "input_utf8_hex": "7374617469632f6a7564676d656e742d6461792f7631",
+      "sha256": "10a4d09d37dddab96efcd8cb38c094809761b71987052d99f1218e53f6e17fce",
+      "matches_canonical": false
+    }
+  ]
+}

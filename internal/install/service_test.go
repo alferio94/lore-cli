@@ -568,9 +568,10 @@ func TestInstallPiWritesManagedFilesBackupsAndManifest(t *testing.T) {
 	if len(result.Manifest.ManagedAgentOverlays) != 10 {
 		t.Fatalf("len(Manifest.ManagedAgentOverlays) = %d, want 10", len(result.Manifest.ManagedAgentOverlays))
 	}
-	// Default components: core-pack + lore-server-mcp + context7-mcp + extended-skills (not pi-extensions).
-	if got := result.Manifest.Components; !equalComponentIDs(got, []ComponentID{ComponentCorePack, ComponentLoreServerMCP, ComponentContext7MCP, ComponentExtendedSkills}) {
-		t.Fatalf("Manifest.Components = %v, want core-pack + lore-server-mcp + context7-mcp + extended-skills (hosted MCP default)", got)
+	// Default components include the disabled/staged Pi-only bounded-review projection;
+	// it adds release data only and never enables runtime discovery.
+	if got := result.Manifest.Components; !equalComponentIDs(got, []ComponentID{ComponentCorePack, ComponentLoreServerMCP, ComponentContext7MCP, ComponentExtendedSkills, ComponentBoundedReviewProjection}) {
+		t.Fatalf("Manifest.Components = %v, want core-pack + lore-server-mcp + context7-mcp + extended-skills + bounded-review-projection", got)
 	}
 	for i, want := range layout.ManagedFiles {
 		managed := result.Manifest.ManagedFiles[i]

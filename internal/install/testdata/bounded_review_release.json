@@ -1,0 +1,17 @@
+{
+  "version": "1.0.0",
+  "revision": 1,
+  "release_path": "lore/judgment-review/releases/1.0.0-r1",
+  "current_path": "lore/judgment-review/current.json",
+  "roles": [
+    "judge",
+    "fix"
+  ],
+  "static_contract_version": "judgment-day-static/v1",
+  "static_contract_digest": "cc888a92b03cc2f4bed8abd0a5efe1bd010d94d1ff6a56cfbeda82c65ed57283",
+  "runtime_mode": "disabled",
+  "judge_body_bytes": 1021,
+  "judge_body_sha256": "d40ef9f8a9700bcabb15e5c317a8a21ea9de5864b715806c7b3f0964ad6d86f5",
+  "fix_body_bytes": 977,
+  "fix_body_sha256": "6acbd9d42c8c309906125a07d9cbf59f2b0ba88eac16aa450502b7dc5c500906"
+}

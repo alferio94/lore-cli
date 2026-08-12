@@ -1,0 +1,149 @@
+{
+  "version": 1,
+  "authoritative_measurement": "internal/agentpack/testdata/bounded_review_measurements.json",
+  "authoritative_budget": "internal/agentpack/testdata/bounded_review_budgets.json",
+  "final_decision": "compatible-candidate-staged",
+  "runtime_active": false,
+  "roles": [
+    {
+      "role": "judge",
+      "baseline_bytes": 1429,
+      "candidate_bytes": 1021,
+      "replacement_schema_bytes": 450,
+      "net_reduction_bytes": 408,
+      "baseline_chars": 1425,
+      "candidate_chars": 1021,
+      "replacement_schema_chars": 450,
+      "net_reduction_chars": 404,
+      "reduction_percent": 28.350877192982455,
+      "semantic": true,
+      "invariant": true,
+      "handshake": true
+    },
+    {
+      "role": "fix",
+      "baseline_bytes": 984,
+      "candidate_bytes": 977,
+      "replacement_schema_bytes": 439,
+      "net_reduction_bytes": 7,
+      "baseline_chars": 980,
+      "candidate_chars": 977,
+      "replacement_schema_chars": 439,
+      "net_reduction_chars": 3,
+      "reduction_percent": 0.30612244897959184,
+      "semantic": true,
+      "invariant": true,
+      "handshake": true
+    }
+  ],
+  "cases": [
+    {
+      "name": "positive_both_roles",
+      "judge_net_reduction": 408,
+      "fix_net_reduction": 7,
+      "semantic": true,
+      "invariant": true,
+      "handshake": true,
+      "pair_install_rollback": true,
+      "fallback": true,
+      "cross_harness_isolation": true,
+      "expected_adopted": true
+    },
+    {
+      "name": "zero_judge_reduction",
+      "judge_net_reduction": 0,
+      "fix_net_reduction": 7,
+      "semantic": true,
+      "invariant": true,
+      "handshake": true,
+      "pair_install_rollback": true,
+      "fallback": true,
+      "cross_harness_isolation": true,
+      "expected_adopted": false
+    },
+    {
+      "name": "negative_fix_reduction",
+      "judge_net_reduction": 408,
+      "fix_net_reduction": -1,
+      "semantic": true,
+      "invariant": true,
+      "handshake": true,
+      "pair_install_rollback": true,
+      "fallback": true,
+      "cross_harness_isolation": true,
+      "expected_adopted": false
+    },
+    {
+      "name": "one_role_only",
+      "judge_net_reduction": 408,
+      "fix_net_reduction": 0,
+      "semantic": true,
+      "invariant": true,
+      "handshake": true,
+      "pair_install_rollback": true,
+      "fallback": true,
+      "cross_harness_isolation": true,
+      "expected_adopted": false
+    },
+    {
+      "name": "invariant_fail",
+      "judge_net_reduction": 408,
+      "fix_net_reduction": 7,
+      "semantic": true,
+      "invariant": false,
+      "handshake": true,
+      "pair_install_rollback": true,
+      "fallback": true,
+      "cross_harness_isolation": true,
+      "expected_adopted": false
+    },
+    {
+      "name": "handshake_fail",
+      "judge_net_reduction": 408,
+      "fix_net_reduction": 7,
+      "semantic": true,
+      "invariant": true,
+      "handshake": false,
+      "pair_install_rollback": true,
+      "fallback": true,
+      "cross_harness_isolation": true,
+      "expected_adopted": false
+    },
+    {
+      "name": "mixed_version",
+      "judge_net_reduction": 408,
+      "fix_net_reduction": 7,
+      "semantic": true,
+      "invariant": true,
+      "handshake": true,
+      "pair_install_rollback": false,
+      "fallback": true,
+      "cross_harness_isolation": true,
+      "expected_adopted": false
+    },
+    {
+      "name": "missing_role",
+      "judge_net_reduction": 0,
+      "fix_net_reduction": 7,
+      "semantic": true,
+      "invariant": true,
+      "handshake": true,
+      "pair_install_rollback": false,
+      "fallback": true,
+      "cross_harness_isolation": true,
+      "expected_adopted": false
+    },
+    {
+      "name": "install_coherence_fail",
+      "judge_net_reduction": 408,
+      "fix_net_reduction": 7,
+      "semantic": true,
+      "invariant": true,
+      "handshake": true,
+      "pair_install_rollback": false,
+      "fallback": true,
+      "cross_harness_isolation": true,
+      "expected_adopted": false
+    }
+  ]
+}

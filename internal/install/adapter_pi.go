@@ -52,6 +52,10 @@ func defaultPiAdapter() HarnessAdapter {
 				Description: "Optional Pi-native Lore extension bundle (lore-footer UI status only). The deprecated lore-memory extension has been removed and is not available.",
 				Optional:    true,
 			},
+			CapabilityBoundedReviewProjection: {
+				ID: CapabilityBoundedReviewProjection, Component: ComponentBoundedReviewProjection,
+				Description: "Install disabled, staged Pi-only bounded-review Judge/Fix metadata.", EnabledByDefault: true,
+			},
 			CapabilityExtendedSkills: {
 				ID:               CapabilityExtendedSkills,
 				Component:        ComponentExtendedSkills,

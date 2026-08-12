@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/alferio94/lore-cli/internal/agentpack"
 )
 
 type ManagedFileRecord struct {
@@ -20,6 +22,17 @@ type ManagedAgentOverlayRecord struct {
 	AgentName   string `json:"agent_name"`
 	Path        string `json:"path"`
 	ContentHash string `json:"content_hash"`
+}
+
+const boundedReviewReleaseStatusCompatibleCandidateStaged = "compatible-candidate-staged"
+
+type BoundedReviewReleaseRecord struct {
+	Version       string `json:"version"`
+	Revision      int    `json:"revision"`
+	CurrentPath   string `json:"current_path"`
+	ManifestPath  string `json:"manifest_path"`
+	Status        string `json:"status"`
+	RuntimeActive bool   `json:"runtime_active"`
 }
 
 type Manifest struct {
@@ -36,6 +49,7 @@ type Manifest struct {
 	InstalledAt          string                      `json:"installed_at"`
 	CLIVersion           string                      `json:"lore_cli_version"`
 	FullPiBackup         *FullPiBackupResult         `json:"full_pi_backup,omitempty"`
+	BoundedReviewRelease *BoundedReviewReleaseRecord `json:"bounded_review_release,omitempty"`
 }
 
 type legacyManifest struct {
@@ -133,6 +147,12 @@ func upgradeLegacyManifest(legacy legacyManifest) Manifest {
 func (m Manifest) Validate(layout PiLayout) error {
 	if err := m.ValidateForLayout(layout.HarnessLayout(), layout.ManagedFiles, filepath.Join(layout.AgentDir, "backups")); err != nil {
 		return err
+	}
+	if m.BoundedReviewRelease != nil {
+		record := m.BoundedReviewRelease
+		if record.Version != agentpack.BoundedReviewContractVersion || record.Revision < 1 || record.CurrentPath != filepath.ToSlash(filepath.Join(boundedReviewReleaseRootRelativePath, "current.json")) || !strings.HasPrefix(record.ManifestPath, "releases/") || filepath.IsAbs(record.ManifestPath) || record.Status != boundedReviewReleaseStatusCompatibleCandidateStaged || record.RuntimeActive {
+			return fmt.Errorf("invalid bounded_review_release metadata")
+		}
 	}
 	if m.FullPiBackup != nil {
 		if filepath.Clean(m.FullPiBackup.SourcePath) != filepath.Clean(layout.PiDir) {

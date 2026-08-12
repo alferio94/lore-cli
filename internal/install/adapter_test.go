@@ -12,8 +12,8 @@ import (
 
 func TestDefaultComponentSelectionUsesHostedMCPForPiCodexAndAntigravity(t *testing.T) {
 	// Pi default: hosted Lore MCP via pi-mcp-adapter (lore-server-mcp) plus Context7, not lore-memory extensions.
-	if got := DefaultComponentSelection(TargetPi); !equalComponentIDs(got, []ComponentID{ComponentCorePack, ComponentLoreServerMCP, ComponentContext7MCP, ComponentExtendedSkills}) {
-		t.Fatalf("DefaultComponentSelection(pi) = %v, want core-pack + lore-server-mcp + context7-mcp + extended-skills (hosted MCP default)", got)
+	if got := DefaultComponentSelection(TargetPi); !equalComponentIDs(got, []ComponentID{ComponentCorePack, ComponentLoreServerMCP, ComponentContext7MCP, ComponentExtendedSkills, ComponentBoundedReviewProjection}) {
+		t.Fatalf("DefaultComponentSelection(pi) = %v, want core-pack + lore-server-mcp + context7-mcp + extended-skills + bounded-review-projection (hosted MCP default)", got)
 	}
 	// Antigravity: lore-server-mcp + context7-mcp + core-pack + extended-skills.
 	if got := DefaultComponentSelection(TargetAntigravity); !equalComponentIDs(got, []ComponentID{ComponentCorePack, ComponentLoreServerMCP, ComponentContext7MCP, ComponentExtendedSkills}) {
