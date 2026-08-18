@@ -1,0 +1,64 @@
+name: profile-store
+
+on:
+  push:
+    branches: ['**']
+    paths:
+      - 'internal/install/profile_store*.go'
+      - '.github/workflows/profile-store.yml'
+  pull_request:
+    paths:
+      - 'internal/install/profile_store*.go'
+      - '.github/workflows/profile-store.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  runtime:
+    name: runtime-${{ matrix.goos }}-amd64
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {goos: linux, runner: ubuntu-latest}
+          - {goos: darwin, runner: macos-14}
+          - {goos: windows, runner: windows-latest}
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Format and diff checks
+        shell: bash
+        run: |
+          test -z "$(gofmt -l internal/install/profile_store*.go)"
+          git diff --check
+      - name: Static analysis
+        run: go vet ./internal/install
+      - name: Focused runtime tests
+        run: go test -count=1 ./internal/install -run ProfileStore
+      - name: Focused race tests
+        run: go test -race -count=1 ./internal/install -run ProfileStore
+
+  cross-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Vet and compile all supported targets without artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64 windows/arm64; do
+            GOOS=${target%/*} GOARCH=${target#*/} CGO_ENABLED=0 go vet ./internal/install
+            output="$RUNNER_TEMP/profile-store-${target//\//-}.test"
+            GOOS=${target%/*} GOARCH=${target#*/} CGO_ENABLED=0 go test -c -o "$output" ./internal/install
+            rm -f "$output"
+          done
+          test -z "$(find "$RUNNER_TEMP" -maxdepth 1 -name 'profile-store-*.test' -print -quit)"
