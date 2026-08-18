@@ -295,10 +295,17 @@ func TestProfileStoreAuthorityBusyTimeoutAndFailClosedValidation(t *testing.T) {
 func TestProfileStoreAuthorityReleasesAfterWorkFailure(t *testing.T) {
 	canonical, _ := canonicalStorePath("physical-parent:42/leaf", nil)
 	platform := &fakeStorePlatform{canonical: canonical, auth: &fakeStoreAuthority{}}
+	// The raw cleanup cause must never replace or leak through the typed work error.
+	cleanupErr := errors.New("injected release failure")
+	platform.auth.releaseErr = cleanupErr
 	workErr := newProfileStoreError(CodeProfileConflict, "projects[].profile_id", false)
 	err := withStoreAuthority(platform, "/safe", CommitOptions{}, &fakeMonotonicWaiter{}, func(authority) error { return workErr })
 	if !errors.Is(err, CodeProfileConflict) || platform.auth.releases != 1 || platform.auth.held {
 		t.Fatalf("work failure lifecycle = err:%v releases:%d held:%t", err, platform.auth.releases, platform.auth.held)
+	}
+	assertProfileStoreError(t, err, CodeProfileConflict, "projects[].profile_id")
+	if !errors.Is(err, errStoreAuthorityCleanupFailed) || errors.Is(err, cleanupErr) {
+		t.Fatalf("release cleanup signal = %v, want fixed sentinel without raw cause", err)
 	}
 }
 
@@ -519,14 +526,15 @@ func (f *fakeStorePlatform) Commit(auth authority, _, _ []byte) error {
 }
 
 type fakeStoreAuthority struct {
-	held     bool
-	releases int
+	held       bool
+	releases   int
+	releaseErr error
 }
 
 func (a *fakeStoreAuthority) Release() error {
 	a.releases++
 	a.held = false
-	return nil
+	return a.releaseErr
 }
 
 type fakeMonotonicWaiter struct{ now time.Time }

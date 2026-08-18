@@ -278,21 +278,38 @@ func TestUnixProfileStoreAuthorityUsesRestrictiveEmptyArtifactAndProtectsLiveOwn
 	if err := owned.Release(); err != nil {
 		t.Fatal(err)
 	}
-
-	// An absent-state sidecar is retained rather than unsafely unlinked while a
-	// contender may hold an open descriptor. Kernel ownership, not residue age,
-	// controls reuse.
+	if _, err := os.Lstat(lockPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("creator-owned authority survived release: %v", err)
+	}
+	_ = os.WriteFile(lockPath, nil, 0o600)
 	residue := fileIdentity(t, lockPath)
 	reusePath, _ := platform.Canonical(path)
 	reused, err := platform.Acquire(reusePath, 0, &recordingWaiter{})
 	if err != nil {
 		t.Fatalf("Acquire(residue) error = %v", err)
 	}
-	if fileIdentity(t, lockPath) != residue {
-		t.Fatal("safe residue reuse replaced the authority inode")
-	}
 	if err := reused.Release(); err != nil {
 		t.Fatal(err)
+	}
+	if fileIdentity(t, lockPath) != residue {
+		t.Fatal("release removed or replaced a pre-existing authority inode")
+	}
+}
+
+func TestUnixProfileStoreReleaseDoesNotRemoveReplacementAuthority(t *testing.T) {
+	parent := privateDir(t)
+	path := filepath.Join(parent, "profiles.json")
+	lockPath := filepath.Join(parent, ".profiles.json.lock")
+	platform := newUnixStorePlatform()
+	canonical, _ := platform.Canonical(path)
+	owned, _ := platform.Acquire(canonical, 0, &recordingWaiter{})
+	if err := os.Rename(lockPath, filepath.Join(parent, ".detached.lock")); err != nil {
+		t.Fatal(err)
+	}
+	writePrivateFile(t, lockPath)
+	_ = owned.Release()
+	if _, err := os.Lstat(lockPath); err != nil {
+		t.Fatal("release removed a replacement authority inode")
 	}
 }
 
@@ -378,6 +395,29 @@ func TestUnixProfileStoreCommitPublishesWhileLockedAndCleansAbsentSidecar(t *tes
 		t.Fatal(err)
 	}
 	_ = retry.Release()
+}
+
+func TestUnixProfileStoreAbsentCommitFailuresCleanOwnedSidecar(t *testing.T) {
+	for _, stage := range []string{"write", "sync", "replace", "dirsync", "cleanup"} {
+		t.Run(stage, func(t *testing.T) {
+			path := filepath.Join(privateDir(t), "profiles.json")
+			platform := unixStorePlatform{fail: func(got string) error {
+				if got == stage {
+					return errors.New("injected commit failure")
+				}
+				return nil
+			}}
+			canonical, _ := platform.Canonical(path)
+			owned, _ := platform.Acquire(canonical, 0, &recordingWaiter{})
+			if err := platform.Commit(owned, nil, []byte("next-state")); err == nil {
+				t.Fatal("Commit unexpectedly succeeded")
+			}
+			_ = owned.Release()
+			if _, err := os.Lstat(filepath.Join(filepath.Dir(path), ".profiles.json.lock")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("authority sidecar survived %s failure: %v", stage, err)
+			}
+		})
+	}
 }
 
 func TestUnixProfileStoreCommitFailuresRestorePriorBytesModeAndResidue(t *testing.T) {

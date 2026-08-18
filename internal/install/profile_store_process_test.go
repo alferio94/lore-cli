@@ -253,6 +253,20 @@ func TestProfileStoreProcessFailurePreservesStateModeAndSecrets(t *testing.T) {
 	assertNoProcessResidue(t, dir)
 }
 
+func TestProfileStoreProcessAbsentFailureCleansAuthorityResidue(t *testing.T) {
+	dir := processPrivateDir(t)
+	path, root := filepath.Join(dir, "profiles.json"), filepath.Join(dir, "project")
+	child := startHelper(t, map[string]string{
+		"LORE_STORE_ACTION": "fail",
+		"LORE_STORE_PATH":   path, "LORE_STORE_ROOT": root,
+		"LORE_STORE_EXPECT": string(CodeProfileIO) + "@profile_store.commit",
+	})
+	waitHelper(t, child, true)
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed absent commit created state: %v", err)
+	}
+	assertNoProcessResidue(t, dir)
+}
 func TestProfileStoreProcessCanonicalAliasesConverge(t *testing.T) {
 	dir := processPrivateDir(t)
 	physical := filepath.Join(dir, "profiles.json")

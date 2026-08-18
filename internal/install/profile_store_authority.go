@@ -9,9 +9,10 @@ import (
 const defaultProfileStoreWait = 5 * time.Second
 
 var (
-	errStoreAuthorityBusy    = errors.New("profile store authority busy")
-	errStoreAuthorityTimeout = errors.New("profile store authority timeout")
-	errStoreRollbackFailed   = errors.New("profile store rollback failed")
+	errStoreAuthorityBusy          = errors.New("profile store authority busy")
+	errStoreAuthorityTimeout       = errors.New("profile store authority timeout")
+	errStoreAuthorityCleanupFailed = errors.New("profile store authority cleanup failed")
+	errStoreRollbackFailed         = errors.New("profile store rollback failed")
 )
 
 // CommitOptions bounds profile-store authority acquisition. The CLI default is
@@ -87,9 +88,21 @@ func withStoreAuthority(platform storePlatform, rawPath string, options CommitOp
 	if owned == nil {
 		return newProfileStoreError(CodeProfileIO, "profile_store.commit", false)
 	}
+	// Release failures remain observable through a fixed sentinel and typed I/O error.
+	// Adapter causes stay private because they can carry raw filesystem context.
+	// When work already failed, its typed error remains first in the joined chain.
+	// This preserves primary Code and Path while retaining deterministic cleanup evidence.
 	defer func() {
-		if releaseErr := owned.Release(); releaseErr != nil && err == nil {
-			err = newProfileStoreError(CodeProfileIO, "profile_store.commit", false)
+		if releaseErr := owned.Release(); releaseErr != nil {
+			cleanupErr := errors.Join(
+				errStoreAuthorityCleanupFailed,
+				newProfileStoreError(CodeProfileIO, "profile_store.commit", false),
+			)
+			if err == nil {
+				err = cleanupErr
+				return
+			}
+			err = errors.Join(err, cleanupErr)
 		}
 	}()
 	return work(owned)

@@ -30,11 +30,13 @@ type unixStorePath struct {
 }
 
 type unixStoreAuthority struct {
-	parent   *os.File
-	path     *unixStorePath
-	state    *os.File
-	locks    []*os.File
-	released bool
+	parent      *os.File
+	path        *unixStorePath
+	state       *os.File
+	sidecar     *os.File
+	locks       []*os.File
+	ownsSidecar bool
+	released    bool
 }
 
 func newUnixStorePlatform() unixStorePlatform { return unixStorePlatform{} }
@@ -209,7 +211,7 @@ func tryUnixAuthority(path *unixStorePath) (*unixStoreAuthority, bool, error) {
 		return &unixStoreAuthority{parent: path.parent, path: path, state: state, locks: []*os.File{state}}, false, nil
 	}
 
-	sidecar, err := openUnixAuthorityLeaf(path)
+	sidecar, created, err := openUnixAuthorityLeaf(path)
 	if err != nil {
 		return nil, false, err
 	}
@@ -254,7 +256,10 @@ func tryUnixAuthority(path *unixStorePath) (*unixStoreAuthority, bool, error) {
 		}
 		locks = append(locks, state)
 	}
-	return &unixStoreAuthority{parent: path.parent, path: path, state: state, locks: locks}, false, nil
+	return &unixStoreAuthority{
+		parent: path.parent, path: path, state: state, sidecar: sidecar,
+		locks: locks, ownsSidecar: created,
+	}, false, nil
 }
 
 func (unixStorePlatform) Read(owned authority) ([]byte, bool, error) {
@@ -301,9 +306,8 @@ func (p unixStorePlatform) Commit(owned authority, prior, next []byte) error {
 		err = p.inject("cleanup")
 	}
 	if err == nil && len(prior) == 0 {
-		err = unix.Unlinkat(int(a.parent.Fd()), a.path.lockLeaf, 0)
-	}
-	if err == nil {
+		err = a.removeSidecar(false)
+	} else if err == nil {
 		err = syncUnixDirectory(a.parent)
 	}
 	if err == nil {
@@ -420,40 +424,40 @@ func openUnixLeaf(path *unixStorePath, leaf string, authorityLeaf bool) (*os.Fil
 	return file, false, nil
 }
 
-func openUnixAuthorityLeaf(path *unixStorePath) (*os.File, error) {
+func openUnixAuthorityLeaf(path *unixStorePath) (*os.File, bool, error) {
 	flags := unix.O_RDWR | unix.O_CLOEXEC | unix.O_NOFOLLOW
 	for attempt := 0; attempt < 2; attempt++ {
 		fd, err := unix.Openat(int(path.parent.Fd()), path.lockLeaf, flags|unix.O_CREAT|unix.O_EXCL, 0o600)
 		if errors.Is(err, unix.EEXIST) {
 			file, missing, openErr := openUnixLeaf(path, path.lockLeaf, true)
 			if openErr != nil || !missing {
-				return file, openErr
+				return file, false, openErr
 			}
 			continue
 		}
 		if err != nil {
 			if errors.Is(err, unix.ELOOP) || errors.Is(err, unix.ENOTDIR) {
-				return nil, errStoreAuthorityInvalidPath
+				return nil, false, errStoreAuthorityInvalidPath
 			}
-			return nil, err
+			return nil, false, err
 		}
 		file := os.NewFile(uintptr(fd), "profile-store-authority")
 		if file == nil {
 			_ = unix.Close(fd)
-			return nil, unix.EBADF
+			return nil, false, unix.EBADF
 		}
 		if unix.Fchmod(fd, 0o600) != nil {
 			_ = file.Close()
-			return nil, unix.EPERM
+			return nil, false, unix.EPERM
 		}
 		var stat unix.Stat_t
 		if unix.Fstat(fd, &stat) != nil || !safeUnixFile(stat) || stat.Size != 0 {
 			_ = file.Close()
-			return nil, errStoreAuthorityInvalidPath
+			return nil, false, errStoreAuthorityInvalidPath
 		}
-		return file, nil
+		return file, true, nil
 	}
-	return nil, errStoreAuthorityInvalidPath
+	return nil, false, errStoreAuthorityInvalidPath
 }
 
 func lockUnixFile(file *os.File) (bool, error) {
@@ -462,6 +466,22 @@ func lockUnixFile(file *os.File) (bool, error) {
 		return false, nil
 	}
 	return err == nil, err
+}
+
+// removeSidecar runs before unlock and unlinks only the still-locked matching inode.
+// Release requires creator provenance; successful state-inode handoff may clean dead residue.
+func (a *unixStoreAuthority) removeSidecar(creatorOnly bool) error {
+	if (creatorOnly && !a.ownsSidecar) || a.sidecar == nil || !unixFileMatchesLeaf(a.path, a.path.lockLeaf, a.sidecar, true) {
+		return nil
+	}
+	if err := unix.Unlinkat(int(a.parent.Fd()), a.path.lockLeaf, 0); err != nil {
+		if errors.Is(err, unix.ENOENT) {
+			return nil
+		}
+		return err
+	}
+	a.ownsSidecar = false
+	return syncUnixDirectory(a.parent)
 }
 
 func (a *unixStoreAuthority) Release() error { return a.close(true) }
@@ -475,6 +495,9 @@ func (a *unixStoreAuthority) close(unlock bool) error {
 	}
 	a.released = true
 	var result error
+	if unlock {
+		result = errors.Join(result, a.removeSidecar(true))
+	}
 	for i := len(a.locks) - 1; i >= 0; i-- {
 		if unlock {
 			result = errors.Join(result, unix.Flock(int(a.locks[i].Fd()), unix.LOCK_UN))
