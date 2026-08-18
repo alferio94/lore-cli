@@ -13,6 +13,37 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+func TestWindowsProfileStoreCompleteHardensStoreDirectory(t *testing.T) {
+	dir := windowsPrivateDir(t)
+	sd, err := windows.SecurityDescriptorFromString("D:P(A;;GA;;;WD)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dacl, _, err := sd.DACL()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := windows.SetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, dacl, nil); err != nil {
+		t.Fatal(err)
+	}
+	store := NewProfileStore(filepath.Join(dir, "profiles.json"))
+	prepared, err := store.PrepareProject(filepath.Join(t.TempDir(), "project"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Complete(prepared, PersistenceFact{}, ApplyBoundarySuccess); err != nil {
+		t.Fatalf("Complete() error = %v", err)
+	}
+	handle, err := windows.Open(dir, windows.O_RDONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer windows.CloseHandle(handle)
+	if !windowsHandleIsCurrentUserOnlyFile(handle) {
+		t.Fatal("store directory DACL is not current-user-only")
+	}
+}
+
 func TestWindowsProfileStoreCanonicalIdentityUsesVolumeParentAndFoldedLeaf(t *testing.T) {
 	parent := windowsPrivateDir(t)
 	platform := newWindowsStorePlatform()

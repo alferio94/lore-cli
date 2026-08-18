@@ -162,7 +162,7 @@ func (s ProfileStore) CompleteWithOptions(prepared PreparedProject, fact Persist
 		return profileStoreError(CodeProfileInvalid)
 	}
 	dir := filepath.Dir(s.path)
-	if os.MkdirAll(dir, 0o700) != nil || os.Chmod(dir, 0o700) != nil {
+	if os.MkdirAll(dir, 0o700) != nil || protectStoreDirectory(dir) != nil {
 		return newProfileStoreError(CodeProfileIO, "profile_store.commit", false)
 	}
 	return withStoreAuthority(s.platform, s.path, options, s.waiter, func(owned authority) error {

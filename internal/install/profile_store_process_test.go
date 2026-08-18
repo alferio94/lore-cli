@@ -400,7 +400,7 @@ func helperDone(ok bool) {
 func processPrivateDir(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	if err := os.Chmod(dir, 0o700); err != nil {
+	if err := protectStoreDirectory(dir); err != nil {
 		t.Fatal(err)
 	}
 	return dir

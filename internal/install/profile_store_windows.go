@@ -41,6 +41,8 @@ type windowsStoreAuthority struct {
 func newWindowsStorePlatform() windowsStorePlatform { return windowsStorePlatform{} }
 func defaultStorePlatform() storePlatform           { return newWindowsStorePlatform() }
 
+func protectStoreDirectory(path string) error { return windowsProtectFile(path) }
+
 func (windowsStorePlatform) Canonical(raw string) (storePath, error) {
 	if raw == "" || !filepath.IsAbs(raw) || strings.IndexByte(raw, 0) >= 0 {
 		return storePath{}, errStoreAuthorityInvalidPath

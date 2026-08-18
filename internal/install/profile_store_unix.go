@@ -40,6 +40,8 @@ type unixStoreAuthority struct {
 func newUnixStorePlatform() unixStorePlatform { return unixStorePlatform{} }
 func defaultStorePlatform() storePlatform     { return newUnixStorePlatform() }
 
+func protectStoreDirectory(path string) error { return os.Chmod(path, 0o700) }
+
 func (unixStorePlatform) Canonical(raw string) (result storePath, err error) {
 	parent, leaf, err := splitUnixStorePath(raw)
 	if err != nil {
