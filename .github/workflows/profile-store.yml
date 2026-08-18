@@ -27,6 +27,12 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v6
+      - name: Normalize Windows checkout line endings
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          git config core.autocrlf false
+          git checkout-index --force --all
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
@@ -34,7 +40,11 @@ jobs:
       - name: Format and diff checks
         shell: bash
         run: |
-          test -z "$(gofmt -l internal/install/profile_store*.go)"
+          unformatted="$(gofmt -l internal/install/profile_store*.go)"
+          if [ -n "$unformatted" ]; then
+            printf 'gofmt required for:\n%s\n' "$unformatted" >&2
+            exit 1
+          fi
           git diff --check
       - name: Static analysis
         run: go vet ./internal/install
