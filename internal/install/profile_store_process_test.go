@@ -286,8 +286,10 @@ func TestProfileStoreProcessCanonicalAliasesConverge(t *testing.T) {
 }
 
 type processChild struct {
-	cmd *exec.Cmd
-	out bytes.Buffer
+	cmd  *exec.Cmd
+	out  bytes.Buffer
+	done chan struct{}
+	err  error
 }
 
 func startCompleteHelper(t *testing.T, path, root, profile, scope, ready, goFile, expect string) *processChild {
@@ -298,7 +300,6 @@ func startCompleteHelper(t *testing.T, path, root, profile, scope, ready, goFile
 		"LORE_STORE_GO": goFile, "LORE_STORE_EXPECT": expect,
 	})
 }
-
 func startHelper(t *testing.T, values map[string]string) *processChild {
 	t.Helper()
 	child := &processChild{}
@@ -311,6 +312,11 @@ func startHelper(t *testing.T, values map[string]string) *processChild {
 	if err := child.cmd.Start(); err != nil {
 		t.Fatal("could not start process helper")
 	}
+	child.done = make(chan struct{})
+	go func() {
+		child.err = child.cmd.Wait()
+		close(child.done)
+	}()
 	return child
 }
 
@@ -321,19 +327,22 @@ func waitReady(t *testing.T, child *processChild, path string) {
 		if _, err := os.Stat(path); err == nil {
 			return
 		}
-		if child.cmd.ProcessState != nil && child.cmd.ProcessState.Exited() {
-			t.Fatal("process helper exited before barrier")
+		select {
+		case <-child.done:
+			t.Fatalf("process helper exited before barrier: %v", child.err)
+		default:
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 	_ = child.cmd.Process.Kill()
-	_ = child.cmd.Wait()
+	<-child.done
 	t.Fatal("process helper barrier timed out")
 }
 
 func waitHelper(t *testing.T, child *processChild, success bool) {
 	t.Helper()
-	err := child.cmd.Wait()
+	<-child.done
+	err := child.err
 	if success && (err != nil || child.out.String() != "ok\n") {
 		t.Fatal("process helper failed without disclosing child context")
 	}

@@ -41,6 +41,10 @@ func newUnixStorePlatform() unixStorePlatform { return unixStorePlatform{} }
 func defaultStorePlatform() storePlatform     { return newUnixStorePlatform() }
 
 func protectStoreDirectory(path string) error { return os.Chmod(path, 0o700) }
+func storeFilePermissionsValid(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().Perm()&0o077 == 0
+}
 
 func (unixStorePlatform) Canonical(raw string) (result storePath, err error) {
 	parent, leaf, err := splitUnixStorePath(raw)

@@ -298,11 +298,7 @@ func (s ProfileStore) load() (profileState, []byte, bool, error) {
 	if err != nil {
 		return profileState{}, nil, false, profileStoreError(CodeProfileIO)
 	}
-	info, err := os.Stat(s.path)
-	if err != nil {
-		return profileState{}, nil, false, profileStoreError(CodeProfileIO)
-	}
-	if info.Mode().Perm()&0o077 != 0 {
+	if !storeFilePermissionsValid(s.path) {
 		return profileState{}, nil, false, profileStoreError(CodeProfileCorrupt)
 	}
 	var state profileState

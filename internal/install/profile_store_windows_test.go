@@ -13,6 +13,24 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+func TestWindowsProfileStoreLoadAcceptsCurrentUserOnlyState(t *testing.T) {
+	dir := windowsPrivateDir(t)
+	store := NewProfileStore(filepath.Join(dir, "profiles.json"))
+	root := filepath.Join(t.TempDir(), "project")
+	prepared, err := store.PrepareProject(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Complete(prepared, PersistenceFact{}, ApplyBoundarySuccess); err != nil {
+		t.Fatal(err)
+	}
+	assertStorePermissions(t, dir, store.Path())
+	// Windows FileMode bits do not represent this verified DACL.
+	if _, err := store.LookupProject(root); err != nil {
+		t.Fatalf("LookupProject() rejected current-user-only state: %v", err)
+	}
+}
+
 func TestWindowsProfileStoreCompleteHardensStoreDirectory(t *testing.T) {
 	dir := windowsPrivateDir(t)
 	sd, err := windows.SecurityDescriptorFromString("D:P(A;;GA;;;WD)")
@@ -34,7 +52,7 @@ func TestWindowsProfileStoreCompleteHardensStoreDirectory(t *testing.T) {
 	if err := store.Complete(prepared, PersistenceFact{}, ApplyBoundarySuccess); err != nil {
 		t.Fatalf("Complete() error = %v", err)
 	}
-	handle, err := windows.Open(dir, windows.O_RDONLY, 0)
+	handle, err := openWindowsDirectory(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -302,6 +320,34 @@ func (w *windowsRecordingWaiter) Now() time.Time { return w.now }
 func (w *windowsRecordingWaiter) Sleep(d time.Duration) {
 	w.sleeps = append(w.sleeps, d)
 	w.now = w.now.Add(d)
+}
+
+func assertStorePermissions(t *testing.T, dir, path string) {
+	t.Helper()
+	dirHandle, err := openWindowsDirectory(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer windows.CloseHandle(dirHandle)
+	fileHandle, err := windows.Open(path, windows.O_RDONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer windows.CloseHandle(fileHandle)
+	if !windowsHandleIsCurrentUserOnlyFile(dirHandle) || !windowsHandleIsCurrentUserOnlyFile(fileHandle) {
+		t.Fatal("store directory or file DACL is not current-user-only")
+	}
+}
+func makeStoreFileInsecure(t *testing.T, path string) {
+	t.Helper()
+	sd, err := windows.SecurityDescriptorFromString("D:P(A;;GA;;;WD)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dacl, _, _ := sd.DACL()
+	if err := windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, dacl, nil); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func windowsPrivateDir(t *testing.T) string {

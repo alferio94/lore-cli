@@ -456,6 +456,23 @@ func (w *recordingWaiter) Sleep(d time.Duration) {
 	}
 }
 
+func assertStorePermissions(t *testing.T, dir, path string) {
+	t.Helper()
+	if mode := fileMode(t, dir); mode.Perm() != 0o700 {
+		t.Fatalf("dir mode = %o, want 700", mode.Perm())
+	}
+	if mode := fileMode(t, path); mode.Perm() != 0o600 {
+		t.Fatalf("file mode = %o, want 600", mode.Perm())
+	}
+}
+
+func makeStoreFileInsecure(t *testing.T, path string) {
+	t.Helper()
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func privateDir(t *testing.T) string {
 	t.Helper()
 	path := t.TempDir()

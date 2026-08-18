@@ -129,12 +129,7 @@ func TestProfileStoreRestrictiveAtomicWriteAndRollback(t *testing.T) {
 	if err := store.Complete(prepared, PersistenceFact{}, ApplyBoundarySuccess); err != nil {
 		t.Fatal(err)
 	}
-	if mode := fileMode(t, dir); mode.Perm() != 0o700 {
-		t.Fatalf("dir mode = %o, want 700", mode.Perm())
-	}
-	if mode := fileMode(t, path); mode.Perm() != 0o600 {
-		t.Fatalf("file mode = %o, want 600", mode.Perm())
-	}
+	assertStorePermissions(t, dir, path)
 	before, _ := os.ReadFile(path)
 
 	update, _ := store.PrepareProject(root)
@@ -171,9 +166,7 @@ func TestProfileStoreRejectsStaleAndOverPermissiveState(t *testing.T) {
 		t.Fatal("stale completion changed persisted state")
 	}
 
-	if err := os.Chmod(path, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	makeStoreFileInsecure(t, path)
 	if _, err := store.LookupProject(root); !errors.Is(err, CodeProfileCorrupt) {
 		t.Fatalf("over-permissive state error = %v", err)
 	}
