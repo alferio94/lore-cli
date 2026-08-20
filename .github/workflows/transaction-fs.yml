@@ -17,18 +17,19 @@ permissions:
 env:
   C1A_WINDOWS_TESTS: '^(TestW33C1AWindowsRootIdentityAliasesAndReparseSafety|TestW33C1AWindowsCrossProcessBusyTimeoutAndRedaction|TestW33C1AWindowsMutexSecurityDescriptorAndCleanup|TestW33C1AWindowsWaitAbandonedOwnerDeathProof|TestW33C1AWindowsMutexHeldThroughTransactionRelease|TestW33C1AWindowsUnrelatedRootsRemainIndependent|TestW33C1AWindowsAuthoritySurfaceAndCoupling|TestW33C1AWindowsHelperProcess|TestW33C1AWindowsAbandonedMutexRecoversThroughAliasesBeforeMutation|TestW33C1AWindowsCrashRecoveryRestoresExactACLBytesExistenceAndDirectories|TestW33C1AWindowsRecoveryRejectsReparseSwapWithoutPrivilegeSkip|TestW33C1AWindowsRecoveryFailsClosedOnDurabilityOrRestorationRisk|TestW33C1AWindowsFlushWriteThroughAndRecoverySourceOrdering)$'
   C1A_WINDOWS_PARENT_COUNT: '13'
+  W33B_PARENT_COUNT: '7'
   WINDOWS_EXPECTED_SYMBOLS: 'TestW33BWindowsTransactionFSRejectsReparseTraversal TestW33BWindowsTransactionFSUsesCurrentUserOnlyACLs TestW33BWindowsTransactionFSRollbackRestoresOriginalACL TestW33C1AWindowsRootIdentityAliasesAndReparseSafety TestW33C1AWindowsCrossProcessBusyTimeoutAndRedaction TestW33C1AWindowsMutexSecurityDescriptorAndCleanup TestW33C1AWindowsWaitAbandonedOwnerDeathProof TestW33C1AWindowsMutexHeldThroughTransactionRelease TestW33C1AWindowsUnrelatedRootsRemainIndependent TestW33C1AWindowsAuthoritySurfaceAndCoupling TestW33C1AWindowsHelperProcess TestW33C1AWindowsAbandonedMutexRecoversThroughAliasesBeforeMutation TestW33C1AWindowsCrashRecoveryRestoresExactACLBytesExistenceAndDirectories TestW33C1AWindowsRecoveryRejectsReparseSwapWithoutPrivilegeSkip TestW33C1AWindowsRecoveryFailsClosedOnDurabilityOrRestorationRisk TestW33C1AWindowsFlushWriteThroughAndRecoverySourceOrdering'
 
 jobs:
   runtime:
-    name: runtime-${{ matrix.goos }}-amd64
+    name: runtime-${{ matrix.goos }}-${{ matrix.goarch }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - {goos: linux, runner: ubuntu-latest}
-          - {goos: darwin, runner: macos-14}
-          - {goos: windows, runner: windows-latest}
+          - {goos: linux, goarch: amd64, runner: ubuntu-latest}
+          - {goos: darwin, goarch: amd64, runner: macos-15-intel}
+          - {goos: windows, goarch: amd64, runner: windows-latest}
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v6
@@ -42,6 +43,12 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - name: Verify native runner target
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(go env GOOS)" = "${{ matrix.goos }}"
+          test "$(go env GOARCH)" = "${{ matrix.goarch }}"
       - name: Format and diff checks
         shell: bash
         run: |
@@ -59,15 +66,43 @@ jobs:
           set -euo pipefail
           output="$RUNNER_TEMP/w33b-runtime.log"
           go test -count=1 ./internal/install -run '^TestW33B' -timeout=180s -v 2>&1 | tee "$output"
-          test "$(grep -Ec '^--- PASS: TestW33B' "$output")" -gt 0
+          test "$(grep -Ec '^--- PASS: TestW33B' "$output")" -eq "$W33B_PARENT_COUNT"
           ! grep -Eq -- '--- SKIP:' "$output"
+  runtime-race:
+    name: race-${{ matrix.goos }}-${{ matrix.goarch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {goos: linux, goarch: amd64, runner: ubuntu-latest}
+          - {goos: darwin, goarch: amd64, runner: macos-15-intel}
+          - {goos: windows, goarch: amd64, runner: windows-latest}
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Normalize Windows checkout line endings
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          git config core.autocrlf false
+          git checkout-index --force --all
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Verify native runner target
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(go env GOOS)" = "${{ matrix.goos }}"
+          test "$(go env GOARCH)" = "${{ matrix.goarch }}"
       - name: Existing W3.3-B race tests
         shell: bash
         run: |
           set -euo pipefail
           output="$RUNNER_TEMP/w33b-race.log"
           go test -race -count=1 ./internal/install -run '^TestW33B' -timeout=240s -v 2>&1 | tee "$output"
-          test "$(grep -Ec '^--- PASS: TestW33B' "$output")" -gt 0
+          test "$(grep -Ec '^--- PASS: TestW33B' "$output")" -eq "$W33B_PARENT_COUNT"
           ! grep -Eq -- '--- SKIP:|WARNING: DATA RACE' "$output"
 
   windows-c1a-runtime:
