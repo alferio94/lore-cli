@@ -1,0 +1,153 @@
+name: transaction-fs
+
+on:
+  push:
+    branches: ['**']
+    paths:
+      - 'internal/install/transaction*.go'
+      - '.github/workflows/transaction-fs.yml'
+  pull_request:
+    paths:
+      - 'internal/install/transaction*.go'
+      - '.github/workflows/transaction-fs.yml'
+
+permissions:
+  contents: read
+
+env:
+  C1A_WINDOWS_TESTS: '^(TestW33C1AWindowsRootIdentityAliasesAndReparseSafety|TestW33C1AWindowsCrossProcessBusyTimeoutAndRedaction|TestW33C1AWindowsMutexSecurityDescriptorAndCleanup|TestW33C1AWindowsWaitAbandonedOwnerDeathProof|TestW33C1AWindowsMutexHeldThroughTransactionRelease|TestW33C1AWindowsUnrelatedRootsRemainIndependent|TestW33C1AWindowsAuthoritySurfaceAndCoupling|TestW33C1AWindowsHelperProcess|TestW33C1AWindowsAbandonedMutexRecoversThroughAliasesBeforeMutation|TestW33C1AWindowsCrashRecoveryRestoresExactACLBytesExistenceAndDirectories|TestW33C1AWindowsRecoveryRejectsReparseSwapWithoutPrivilegeSkip|TestW33C1AWindowsRecoveryFailsClosedOnDurabilityOrRestorationRisk|TestW33C1AWindowsFlushWriteThroughAndRecoverySourceOrdering)$'
+  C1A_WINDOWS_PARENT_COUNT: '13'
+  WINDOWS_EXPECTED_SYMBOLS: 'TestW33BWindowsTransactionFSRejectsReparseTraversal TestW33BWindowsTransactionFSUsesCurrentUserOnlyACLs TestW33BWindowsTransactionFSRollbackRestoresOriginalACL TestW33C1AWindowsRootIdentityAliasesAndReparseSafety TestW33C1AWindowsCrossProcessBusyTimeoutAndRedaction TestW33C1AWindowsMutexSecurityDescriptorAndCleanup TestW33C1AWindowsWaitAbandonedOwnerDeathProof TestW33C1AWindowsMutexHeldThroughTransactionRelease TestW33C1AWindowsUnrelatedRootsRemainIndependent TestW33C1AWindowsAuthoritySurfaceAndCoupling TestW33C1AWindowsHelperProcess TestW33C1AWindowsAbandonedMutexRecoversThroughAliasesBeforeMutation TestW33C1AWindowsCrashRecoveryRestoresExactACLBytesExistenceAndDirectories TestW33C1AWindowsRecoveryRejectsReparseSwapWithoutPrivilegeSkip TestW33C1AWindowsRecoveryFailsClosedOnDurabilityOrRestorationRisk TestW33C1AWindowsFlushWriteThroughAndRecoverySourceOrdering'
+
+jobs:
+  runtime:
+    name: runtime-${{ matrix.goos }}-amd64
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {goos: linux, runner: ubuntu-latest}
+          - {goos: darwin, runner: macos-14}
+          - {goos: windows, runner: windows-latest}
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Normalize Windows checkout line endings
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          git config core.autocrlf false
+          git checkout-index --force --all
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Format and diff checks
+        shell: bash
+        run: |
+          unformatted="$(gofmt -l internal/install/transaction*.go)"
+          if [ -n "$unformatted" ]; then
+            printf 'gofmt required for:\n%s\n' "$unformatted" >&2
+            exit 1
+          fi
+          git diff --check
+      - name: Static analysis
+        run: go vet ./internal/install
+      - name: Existing W3.3-B runtime tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          output="$RUNNER_TEMP/w33b-runtime.log"
+          go test -count=1 ./internal/install -run '^TestW33B' -timeout=180s -v 2>&1 | tee "$output"
+          test "$(grep -Ec '^--- PASS: TestW33B' "$output")" -gt 0
+          ! grep -Eq -- '--- SKIP:' "$output"
+      - name: Existing W3.3-B race tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          output="$RUNNER_TEMP/w33b-race.log"
+          go test -race -count=1 ./internal/install -run '^TestW33B' -timeout=240s -v 2>&1 | tee "$output"
+          test "$(grep -Ec '^--- PASS: TestW33B' "$output")" -gt 0
+          ! grep -Eq -- '--- SKIP:|WARNING: DATA RACE' "$output"
+
+  windows-c1a-runtime:
+    name: windows-c1a-runtime-amd64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Normalize Windows checkout line endings
+        shell: bash
+        run: |
+          git config core.autocrlf false
+          git checkout-index --force --all
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Exact C1-A P5/P6/P8b runtime tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          output="$RUNNER_TEMP/c1a-windows-runtime.log"
+          go test -count=1 ./internal/install -run "$C1A_WINDOWS_TESTS" -timeout=240s -v 2>&1 | tee "$output"
+          test "$(grep -Ec '^--- PASS: TestW33C1AWindows' "$output")" -eq "$C1A_WINDOWS_PARENT_COUNT"
+          ! grep -Eq -- '--- SKIP:' "$output"
+
+  windows-c1a-race:
+    name: windows-c1a-race-amd64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Normalize Windows checkout line endings
+        shell: bash
+        run: |
+          git config core.autocrlf false
+          git checkout-index --force --all
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Exact C1-A P5/P6/P8b race tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          output="$RUNNER_TEMP/c1a-windows-race.log"
+          go test -race -count=1 ./internal/install -run "$C1A_WINDOWS_TESTS" -timeout=300s -v 2>&1 | tee "$output"
+          test "$(grep -Ec '^--- PASS: TestW33C1AWindows' "$output")" -eq "$C1A_WINDOWS_PARENT_COUNT"
+          ! grep -Eq -- '--- SKIP:|WARNING: DATA RACE' "$output"
+
+  cross-build:
+    name: cross-build-six-supported-targets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Vet and compile all supported targets without artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64 windows/arm64; do
+            printf 'compile-target=%s\n' "$target"
+            GOOS=${target%/*} GOARCH=${target#*/} CGO_ENABLED=0 go vet ./internal/install
+            output="$RUNNER_TEMP/transaction-fs-${target//\//-}.test"
+            symbols="$RUNNER_TEMP/transaction-fs-${target//\//-}.symbols"
+            GOOS=${target%/*} GOARCH=${target#*/} CGO_ENABLED=0 go test -c -o "$output" ./internal/install
+            test -s "$output"
+            sha256sum "$output"
+            go version -m "$output"
+            if [[ "$target" == windows/* ]]; then
+              go tool nm "$output" > "$symbols"
+              found=0
+              for test_name in $WINDOWS_EXPECTED_SYMBOLS; do
+                grep -Fq ".$test_name" "$symbols"
+                found=$((found + 1))
+              done
+              test "$found" -eq 16
+              printf 'windows-symbols=%s/16 target=%s\n' "$found" "$target"
+            fi
+            rm -f "$output" "$symbols"
+          done
+          test -z "$(find "$RUNNER_TEMP" -maxdepth 1 \( -name 'transaction-fs-*.test' -o -name 'transaction-fs-*.symbols' \) -print -quit)"
