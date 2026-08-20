@@ -350,8 +350,8 @@ func windowsTargetHandleIsCurrentUserOnly(handle windows.Handle, objectType wind
 	if err != nil || control&windows.SE_DACL_PROTECTED == 0 {
 		return false
 	}
-	dacl, present, err := sd.DACL()
-	if err != nil || !present || dacl == nil || dacl.AceCount != 1 {
+	dacl, _, err := sd.DACL()
+	if err != nil || dacl == nil || dacl.AceCount != 1 {
 		return false
 	}
 	var ace *windows.ACCESS_ALLOWED_ACE

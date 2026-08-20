@@ -361,9 +361,9 @@ func protectWindowsTargetAuthorityPath(t *testing.T, path string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dacl, present, err := sd.DACL()
-	if err != nil || !present || dacl == nil {
-		t.Fatalf("current-user DACL: present=%v err=%v", present, err)
+	dacl, _, err := sd.DACL()
+	if err != nil || dacl == nil {
+		t.Fatalf("current-user DACL: %#v err=%v", dacl, err)
 	}
 	if err := windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, dacl, nil); err != nil {
 		t.Fatalf("protect target root: %v", err)
@@ -414,9 +414,9 @@ func assertWindowsTargetCurrentUserOnlyDescriptor(t *testing.T, sd *windows.SECU
 	if err != nil || control&windows.SE_DACL_PROTECTED == 0 {
 		t.Fatalf("DACL is not protected: control=%#x err=%v", control, err)
 	}
-	dacl, present, err := sd.DACL()
-	if err != nil || !present || dacl == nil || dacl.AceCount != 1 {
-		t.Fatalf("DACL = %#v present=%v err=%v", dacl, present, err)
+	dacl, _, err := sd.DACL()
+	if err != nil || dacl == nil || dacl.AceCount != 1 {
+		t.Fatalf("DACL = %#v err=%v", dacl, err)
 	}
 	var ace *windows.ACCESS_ALLOWED_ACE
 	if err := windows.GetAce(dacl, 0, &ace); err != nil || ace == nil || ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE {

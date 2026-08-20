@@ -330,9 +330,9 @@ func installWindowsRecoveryACLFixture(t *testing.T, path string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dacl, present, err := sd.DACL()
-	if err != nil || !present || dacl == nil {
-		t.Fatalf("fixture DACL: present=%v err=%v", present, err)
+	dacl, _, err := sd.DACL()
+	if err != nil || dacl == nil {
+		t.Fatalf("fixture DACL: %#v err=%v", dacl, err)
 	}
 	if err := windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, dacl, nil); err != nil {
 		t.Fatalf("install recovery ACL fixture: %v", err)
