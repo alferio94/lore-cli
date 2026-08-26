@@ -3,10 +3,15 @@ package install
 import (
 	"context"
 	"encoding/json"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -582,4 +587,229 @@ func TestOpenCodeBundledPluginAssetsNoGentleWordingLeakage(t *testing.T) {
 	if walkErr != nil {
 		t.Fatalf("fs.WalkDir(assets/opencode) error = %v", walkErr)
 	}
+}
+
+// W3.3-E traceability: R3/R6/R9/R12/R14; C1-C5, C20, C33-C34,
+// C42, and C45. The guard is syntax-aware so comments and negative test
+// fixtures cannot masquerade as production coupling.
+func TestW33EStaticGuardKeepsTransactionOutOfServerCLIAndW4Contracts(t *testing.T) {
+	root, _ := repoInternalRoot(t)
+	w33Files := []string{
+		"internal/install/transaction.go",
+		"internal/install/transaction_fs.go",
+		"internal/install/transaction_authority.go",
+		"internal/install/hosted_mcp_finalizer.go",
+		"internal/install/profile_store.go",
+		"internal/install/profile_store_authority.go",
+	}
+	for _, suffix := range []string{"unix.go", "windows.go"} {
+		w33Files = append(w33Files,
+			"internal/install/transaction_fs_"+suffix,
+			"internal/install/transaction_authority_"+suffix,
+			"internal/install/profile_store_"+suffix,
+		)
+	}
+	for _, rel := range w33Files {
+		file := parseW33EGoFile(t, root, rel)
+		for _, spec := range file.Imports {
+			path, err := strconv.Unquote(spec.Path.Value)
+			if err != nil {
+				t.Fatalf("%s import: %v", rel, err)
+			}
+			for _, forbidden := range []string{"internal/cli", "internal/httpclient", "net/http", "net/rpc", "database/sql"} {
+				if path == forbidden || strings.HasSuffix(path, "/"+forbidden) {
+					t.Fatalf("%s imports prohibited server/CLI authority %q", rel, path)
+				}
+			}
+		}
+		ast.Inspect(file, func(node ast.Node) bool {
+			switch value := node.(type) {
+			case *ast.BasicLit:
+				if value.Kind != token.STRING {
+					return true
+				}
+				literal, err := strconv.Unquote(value.Value)
+				if err != nil {
+					return true
+				}
+				lower := strings.ToLower(literal)
+				for _, forbidden := range []string{
+					"lore_project_activity", "lore_project_context", "lore_memory_search", "lore_memory_get",
+					"repository_id", "project_key", "/v1/memories", "/v1/projects", "query_text", "next_cursor",
+					"lore-install.json", "claude-code", "codex", "antigravity",
+				} {
+					if strings.Contains(lower, forbidden) {
+						t.Errorf("%s contains prohibited W3.3 contract literal %q", rel, literal)
+					}
+				}
+			case *ast.CallExpr:
+				if selector, ok := value.Fun.(*ast.SelectorExpr); ok {
+					if base, ok := selector.X.(*ast.Ident); ok && (base.Name == "http" || base.Name == "exec" || base.Name == "sql") {
+						t.Errorf("%s calls prohibited external authority %s.%s", rel, base.Name, selector.Sel.Name)
+					}
+				}
+			}
+			return true
+		})
+	}
+}
+
+// W3.3-E traceability: R12; C20, C31-C34, C42, C44.
+func TestW33EStaticGuardHasOneTransactionAndNoProfileAuthorityReuse(t *testing.T) {
+	root, internalRoot := repoInternalRoot(t)
+	allowedProfile := map[string]bool{
+		"internal/install/profile_store.go":           true,
+		"internal/install/profile_store_authority.go": true,
+		"internal/install/transaction.go":             true,
+	}
+	var transactionCallers []string
+	err := filepath.WalkDir(internalRoot, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		file := parseW33EGoFile(t, root, rel)
+		ast.Inspect(file, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			name := w33ECalledName(call.Fun)
+			switch name {
+			case "applyTransactionFS", "applyTransactionFSWithWait":
+				transactionCallers = append(transactionCallers, rel+":"+name)
+			case "acquireStoreAuthority", "withStoreAuthority", "beginHeldProfileCompletion":
+				if !allowedProfile[rel] {
+					t.Errorf("%s reuses profile-store authority through %s", rel, name)
+				}
+			}
+			return true
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantCallers := []string{"internal/install/transaction_fs.go:applyTransactionFSWithWait"}
+	if !reflect.DeepEqual(transactionCallers, wantCallers) {
+		t.Fatalf("production transaction entrypoints = %v, want sole wrapper call %v", transactionCallers, wantCallers)
+	}
+}
+
+// W3.3-E traceability: R12/R14; C4-C5, C31-C34, C42, C45.
+func TestW33EStaticGuardFinalizerAndCompletionExposeNoExternalFactsOrDirectDeletion(t *testing.T) {
+	root, _ := repoInternalRoot(t)
+	for _, rel := range []string{"internal/install/hosted_mcp_finalizer.go", "internal/install/transaction.go"} {
+		file := parseW33EGoFile(t, root, rel)
+		ast.Inspect(file, func(node ast.Node) bool {
+			switch value := node.(type) {
+			case *ast.FuncDecl:
+				if value.Name.Name == "finalizeHostedMCP" {
+					got := w33EFieldTypes(value.Type.Params)
+					want := []string{"TransactionPlan", "TransactionInput", "*transactionFSJournal", "hostedMCPCredentialResolver", "hostedMCPRenderer"}
+					if !reflect.DeepEqual(got, want) {
+						t.Errorf("finalizer inputs = %v, want %v", got, want)
+					}
+				}
+				if value.Name.Name == "completeHostedMCPCompletion" {
+					got := w33EFieldTypes(value.Type.Params)
+					want := []string{"*hostedMCPCompletionHandoff", "TransactionPlan", "TransactionInput", "ProfileStore", "PreparedProject"}
+					if !reflect.DeepEqual(got, want) {
+						t.Errorf("completion inputs = %v, want %v", got, want)
+					}
+				}
+			case *ast.CallExpr:
+				if selector, ok := value.Fun.(*ast.SelectorExpr); ok {
+					if base, ok := selector.X.(*ast.Ident); ok && (base.Name == "os" || base.Name == "unix" || base.Name == "windows") {
+						switch selector.Sel.Name {
+						case "Remove", "RemoveAll", "Unlink", "Unlinkat", "DeleteFile", "MoveFileEx":
+							t.Errorf("%s directly deletes/moves platform journal or paths through %s.%s", rel, base.Name, selector.Sel.Name)
+						}
+					}
+				}
+			}
+			return true
+		})
+	}
+}
+
+// W3.3-E traceability: R3/R6/R9/R12; C1-C10 and C45.
+// Existing legacy remember/recall HTTP commands are outside this change; this
+// guard prevents the accepted W3.3 transaction from becoming their caller or
+// teaching W4 activity/search/get/cursor semantics.
+func TestW33EStaticGuardCLIHasNoCanonicalTransactionOrW4Wire(t *testing.T) {
+	root, _ := repoInternalRoot(t)
+	for _, rel := range []string{"internal/cli/app.go", "internal/cli/actions.go"} {
+		file := parseW33EGoFile(t, root, rel)
+		ast.Inspect(file, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			name := w33ECalledName(call.Fun)
+			for _, forbidden := range []string{
+				"SealTransactionPlan", "applyTransactionFS", "finalizeHostedMCP", "completeHostedMCPCompletion",
+				"LoreProjectActivity", "LoreProjectContext", "LoreMemorySearch", "LoreMemoryGet",
+			} {
+				if name == forbidden {
+					t.Errorf("%s wires excluded W3.3/W4 behavior through %s", rel, name)
+				}
+			}
+			return true
+		})
+	}
+}
+
+func parseW33EGoFile(t *testing.T, root, rel string) *ast.File {
+	t.Helper()
+	path := filepath.Join(root, filepath.FromSlash(rel))
+	file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("parse %s: %v", rel, err)
+	}
+	return file
+}
+
+func w33ECalledName(expr ast.Expr) string {
+	switch value := expr.(type) {
+	case *ast.Ident:
+		return value.Name
+	case *ast.SelectorExpr:
+		return value.Sel.Name
+	default:
+		return ""
+	}
+}
+
+func w33EFieldTypes(fields *ast.FieldList) []string {
+	if fields == nil {
+		return nil
+	}
+	var result []string
+	for _, field := range fields.List {
+		name := ""
+		switch typ := field.Type.(type) {
+		case *ast.Ident:
+			name = typ.Name
+		case *ast.StarExpr:
+			if id, ok := typ.X.(*ast.Ident); ok {
+				name = "*" + id.Name
+			}
+		}
+		count := len(field.Names)
+		if count == 0 {
+			count = 1
+		}
+		for i := 0; i < count; i++ {
+			result = append(result, name)
+		}
+	}
+	return result
 }
