@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/alferio94/lore-cli/internal/compiler"
@@ -101,6 +102,177 @@ func TestW33ATransactionRejectsEveryMismatchWithZeroOutputAndEffects(t *testing.
 				t.Fatalf("rejection output/effects/error = %#v/%d/%q", got, spy.calls, err)
 			}
 		})
+	}
+}
+
+func TestW33DUnit1HandoffRejectsMissingForeignAlteredAndStaleWithoutConsumption(t *testing.T) {
+	if owner, err := claimHostedMCPCompletionHandoff(nil, TransactionPlan{}, TransactionInput{}); owner != nil || !errors.Is(err, CodeHostedMCPInvalidIntent) {
+		t.Fatalf("nil handoff claim = %#v, %v", owner, err)
+	}
+
+	t.Run("foreign target", func(t *testing.T) {
+		input, plan, handoff, journal, platform := w33DUnit1Handoff(t, TargetPi)
+		foreignInput := hostedMCPFinalizerFixture(t, TargetOpenCode, hostedMCPTestEndpoint, nil)
+		foreignPlan := sealHostedMCPFixture(t, foreignInput)
+		before := append([]string(nil), platform.trace...)
+		if owner, err := claimHostedMCPCompletionHandoff(handoff, foreignPlan, foreignInput); owner != nil || !errors.Is(err, CodeHostedMCPInvalidIntent) {
+			t.Fatalf("foreign claim = %#v, %v", owner, err)
+		}
+		assertW33DUnit1Unconsumed(t, handoff, journal, platform, before)
+		owner := claimW33DUnit1(t, handoff, plan, input)
+		if err := rollbackHostedMCPCompletion(owner, nil); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("altered plan", func(t *testing.T) {
+		input, plan, handoff, journal, platform := w33DUnit1Handoff(t, TargetPi)
+		altered := plan.DryRun(nil)
+		altered.ManifestHash = strings.Repeat("0", 64)
+		before := append([]string(nil), platform.trace...)
+		if owner, err := claimHostedMCPCompletionHandoff(handoff, TransactionPlan{report: altered}, input); owner != nil || !errors.Is(err, CodeHostedMCPInvalidIntent) {
+			t.Fatalf("altered claim = %#v, %v", owner, err)
+		}
+		assertW33DUnit1Unconsumed(t, handoff, journal, platform, before)
+		owner := claimW33DUnit1(t, handoff, plan, input)
+		if err := rollbackHostedMCPCompletion(owner, nil); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("altered handoff", func(t *testing.T) {
+		input, plan, handoff, journal, platform := w33DUnit1Handoff(t, TargetPi)
+		root := handoff.targetRoot
+		handoff.targetRoot = filepath.Join(root, "foreign")
+		before := append([]string(nil), platform.trace...)
+		if owner, err := claimHostedMCPCompletionHandoff(handoff, plan, input); owner != nil || !errors.Is(err, CodeHostedMCPInvalidIntent) {
+			t.Fatalf("altered handoff claim = %#v, %v", owner, err)
+		}
+		assertW33DUnit1Unconsumed(t, handoff, journal, platform, before)
+		handoff.targetRoot = root
+		owner := claimW33DUnit1(t, handoff, plan, input)
+		if err := rollbackHostedMCPCompletion(owner, nil); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("stale journal", func(t *testing.T) {
+		input, plan, handoff, journal, platform := w33DUnit1Handoff(t, TargetPi)
+		journal.active = false
+		before := append([]string(nil), platform.trace...)
+		if owner, err := claimHostedMCPCompletionHandoff(handoff, plan, input); owner != nil || !errors.Is(err, CodeHostedMCPInvalidIntent) {
+			t.Fatalf("stale claim = %#v, %v", owner, err)
+		}
+		if handoff.state.Load() != hostedMCPHandoffFresh || !reflect.DeepEqual(platform.trace, before) {
+			t.Fatalf("stale claim consumed or mutated: state=%d trace=%v", handoff.state.Load(), platform.trace)
+		}
+		journal.active = true
+		owner := claimW33DUnit1(t, handoff, plan, input)
+		if err := rollbackHostedMCPCompletion(owner, nil); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+func TestW33DUnit1HandoffUsesOneCASAndOneExistingTransaction(t *testing.T) {
+	input, plan, handoff, journal, platform := w33DUnit1Handoff(t, TargetPi)
+	const contenders = 16
+	owners := make(chan *hostedMCPCompletionOwner, contenders)
+	errs := make(chan error, contenders)
+	var wait sync.WaitGroup
+	for i := 0; i < contenders; i++ {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			owner, err := claimHostedMCPCompletionHandoff(handoff, plan, input)
+			if owner != nil {
+				owners <- owner
+			}
+			if err != nil {
+				errs <- err
+			}
+		}()
+	}
+	wait.Wait()
+	close(owners)
+	close(errs)
+
+	var winner *hostedMCPCompletionOwner
+	winnerCount := 0
+	for owner := range owners {
+		winner, winnerCount = owner, winnerCount+1
+	}
+	loserCount := 0
+	for err := range errs {
+		if !errors.Is(err, CodeHostedMCPInvalidIntent) {
+			t.Fatalf("loser error = %v", err)
+		}
+		loserCount++
+	}
+	if winnerCount != 1 || loserCount != contenders-1 || winner == nil || winner.journal != journal || winner.handoff != handoff {
+		t.Fatalf("claims: winners=%d losers=%d owner=%#v", winnerCount, loserCount, winner)
+	}
+	if platform.commitCalls != 0 || !journal.active || len(platform.trace) != 3 {
+		t.Fatalf("claim started a second transaction or completed C: journal=%#v platform=%#v", journal, platform)
+	}
+	if err := rollbackHostedMCPCompletion(winner, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestW33DUnit1ClaimedOwnerAloneRollsBackAndDisposesHandoff(t *testing.T) {
+	input, plan, handoff, journal, platform := w33DUnit1Handoff(t, TargetPi)
+	owner := claimW33DUnit1(t, handoff, plan, input)
+	primary := errors.New("D completion failed")
+	if got := rollbackHostedMCPCompletion(owner, primary); got != primary {
+		t.Fatalf("rollback result = %v, want primary", got)
+	}
+	want := []string{"resolve", "render", "write:mcp/lore.json", "remove-temps", "restore:mcp/lore.json", "remove-created-dirs", "mark-restored", "cleanup", "release"}
+	if !reflect.DeepEqual(platform.trace, want) || journal.active || handoff.state.Load() != hostedMCPHandoffDisposed || platform.commitCalls != 0 {
+		t.Fatalf("D rollback state: trace=%v journal=%#v handoff=%d platform=%#v", platform.trace, journal, handoff.state.Load(), platform)
+	}
+	before := append([]string(nil), platform.trace...)
+	if err := rollbackHostedMCPCompletion(owner, primary); !errors.Is(err, CodeHostedMCPInvalidIntent) {
+		t.Fatalf("reused owner rollback = %v", err)
+	}
+	if !reflect.DeepEqual(platform.trace, before) {
+		t.Fatalf("reused owner mutated state: %v", platform.trace)
+	}
+	if reused, err := claimHostedMCPCompletionHandoff(handoff, plan, input); reused != nil || !errors.Is(err, CodeHostedMCPInvalidIntent) {
+		t.Fatalf("reused handoff claim = %#v, %v", reused, err)
+	}
+}
+
+func w33DUnit1Handoff(t *testing.T, target TargetID) (TransactionInput, TransactionPlan, *hostedMCPCompletionHandoff, *transactionFSJournal, *hostedMCPPlatformSpy) {
+	t.Helper()
+	input := hostedMCPFinalizerFixture(t, target, hostedMCPTestEndpoint, nil)
+	plan := sealHostedMCPFixture(t, input)
+	journal, platform := hostedMCPJournal(input, nil)
+	resolver := &hostedMCPResolverSpy{trace: &platform.trace, value: []byte(hostedMCPTestSecret)}
+	renderer := &hostedMCPRendererSpy{trace: &platform.trace, output: []byte("sensitive-config")}
+	handoff, err := finalizeHostedMCP(plan, input, journal, resolver, renderer)
+	if err != nil || handoff == nil {
+		t.Fatalf("finalizeHostedMCP() = %#v, %v", handoff, err)
+	}
+	if resolver.calls != 1 || renderer.calls != 1 || platform.writeCalls != 1 || platform.commitCalls != 0 || !journal.active || platform.cleaned {
+		t.Fatalf("provisional C state: resolver=%#v renderer=%#v journal=%#v platform=%#v", resolver, renderer, journal, platform)
+	}
+	return input, plan, handoff, journal, platform
+}
+
+func claimW33DUnit1(t *testing.T, handoff *hostedMCPCompletionHandoff, plan TransactionPlan, input TransactionInput) *hostedMCPCompletionOwner {
+	t.Helper()
+	owner, err := claimHostedMCPCompletionHandoff(handoff, plan, input)
+	if err != nil || owner == nil {
+		t.Fatalf("claimHostedMCPCompletionHandoff() = %#v, %v", owner, err)
+	}
+	return owner
+}
+
+func assertW33DUnit1Unconsumed(t *testing.T, handoff *hostedMCPCompletionHandoff, journal *transactionFSJournal, platform *hostedMCPPlatformSpy, before []string) {
+	t.Helper()
+	if handoff.state.Load() != hostedMCPHandoffFresh || !journal.active || platform.commitCalls != 0 || platform.cleaned || !reflect.DeepEqual(platform.trace, before) {
+		t.Fatalf("invalid claim consumed or mutated: state=%d journal=%#v platform=%#v", handoff.state.Load(), journal, platform)
 	}
 }
 

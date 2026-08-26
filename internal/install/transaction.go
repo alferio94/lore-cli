@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"sync/atomic"
 
 	"github.com/alferio94/lore-cli/internal/compiler"
 	"github.com/alferio94/lore-cli/internal/manifest"
@@ -104,6 +105,125 @@ type TransactionReport struct {
 }
 
 type TransactionPlan struct{ report TransactionReport }
+
+const (
+	hostedMCPHandoffFresh uint32 = iota
+	hostedMCPHandoffClaimed
+	hostedMCPHandoffDisposed
+)
+
+// hostedMCPCompletionHandoff is the factory-only transfer of one active sealed
+// selected-target journal from C to D. Its fields and lifecycle remain internal
+// so callers cannot substitute paths, manifest bytes, credentials, or permits.
+type hostedMCPCompletionHandoff struct {
+	journal        *transactionFSJournal
+	report         TransactionReport
+	targetRoot     string
+	resource       string
+	planIRID       string
+	inputIRID      string
+	protectedWrite bool
+	statePaths     []string
+	stateCount     int
+	mutatedCount   int
+	provenancePath string
+	manifestHash   string
+	profile        PersistenceFact
+	state          atomic.Uint32
+}
+
+// hostedMCPCompletionOwner is the post-claim D-only journal seam. Unit 1
+// intentionally exposes rollback disposal only; Unit 2 extends this owner with
+// reversible profile and manifest-last completion before the sole commit.
+type hostedMCPCompletionOwner struct {
+	handoff *hostedMCPCompletionHandoff
+	journal *transactionFSJournal
+}
+
+func newHostedMCPCompletionHandoff(plan TransactionPlan, input TransactionInput, resealed TransactionPlan, journal *transactionFSJournal, resource string) (*hostedMCPCompletionHandoff, error) {
+	if plan.IsZero() || resealed.IsZero() || !reflect.DeepEqual(plan.DryRun(nil), resealed.DryRun(nil)) || !validHostedMCPJournalState(journal, resource) {
+		return nil, hostedMCPError(CodeHostedMCPInvalidIntent)
+	}
+	report := resealed.DryRun(nil)
+	root := filepath.Clean(input.Layout.RootDir)
+	if !filepath.IsAbs(root) || input.Layout.Target != report.Target || filepath.Clean(report.ProvenancePath) != filepath.Clean(input.ProvenancePath) {
+		return nil, hostedMCPError(CodeHostedMCPInvalidIntent)
+	}
+	paths := hostedMCPJournalStatePaths(journal)
+	return &hostedMCPCompletionHandoff{
+		journal:        journal,
+		report:         cloneTransactionReport(report),
+		targetRoot:     root,
+		resource:       resource,
+		planIRID:       plan.DryRun(nil).IRID,
+		inputIRID:      input.IR.IRID(),
+		protectedWrite: true,
+		statePaths:     paths,
+		stateCount:     len(journal.states),
+		mutatedCount:   journal.mutated,
+		provenancePath: report.ProvenancePath,
+		manifestHash:   report.ManifestHash,
+		profile:        report.Profile,
+	}, nil
+}
+
+func claimHostedMCPCompletionHandoff(handoff *hostedMCPCompletionHandoff, plan TransactionPlan, input TransactionInput) (*hostedMCPCompletionOwner, error) {
+	if handoff == nil || handoff.state.Load() != hostedMCPHandoffFresh {
+		return nil, hostedMCPError(CodeHostedMCPInvalidIntent)
+	}
+	resealed, err := SealTransactionPlan(input)
+	if err != nil {
+		return nil, hostedMCPError(CodeHostedMCPInvalidIntent, err)
+	}
+	report := resealed.DryRun(nil)
+	journal := handoff.journal
+	if plan.IsZero() || !reflect.DeepEqual(plan.DryRun(nil), report) || !reflect.DeepEqual(handoff.report, report) ||
+		handoff.targetRoot != filepath.Clean(input.Layout.RootDir) || handoff.provenancePath != report.ProvenancePath ||
+		handoff.planIRID != plan.DryRun(nil).IRID || handoff.inputIRID != input.IR.IRID() || !handoff.protectedWrite ||
+		handoff.manifestHash != report.ManifestHash || !reflect.DeepEqual(handoff.profile, report.Profile) ||
+		journal == nil || journal.platform == nil || handoff.stateCount != len(journal.states) || handoff.mutatedCount != journal.mutated ||
+		!reflect.DeepEqual(handoff.statePaths, hostedMCPJournalStatePaths(journal)) || !validHostedMCPJournalState(journal, handoff.resource) {
+		return nil, hostedMCPError(CodeHostedMCPInvalidIntent)
+	}
+	if !handoff.state.CompareAndSwap(hostedMCPHandoffFresh, hostedMCPHandoffClaimed) {
+		return nil, hostedMCPError(CodeHostedMCPInvalidIntent)
+	}
+	return &hostedMCPCompletionOwner{handoff: handoff, journal: journal}, nil
+}
+
+func rollbackHostedMCPCompletion(owner *hostedMCPCompletionOwner, primary error) error {
+	if owner == nil || owner.handoff == nil || owner.journal == nil || !owner.handoff.state.CompareAndSwap(hostedMCPHandoffClaimed, hostedMCPHandoffDisposed) {
+		return hostedMCPError(CodeHostedMCPInvalidIntent)
+	}
+	if err := owner.journal.Rollback(); err != nil {
+		return transactionFSResidualRiskError(primary, err)
+	}
+	return primary
+}
+
+func validHostedMCPJournalState(journal *transactionFSJournal, resource string) bool {
+	if journal == nil || journal.platform == nil || !journal.active || !journal.sealed || journal.mutated != len(journal.states) || !validTransactionRelativePath(resource) {
+		return false
+	}
+	matches := 0
+	for _, state := range journal.states {
+		if state.path == resource {
+			matches++
+		}
+	}
+	return matches == 1
+}
+
+func hostedMCPJournalStatePaths(journal *transactionFSJournal) []string {
+	if journal == nil {
+		return nil
+	}
+	paths := make([]string, len(journal.states))
+	for i, state := range journal.states {
+		paths[i] = state.path
+	}
+	return paths
+}
 
 func (p TransactionPlan) IsZero() bool { return p.report.Target == "" }
 
