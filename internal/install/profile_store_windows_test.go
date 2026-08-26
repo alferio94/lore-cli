@@ -196,25 +196,42 @@ func TestWindowsProfileStoreMutexIsExclusiveBoundedAndReusable(t *testing.T) {
 func TestWindowsProfileStoreOwnerThreadExitYieldsAbandonedOSProof(t *testing.T) {
 	path := filepath.Join(windowsPrivateDir(t), "profiles.json")
 	platform := newWindowsStorePlatform()
-	ownerResult := make(chan *windowsStoreAuthority, 1)
-	ownerDone := make(chan struct{})
+	type ownerThreadResult struct {
+		authority *windowsStoreAuthority
+		thread    windows.Handle
+		err       error
+	}
+	ownerResult := make(chan ownerThreadResult, 1)
 	go func() {
 		canonical, _ := platform.Canonical(path)
 		owned, err := platform.Acquire(canonical, 0, &windowsRecordingWaiter{})
 		if err != nil {
-			ownerResult <- nil
-			close(ownerDone)
+			ownerResult <- ownerThreadResult{err: err}
 			return
 		}
-		ownerResult <- owned.(*windowsStoreAuthority)
-		close(ownerDone)
+		thread, err := windows.OpenThread(windows.SYNCHRONIZE, false, windows.GetCurrentThreadId())
+		ownerResult <- ownerThreadResult{
+			authority: owned.(*windowsStoreAuthority),
+			thread:    thread,
+			err:       err,
+		}
 		// Returning while LockOSThread is active terminates this OS thread;
 		// Windows then marks its owned mutex abandoned.
 	}()
-	deadOwner := <-ownerResult
-	<-ownerDone
-	if deadOwner == nil {
-		t.Fatal("owner acquisition failed")
+	owner := <-ownerResult
+	if owner.err != nil || owner.authority == nil || owner.thread == 0 {
+		if owner.authority != nil {
+			windows.CloseHandle(owner.authority.handle)
+			windows.CloseHandle(owner.authority.parent)
+		}
+		t.Fatalf("owner setup = authority:%t thread:%t error:%v", owner.authority != nil, owner.thread != 0, owner.err)
+	}
+	defer windows.CloseHandle(owner.authority.handle)
+	defer windows.CloseHandle(owner.authority.parent)
+	waitResult, waitErr := windows.WaitForSingleObject(owner.thread, uint32(defaultProfileStoreWait/time.Millisecond))
+	closeThreadErr := windows.CloseHandle(owner.thread)
+	if waitErr != nil || waitResult != uint32(windows.WAIT_OBJECT_0) || closeThreadErr != nil {
+		t.Fatalf("owner-thread termination = result:%d wait:%v close:%v", waitResult, waitErr, closeThreadErr)
 	}
 	canonical, _ := platform.Canonical(path)
 	contender, err := platform.Acquire(canonical, defaultProfileStoreWait, wallClockWindowsWaiter{})
@@ -224,8 +241,6 @@ func TestWindowsProfileStoreOwnerThreadExitYieldsAbandonedOSProof(t *testing.T) 
 	if !contender.(*windowsStoreAuthority).abandoned {
 		t.Fatal("owner-thread exit was not reported as abandoned OS proof")
 	}
-	windows.CloseHandle(deadOwner.handle)
-	windows.CloseHandle(deadOwner.parent)
 	if err := contender.Release(); err != nil {
 		t.Fatal(err)
 	}
