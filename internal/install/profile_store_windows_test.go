@@ -6,12 +6,17 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"golang.org/x/sys/windows"
 )
+
+// Reserve the startup thread for the test harness so owner goroutines run on
+// terminable non-m0 threads, matching the Go runtime LockOSThread exit probe.
+func init() { runtime.LockOSThread() }
 
 func TestWindowsProfileStoreLoadAcceptsCurrentUserOnlyState(t *testing.T) {
 	dir := windowsPrivateDir(t)
