@@ -4,10 +4,14 @@ on:
   push:
     branches: ['**']
     paths:
+      - 'internal/install/hosted_mcp_finalizer*.go'
+      - 'internal/install/profile_store*.go'
       - 'internal/install/transaction*.go'
       - '.github/workflows/transaction-fs.yml'
   pull_request:
     paths:
+      - 'internal/install/hosted_mcp_finalizer*.go'
+      - 'internal/install/profile_store*.go'
       - 'internal/install/transaction*.go'
       - '.github/workflows/transaction-fs.yml'
 
@@ -18,6 +22,12 @@ env:
   C1A_WINDOWS_TESTS: '^(TestW33C1AWindowsRootIdentityAliasesAndReparseSafety|TestW33C1AWindowsCrossProcessBusyTimeoutAndRedaction|TestW33C1AWindowsMutexSecurityDescriptorAndCleanup|TestW33C1AWindowsWaitAbandonedOwnerDeathProof|TestW33C1AWindowsMutexHeldThroughTransactionRelease|TestW33C1AWindowsUnrelatedRootsRemainIndependent|TestW33C1AWindowsAuthoritySurfaceAndCoupling|TestW33C1AWindowsHelperProcess|TestW33C1AWindowsAbandonedMutexRecoversThroughAliasesBeforeMutation|TestW33C1AWindowsCrashRecoveryRestoresExactACLBytesExistenceAndDirectories|TestW33C1AWindowsRecoveryRejectsReparseSwapWithoutPrivilegeSkip|TestW33C1AWindowsRecoveryFailsClosedOnDurabilityOrRestorationRisk|TestW33C1AWindowsFlushWriteThroughAndRecoverySourceOrdering)$'
   C1A_WINDOWS_PARENT_COUNT: '13'
   W33B_PARENT_COUNT: '7'
+  W33D_TESTS: '^(TestW33DUnit2|TestW33DUnit1|TestW33CHostedMCP)'
+  W33D_PARENT_COUNT: '16'
+  W33D_SUBTEST_COUNT: '40'
+  W33D_EXPECTED_SYMBOLS: 'TestW33CHostedMCPFinalizerRequiresCompleteResealedReportEquivalence TestW33CHostedMCPFinalizerRejectsExternalOrUnboundIntentBeforeResolution TestW33CHostedMCPFinalizerReturnsProvisionalHandoffWithoutCommitOrRelease TestW33CHostedMCPFinalizerFailsFastAndRollsBackInOrder TestW33CHostedMCPFinalizerPreservesResidualRiskOutcome TestW33CHostedMCPNativeRendererUsesOnlySealedEndpointAndCredential TestW33CHostedMCPFinalizerInterfaceHasNoExternalEndpointPermitOrEffects TestW33DUnit1HandoffRejectsMissingForeignAlteredAndStaleWithoutConsumption TestW33DUnit1HandoffUsesOneCASAndOneExistingTransaction TestW33DUnit1ClaimedOwnerAloneRollsBackAndDisposesHandoff TestW33DUnit2CompletesProfileThenCanonicalManifestLastAndCommitsOnce TestW33DUnit2RejectsHandoffMisuseBeforeProfileOrManifestMutation TestW33DUnit2EveryPreCommitFailureRestoresProfileThenCAndB TestW33DUnit2ProfileAndManifestEncodingFailuresRemainPrimary TestW33DUnit2RollbackFailureOverridesPrimaryAndPostCommitCleanupIsDistinct TestW33DUnit2NativeHeldProfileRestorePreservesAbsenceAndPresentBytes'
+  UNIX_PROFILE_EXPECTED_SYMBOLS: 'TestUnixProfileStoreCanonicalAliasesSharePhysicalIdentity TestUnixProfileStoreCanonicalRejectsUnsafePaths TestUnixProfileStoreRejectsPathSwapsBeforeAuthority TestUnixProfileStoreRejectsAncestorSwapWhileWaiting TestUnixProfileStoreKernelAuthorityIsExclusiveBoundedAndReusable TestUnixProfileStoreAuthorityUsesRestrictiveEmptyArtifactAndProtectsLiveOwner TestUnixProfileStoreReleaseDoesNotRemoveReplacementAuthority TestUnixProfileStoreAuthorityCloseReleasesKernelOwnership TestUnixProfileStoreExistingStateInodeIsAuthority TestUnixProfileStoreCommitPublishesWhileLockedAndCleansAbsentSidecar TestUnixProfileStoreAbsentCommitFailuresCleanOwnedSidecar TestUnixProfileStoreCommitFailuresRestorePriorBytesModeAndResidue TestUnixProfileStoreCommitReportsFailedRollback'
+  WINDOWS_PROFILE_EXPECTED_SYMBOLS: 'TestWindowsProfileStoreLoadAcceptsCurrentUserOnlyState TestWindowsProfileStoreCompleteHardensStoreDirectory TestWindowsProfileStoreCanonicalIdentityUsesVolumeParentAndFoldedLeaf TestWindowsProfileStoreCanonicalRejectsTraversalLinksAndBroadACL TestWindowsProfileStoreRejectsReparseLeafAndParentSwap TestWindowsProfileStoreMutexIsExclusiveBoundedAndReusable TestWindowsProfileStoreOwnerThreadExitYieldsAbandonedOSProof TestWindowsProfileStoreMutexDACLAndAbandonedProofAreRestrictive TestWindowsProfileStoreCommitPublishesProtectedFile TestWindowsProfileStoreCommitFailureRestoresPriorBytes'
   WINDOWS_EXPECTED_SYMBOLS: 'TestW33BWindowsTransactionFSRejectsReparseTraversal TestW33BWindowsTransactionFSUsesCurrentUserOnlyACLs TestW33BWindowsTransactionFSRollbackRestoresOriginalACL TestW33C1AWindowsRootIdentityAliasesAndReparseSafety TestW33C1AWindowsCrossProcessBusyTimeoutAndRedaction TestW33C1AWindowsMutexSecurityDescriptorAndCleanup TestW33C1AWindowsWaitAbandonedOwnerDeathProof TestW33C1AWindowsMutexHeldThroughTransactionRelease TestW33C1AWindowsUnrelatedRootsRemainIndependent TestW33C1AWindowsAuthoritySurfaceAndCoupling TestW33C1AWindowsHelperProcess TestW33C1AWindowsAbandonedMutexRecoversThroughAliasesBeforeMutation TestW33C1AWindowsCrashRecoveryRestoresExactACLBytesExistenceAndDirectories TestW33C1AWindowsRecoveryRejectsReparseSwapWithoutPrivilegeSkip TestW33C1AWindowsRecoveryFailsClosedOnDurabilityOrRestorationRisk TestW33C1AWindowsFlushWriteThroughAndRecoverySourceOrdering'
 
 jobs:
@@ -151,6 +161,100 @@ jobs:
           test "$(grep -Ec '^--- PASS: TestW33C1AWindows' "$output")" -eq "$C1A_WINDOWS_PARENT_COUNT"
           ! grep -Eq -- '--- SKIP:|WARNING: DATA RACE' "$output"
 
+
+  w33d-native:
+    name: w33d-native-${{ matrix.goos }}-${{ matrix.goarch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {goos: linux, goarch: amd64, runner: ubuntu-latest, native_pattern: '^(TestW33DUnit2NativeHeldProfileRestore|TestUnixProfileStore)', native_parent_count: 14, native_subtest_count: 23}
+          - {goos: windows, goarch: amd64, runner: windows-latest, native_pattern: '^(TestW33DUnit2NativeHeldProfileRestore|TestWindowsProfileStore)', native_parent_count: 11, native_subtest_count: 2}
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Normalize Windows checkout line endings
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          git config core.autocrlf false
+          git checkout-index --force --all
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Capture and verify native runner identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'runner-os=%s\nrunner-arch=%s\nimage-os=%s\nimage-version=%s\n' "$RUNNER_OS" "$RUNNER_ARCH" "${ImageOS:-unknown}" "${ImageVersion:-unknown}"
+          go version
+          go env GOOS GOARCH GOVERSION
+          test "$(go env GOOS)" = "${{ matrix.goos }}"
+          test "$(go env GOARCH)" = "${{ matrix.goarch }}"
+      - name: W3.3-D format and diff checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          unformatted="$(gofmt -l internal/install/hosted_mcp_finalizer*.go internal/install/profile_store*.go internal/install/transaction.go internal/install/transaction_test.go)"
+          if [ -n "$unformatted" ]; then
+            printf 'gofmt required for:\n%s\n' "$unformatted" >&2
+            exit 1
+          fi
+          git diff --check
+      - name: W3.3-D focused and native normal then race evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          focused_normal="$RUNNER_TEMP/w33d-focused-normal-${{ matrix.goos }}-${{ matrix.goarch }}.log"
+          native_normal="$RUNNER_TEMP/w33d-native-normal-${{ matrix.goos }}-${{ matrix.goarch }}.log"
+          focused_race="$RUNNER_TEMP/w33d-focused-race-${{ matrix.goos }}-${{ matrix.goarch }}.log"
+          native_race="$RUNNER_TEMP/w33d-native-race-${{ matrix.goos }}-${{ matrix.goarch }}.log"
+
+          go test -count=1 ./internal/install -run "$W33D_TESTS" -timeout=300s -v 2>&1 | tee "$focused_normal"
+          test "$(grep -Ec '^--- PASS: (TestW33DUnit2|TestW33DUnit1|TestW33CHostedMCP)' "$focused_normal")" -eq "$W33D_PARENT_COUNT"
+          test "$(grep -Ec '^    --- PASS: (TestW33DUnit2|TestW33DUnit1|TestW33CHostedMCP).*/' "$focused_normal")" -eq "$W33D_SUBTEST_COUNT"
+          for test_name in $W33D_EXPECTED_SYMBOLS; do
+            grep -Eq "^--- PASS: ${test_name}( |$)" "$focused_normal"
+          done
+          ! grep -Eq -- '^--- FAIL:|--- SKIP:' "$focused_normal"
+
+          go test -count=1 ./internal/install -run '${{ matrix.native_pattern }}' -timeout=300s -v 2>&1 | tee "$native_normal"
+          test "$(grep -Ec '^--- PASS: (TestW33DUnit2NativeHeldProfileRestore|TestUnixProfileStore|TestWindowsProfileStore)' "$native_normal")" -eq '${{ matrix.native_parent_count }}'
+          test "$(grep -Ec '^    --- PASS: (TestW33DUnit2NativeHeldProfileRestore|TestUnixProfileStore|TestWindowsProfileStore).*/' "$native_normal")" -eq '${{ matrix.native_subtest_count }}'
+          grep -Eq '^--- PASS: TestW33DUnit2NativeHeldProfileRestorePreservesAbsenceAndPresentBytes( |$)' "$native_normal"
+          if [ '${{ matrix.goos }}' = linux ]; then
+            expected="$UNIX_PROFILE_EXPECTED_SYMBOLS"
+          else
+            expected="$WINDOWS_PROFILE_EXPECTED_SYMBOLS"
+          fi
+          for test_name in $expected; do
+            grep -Eq "^--- PASS: ${test_name}( |$)" "$native_normal"
+          done
+          ! grep -Eq -- '^--- FAIL:|--- SKIP:' "$native_normal"
+
+          go test -race -count=1 ./internal/install -run "$W33D_TESTS" -timeout=360s -v 2>&1 | tee "$focused_race"
+          test "$(grep -Ec '^--- PASS: (TestW33DUnit2|TestW33DUnit1|TestW33CHostedMCP)' "$focused_race")" -eq "$W33D_PARENT_COUNT"
+          test "$(grep -Ec '^    --- PASS: (TestW33DUnit2|TestW33DUnit1|TestW33CHostedMCP).*/' "$focused_race")" -eq "$W33D_SUBTEST_COUNT"
+          for test_name in $W33D_EXPECTED_SYMBOLS; do
+            grep -Eq "^--- PASS: ${test_name}( |$)" "$focused_race"
+          done
+          ! grep -Eq -- '^--- FAIL:|--- SKIP:|WARNING: DATA RACE' "$focused_race"
+
+          go test -race -count=1 ./internal/install -run '${{ matrix.native_pattern }}' -timeout=360s -v 2>&1 | tee "$native_race"
+          test "$(grep -Ec '^--- PASS: (TestW33DUnit2NativeHeldProfileRestore|TestUnixProfileStore|TestWindowsProfileStore)' "$native_race")" -eq '${{ matrix.native_parent_count }}'
+          test "$(grep -Ec '^    --- PASS: (TestW33DUnit2NativeHeldProfileRestore|TestUnixProfileStore|TestWindowsProfileStore).*/' "$native_race")" -eq '${{ matrix.native_subtest_count }}'
+          grep -Eq '^--- PASS: TestW33DUnit2NativeHeldProfileRestorePreservesAbsenceAndPresentBytes( |$)' "$native_race"
+          for test_name in $expected; do
+            grep -Eq "^--- PASS: ${test_name}( |$)" "$native_race"
+          done
+          ! grep -Eq -- '^--- FAIL:|--- SKIP:|WARNING: DATA RACE' "$native_race"
+
+          sha256sum "$focused_normal" "$native_normal" "$focused_race" "$native_race"
+          printf 'w33d-evidence=%s/%s focused=%s/%s native=%s/%s normal-and-race=pass skips=0 races=0\n' \
+            '${{ matrix.goos }}' '${{ matrix.goarch }}' "$W33D_PARENT_COUNT" "$W33D_SUBTEST_COUNT" \
+            '${{ matrix.native_parent_count }}' '${{ matrix.native_subtest_count }}'
+
   cross-build:
     name: cross-build-six-supported-targets
     runs-on: ubuntu-latest
@@ -173,8 +277,15 @@ jobs:
             test -s "$output"
             sha256sum "$output"
             go version -m "$output"
+            go tool nm "$output" > "$symbols"
+            w33d_found=0
+            for test_name in $W33D_EXPECTED_SYMBOLS; do
+              grep -Fq ".$test_name" "$symbols"
+              w33d_found=$((w33d_found + 1))
+            done
+            test "$w33d_found" -eq 16
+            printf 'w33d-symbols=%s/16 target=%s\n' "$w33d_found" "$target"
             if [[ "$target" == windows/* ]]; then
-              go tool nm "$output" > "$symbols"
               found=0
               for test_name in $WINDOWS_EXPECTED_SYMBOLS; do
                 grep -Fq ".$test_name" "$symbols"
