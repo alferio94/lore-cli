@@ -500,7 +500,7 @@ func newW33DCompletionFixture(t *testing.T, priorProfile bool) w33DCompletionFix
 	targetRoot := filepath.Join(t.TempDir(), "target")
 	input := w33DCompletionInput(t, TargetPi, targetRoot, projectRoot)
 	plan := sealHostedMCPFixture(t, input)
-	journal, target := hostedMCPJournal(input, nil)
+	journal, target := hostedMCPJournal(input, map[string]error{})
 	resolver := &hostedMCPResolverSpy{trace: &target.trace, value: []byte(hostedMCPTestSecret)}
 	renderer := &hostedMCPRendererSpy{trace: &target.trace, output: []byte("sensitive-config")}
 	handoff, err := finalizeHostedMCP(plan, input, journal, resolver, renderer)
