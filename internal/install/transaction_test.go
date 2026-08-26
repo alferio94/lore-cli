@@ -1,13 +1,17 @@
 package install
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/alferio94/lore-cli/internal/compiler"
 	"github.com/alferio94/lore-cli/internal/manifest"
@@ -274,6 +278,410 @@ func assertW33DUnit1Unconsumed(t *testing.T, handoff *hostedMCPCompletionHandoff
 	if handoff.state.Load() != hostedMCPHandoffFresh || !journal.active || platform.commitCalls != 0 || platform.cleaned || !reflect.DeepEqual(platform.trace, before) {
 		t.Fatalf("invalid claim consumed or mutated: state=%d journal=%#v platform=%#v", handoff.state.Load(), journal, platform)
 	}
+}
+
+func TestW33DUnit2CompletesProfileThenCanonicalManifestLastAndCommitsOnce(t *testing.T) {
+	fixture := newW33DCompletionFixture(t, false)
+	beforeV2 := append([]byte(nil), fixture.legacyV2...)
+	wantManifest, err := manifest.Encode(fixture.input.Manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := completeHostedMCPCompletion(fixture.handoff, fixture.plan, fixture.input, fixture.store, fixture.prepared); err != nil {
+		t.Fatalf("completeHostedMCPCompletion() error = %#v", err)
+	}
+	want := []string{
+		"resolve", "render", "write:mcp/lore.json",
+		"profile-acquire", "profile-snapshot", "profile-write",
+		"manifest-backup", "manifest-temp", "manifest-write", "manifest-sync", "manifest-replace", "manifest-dirsync", "manifest-cleanup", "manifest-publish",
+		"mark-committed", "cleanup", "release", "profile-release",
+	}
+	if !reflect.DeepEqual(fixture.target.trace, want) {
+		t.Fatalf("completion trace = %v, want %v", fixture.target.trace, want)
+	}
+	if !bytes.Equal(fixture.platform.manifest, wantManifest) || fixture.platform.manifestPath != provenanceV3Name {
+		t.Fatalf("manifest publication = %q at %q", fixture.platform.manifest, fixture.platform.manifestPath)
+	}
+	if fixture.target.commitCalls != 1 || fixture.profile.commits != 1 || fixture.profile.restores != 0 || fixture.profile.authority.held || fixture.journal.active || fixture.handoff.state.Load() != hostedMCPHandoffDisposed {
+		t.Fatalf("completion state: target=%#v profile=%#v journal=%#v handoff=%d", fixture.target, fixture.profile, fixture.journal, fixture.handoff.state.Load())
+	}
+	if !bytes.Equal(beforeV2, fixture.legacyV2) {
+		t.Fatal("legacy lore-install.json v2 bytes changed")
+	}
+	for _, event := range fixture.target.trace {
+		if strings.Contains(event, "lore-install.json") || strings.Contains(event, "server") || strings.Contains(event, "memory") || strings.Contains(event, "storage") {
+			t.Fatalf("completion crossed an excluded boundary: %q", event)
+		}
+	}
+}
+
+func TestW33DUnit2RejectsHandoffMisuseBeforeProfileOrManifestMutation(t *testing.T) {
+	fixture := newW33DCompletionFixture(t, false)
+	if err := completeHostedMCPCompletion(nil, fixture.plan, fixture.input, fixture.store, fixture.prepared); !errors.Is(err, CodeHostedMCPInvalidIntent) {
+		t.Fatalf("missing handoff error = %v", err)
+	}
+	if fixture.profile.acquireCalls != 0 || fixture.platform.backups != 0 || len(fixture.platform.manifest) != 0 {
+		t.Fatal("missing handoff reached Unit-2 mutation")
+	}
+	owner := claimW33DUnit1(t, fixture.handoff, fixture.plan, fixture.input)
+	if err := rollbackHostedMCPCompletion(owner, nil); err != nil {
+		t.Fatal(err)
+	}
+	before := append([]string(nil), fixture.target.trace...)
+	if err := completeHostedMCPCompletion(fixture.handoff, fixture.plan, fixture.input, fixture.store, fixture.prepared); !errors.Is(err, CodeHostedMCPInvalidIntent) {
+		t.Fatalf("reused handoff error = %v", err)
+	}
+	if fixture.profile.acquireCalls != 0 || fixture.platform.backups != 0 || !reflect.DeepEqual(before, fixture.target.trace) {
+		t.Fatal("reused handoff reached Unit-2 mutation")
+	}
+}
+
+func TestW33DUnit2EveryPreCommitFailureRestoresProfileThenCAndB(t *testing.T) {
+	stages := []string{"manifest-backup", "manifest-temp", "manifest-write", "manifest-sync", "manifest-replace", "manifest-dirsync", "manifest-cleanup", "final-commit", "cleanup"}
+	for _, stage := range stages {
+		t.Run(stage, func(t *testing.T) {
+			fixture := newW33DCompletionFixture(t, false)
+			if strings.HasPrefix(stage, "manifest-") {
+				fixture.platform.fail[stage] = errors.New("injected manifest failure")
+			} else {
+				fixture.journal.fail = func(got, _ string) error {
+					if got == stage {
+						return errors.New("injected final failure")
+					}
+					return nil
+				}
+			}
+			err := completeHostedMCPCompletion(fixture.handoff, fixture.plan, fixture.input, fixture.store, fixture.prepared)
+			if !errors.Is(err, CodeTransactionIO) {
+				t.Fatalf("%s error = %#v, want transaction_io", stage, err)
+			}
+			assertW33DProfileBeforeTargetRollback(t, fixture.target.trace)
+			if fixture.profile.restores != 1 || fixture.profile.present || fixture.target.commitCalls != 0 || fixture.journal.active || fixture.handoff.state.Load() != hostedMCPHandoffDisposed {
+				t.Fatalf("%s rollback state: target=%#v profile=%#v", stage, fixture.target, fixture.profile)
+			}
+		})
+	}
+}
+
+func TestW33DUnit2ProfileAndManifestEncodingFailuresRemainPrimary(t *testing.T) {
+	t.Run("profile", func(t *testing.T) {
+		fixture := newW33DCompletionFixture(t, false)
+		fixture.profile.fail["profile-write"] = errors.New("injected profile failure")
+		err := completeHostedMCPCompletion(fixture.handoff, fixture.plan, fixture.input, fixture.store, fixture.prepared)
+		if !errors.Is(err, CodeProfileIO) || errors.Is(err, CodeTransactionResidualRisk) || fixture.platform.backups != 0 {
+			t.Fatalf("profile primary = %#v backups=%d", err, fixture.platform.backups)
+		}
+	})
+	t.Run("manifest encode", func(t *testing.T) {
+		fixture := newW33DCompletionFixture(t, false)
+		primary := &manifest.CodecError{}
+		err := completeHostedMCPCompletionWithEncoder(fixture.handoff, fixture.plan, fixture.input, fixture.store, fixture.prepared, func(manifest.Manifest) ([]byte, error) {
+			return nil, primary
+		})
+		if err != primary || fixture.platform.backups != 0 || fixture.profile.restores != 1 {
+			t.Fatalf("manifest primary = %#v backups=%d restores=%d", err, fixture.platform.backups, fixture.profile.restores)
+		}
+		assertW33DProfileBeforeTargetRollback(t, fixture.target.trace)
+	})
+}
+
+func TestW33DUnit2RollbackFailureOverridesPrimaryAndPostCommitCleanupIsDistinct(t *testing.T) {
+	t.Run("rollback residual risk", func(t *testing.T) {
+		fixture := newW33DCompletionFixture(t, false)
+		fixture.platform.fail["manifest-write"] = errors.New("primary")
+		fixture.profile.fail["profile-restore"] = errors.New("restore failure")
+		err := completeHostedMCPCompletion(fixture.handoff, fixture.plan, fixture.input, fixture.store, fixture.prepared)
+		if !errors.Is(err, CodeTransactionResidualRisk) {
+			t.Fatalf("rollback error = %#v", err)
+		}
+		if fixture.profile.authority.held || fixture.journal.active {
+			t.Fatal("residual-risk path retained live authority")
+		}
+	})
+	t.Run("post-commit cleanup", func(t *testing.T) {
+		fixture := newW33DCompletionFixture(t, false)
+		fixture.target.fail["cleanup"] = errors.New("post-commit cleanup")
+		err := completeHostedMCPCompletion(fixture.handoff, fixture.plan, fixture.input, fixture.store, fixture.prepared)
+		if !errors.Is(err, CodeTransactionIO) || !errors.Is(err, errTransactionPostCommitCleanup) || errors.Is(err, CodeTransactionResidualRisk) {
+			t.Fatalf("post-commit cleanup error = %#v", err)
+		}
+		if fixture.profile.restores != 0 || fixture.profile.commits != 1 || fixture.profile.authority.held || fixture.target.commitCalls != 1 {
+			t.Fatalf("post-commit state: target=%#v profile=%#v", fixture.target, fixture.profile)
+		}
+	})
+}
+
+func TestW33DUnit2NativeHeldProfileRestorePreservesAbsenceAndPresentBytes(t *testing.T) {
+	t.Run("absent", func(t *testing.T) {
+		store := NewProfileStore(filepath.Join(t.TempDir(), "state", "profiles.json"))
+		root := filepath.Join(t.TempDir(), "project")
+		prepared, err := store.PrepareProject(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lease, err := store.beginHeldProfileCompletion(prepared, PersistenceFact{}, CommitOptions{WaitBudget: defaultProfileStoreWait})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(store.Path()); err != nil {
+			t.Fatalf("provisional profile missing: %v", err)
+		}
+		if err := lease.rollback(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Lstat(store.Path()); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("absent prior profile was not restored: %v", err)
+		}
+		if residue, _ := filepath.Glob(filepath.Join(filepath.Dir(store.Path()), ".profiles-*")); len(residue) != 0 {
+			t.Fatalf("profile residue = %v", residue)
+		}
+	})
+	t.Run("present", func(t *testing.T) {
+		store := NewProfileStore(filepath.Join(t.TempDir(), "state", "profiles.json"))
+		root := filepath.Join(t.TempDir(), "project")
+		prepared, _ := store.PrepareProject(root)
+		if err := store.Complete(prepared, PersistenceFact{Requested: true, Scope: compiler.ProfileScopeGlobal, ProfileID: "prior"}, ApplyBoundarySuccess); err != nil {
+			t.Fatal(err)
+		}
+		prior, _ := os.ReadFile(store.Path())
+		priorMode, _ := os.Stat(store.Path())
+		update, _ := store.PrepareProject(root)
+		lease, err := store.beginHeldProfileCompletion(update, PersistenceFact{Requested: true, Scope: compiler.ProfileScopeGlobal, ProfileID: "next"}, CommitOptions{WaitBudget: defaultProfileStoreWait})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := lease.rollback(); err != nil {
+			t.Fatal(err)
+		}
+		got, _ := os.ReadFile(store.Path())
+		gotMode, _ := os.Stat(store.Path())
+		if !bytes.Equal(got, prior) || gotMode.Mode() != priorMode.Mode() {
+			t.Fatalf("present profile restore differs: bytes=%t mode=%v/%v", bytes.Equal(got, prior), gotMode.Mode(), priorMode.Mode())
+		}
+	})
+}
+
+func assertW33DProfileBeforeTargetRollback(t *testing.T, trace []string) {
+	t.Helper()
+	profileRestore, targetRestore, targetRelease, profileRelease := -1, -1, -1, -1
+	for i, event := range trace {
+		switch event {
+		case "profile-restore":
+			profileRestore = i
+		case "restore:mcp/lore.json":
+			targetRestore = i
+		case "release":
+			targetRelease = i
+		case "profile-release":
+			profileRelease = i
+		}
+	}
+	if profileRestore < 0 || targetRestore < 0 || targetRelease < 0 || profileRelease < 0 || profileRestore > targetRestore || targetRestore > targetRelease || targetRelease > profileRelease {
+		t.Fatalf("rollback order = %v", trace)
+	}
+}
+
+type w33DCompletionFixture struct {
+	input    TransactionInput
+	plan     TransactionPlan
+	handoff  *hostedMCPCompletionHandoff
+	journal  *transactionFSJournal
+	target   *hostedMCPPlatformSpy
+	platform *w33DCompletionPlatform
+	profile  *w33DProfilePlatform
+	store    ProfileStore
+	prepared PreparedProject
+	legacyV2 []byte
+}
+
+func newW33DCompletionFixture(t *testing.T, priorProfile bool) w33DCompletionFixture {
+	t.Helper()
+	projectRoot := filepath.Join(t.TempDir(), "project")
+	targetRoot := filepath.Join(t.TempDir(), "target")
+	input := w33DCompletionInput(t, TargetPi, targetRoot, projectRoot)
+	plan := sealHostedMCPFixture(t, input)
+	journal, target := hostedMCPJournal(input, nil)
+	resolver := &hostedMCPResolverSpy{trace: &target.trace, value: []byte(hostedMCPTestSecret)}
+	renderer := &hostedMCPRendererSpy{trace: &target.trace, output: []byte("sensitive-config")}
+	handoff, err := finalizeHostedMCP(plan, input, journal, resolver, renderer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	completion := &w33DCompletionPlatform{hostedMCPPlatformSpy: target, fail: map[string]error{}}
+	journal.platform = completion
+	canonical, _ := canonicalStorePath("w33d-profile", nil)
+	profile := &w33DProfilePlatform{canonical: canonical, authority: &w33DProfileAuthority{trace: &target.trace}, trace: &target.trace, fail: map[string]error{}}
+	if priorProfile {
+		profile.present = true
+		profile.raw = []byte("prior")
+	}
+	storePath := filepath.Join(t.TempDir(), "state", "profiles.json")
+	store := ProfileStore{path: storePath, platform: profile, waiter: &fakeMonotonicWaiter{}}
+	prepared := PreparedProject{path: storePath, root: projectRoot, id: stableProjectID(projectRoot), state: profileState{Version: profileStateVersion, Projects: []profileProject{}}, baseline: nil, existed: false}
+	return w33DCompletionFixture{input: input, plan: plan, handoff: handoff, journal: journal, target: target, platform: completion, profile: profile, store: store, prepared: prepared, legacyV2: []byte(`{"schema_version":2,"preserved":true}`)}
+}
+
+func w33DCompletionInput(t *testing.T, target TargetID, targetRoot, projectRoot string) TransactionInput {
+	t.Helper()
+	projectID := stableProjectID(projectRoot)
+	ir, err := compiler.Compile(compiler.Input{
+		Schema: compiler.SchemaV1, Compiler: compiler.CompilerV1,
+		Pack: compiler.PackSnapshot{ID: "portable-agent-pack", Version: "1.0.0"}, Target: compiler.TargetID(target), ProjectID: projectID,
+		Profiles:   []compiler.Profile{{ID: "global", DefaultModel: "global-model", Roles: map[string]string{"worker": "global-worker"}}, {ID: "project", DefaultModel: "project-model", Roles: map[string]string{"worker": "project-worker"}}},
+		Candidates: []compiler.Candidate{{Tier: compiler.TierGlobal, ProfileID: "global", SourceKey: "global-source", Scope: compiler.ProfileScopeGlobal, Location: "global/config"}, {Tier: compiler.TierProject, ProfileID: "project", SourceKey: "project-source", Scope: compiler.ProfileScopeProject, ProjectID: projectID, Location: "project/config"}},
+		Requested:  []compiler.CapabilityRequest{{ID: compiler.CapabilityPortable, Required: true}}, CredentialSlots: []compiler.CredentialRef{{Provider: "vault", Slot: "lore"}},
+		Persistence: compiler.RequestedProfilePersistence{Scope: compiler.ProfileScopeProject, ProjectID: projectID, ProfileID: "project"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	projected := projectorInput(target, false)
+	desired, _ := json.Marshal(hostedMCPIntentDocument{Endpoint: hostedMCPTestEndpoint, Credential: hostedMCPIntentCredential{Provider: "vault", Slot: "lore"}})
+	projected.Resources[2].Desired = desired
+	semantic := projectMust(t, ir, projected)
+	report, err := reconcile.Reconcile(ir, semantic.Intents())
+	if err != nil {
+		t.Fatal(err)
+	}
+	permit, ok := report.FinalizationPermit()
+	if !ok {
+		t.Fatal("fixture missing finalization permit")
+	}
+	facts, decisions := semantic.TargetFacts(), report.Decisions()
+	projections := make([]manifest.Projection, len(decisions))
+	drift := make([]TransactionDriftFact, len(facts.Resources))
+	for i, decision := range decisions {
+		projections[i] = manifest.Projection{Path: decision.Resource, Ownership: string(decision.Mode), Hash: decision.NextHash}
+	}
+	for i, fact := range facts.Resources {
+		drift[i] = TransactionDriftFact{Resource: fact.Resource, Present: fact.Present, Observed: append([]byte(nil), fact.Observed...)}
+	}
+	finalizations := []manifest.FinalizationReference{{Path: "mcp/lore.json", FinalizerID: hostedMCPFinalizerID, Provider: "vault", Slot: "lore"}}
+	roles := make([]manifest.RoleModelProvenance, len(facts.Roles))
+	for i, role := range facts.Roles {
+		roles[i] = manifest.RoleModelProvenance{Role: role.Role, Model: role.Model, Source: role.Winner.SourceKey, Location: role.Winner.Location}
+	}
+	capabilities := make([]manifest.CapabilityProvenance, len(facts.Capabilities))
+	for i, capability := range facts.Capabilities {
+		capabilities[i] = manifest.CapabilityProvenance{ID: string(capability.ID), State: string(capability.State), Reason: capability.Reason}
+	}
+	m := manifest.Manifest{
+		SchemaVersion: manifest.SchemaV3, CompilerVersion: ir.Compiler,
+		Pack: manifest.PackIdentity{ID: "portable-agent-pack", Version: "1.0.0"}, InputID: ir.InputID(), ResolvedIRID: ir.IRID(),
+		Profile: manifest.ProfileIdentity{ID: facts.Profile.Winner.ProfileID, Version: "1.0.0", Scope: string(facts.Persistence.Scope)}, Target: string(target),
+		Projections: projections, RollbackBoundary: manifest.RollbackBoundary{ID: "rb-v1", Kind: "selected-target-backup-v1", Target: string(target), Resources: append([]manifest.Projection(nil), projections...), Finalizations: append([]manifest.FinalizationReference(nil), finalizations...)},
+		RoleModels: roles, Capabilities: capabilities, Reconciliation: manifest.ReconciliationProvenance{Owner: "compiler", Decision: "admitted"}, Finalizations: finalizations,
+	}
+	return TransactionInput{IR: ir, Semantic: semantic, Reconcile: report, Permit: permit, Targets: []TargetID{target}, Layout: HarnessLayout{Target: target, RootDir: targetRoot, ManifestPath: filepath.Join(targetRoot, "lore-install.json")}, ProvenancePath: filepath.Join(targetRoot, provenanceV3Name), Manifest: m, ProfileCompletion: facts.Persistence, Drift: drift}
+}
+
+type w33DCompletionPlatform struct {
+	*hostedMCPPlatformSpy
+	fail         map[string]error
+	backups      int
+	manifestPath string
+	manifest     []byte
+}
+
+func (p *w33DCompletionPlatform) appendCompletionBackup(path string, index int, states []transactionFSState) (transactionFSState, error) {
+	p.backups++
+	p.trace = append(p.trace, "manifest-backup")
+	if err := p.fail["manifest-backup"]; err != nil {
+		return transactionFSState{}, err
+	}
+	if index != len(states) || path != provenanceV3Name {
+		return transactionFSState{}, errTransactionFSUnsafePath
+	}
+	return transactionFSState{path: path}, nil
+}
+
+func (p *w33DCompletionPlatform) publishCompletionManifest(path string, data []byte, _ transactionFSFailpoint) error {
+	for _, stage := range []string{"manifest-temp", "manifest-write", "manifest-sync", "manifest-replace", "manifest-dirsync", "manifest-cleanup"} {
+		p.trace = append(p.trace, stage)
+		if err := p.fail[stage]; err != nil {
+			return err
+		}
+	}
+	p.trace = append(p.trace, "manifest-publish")
+	p.manifestPath, p.manifest = path, append([]byte(nil), data...)
+	return nil
+}
+
+type w33DProfileState struct {
+	owner   *w33DProfileAuthority
+	present bool
+	raw     []byte
+}
+
+func (*w33DProfileState) heldProfileState() {}
+
+type w33DProfilePlatform struct {
+	canonical    storePath
+	authority    *w33DProfileAuthority
+	trace        *[]string
+	fail         map[string]error
+	raw          []byte
+	present      bool
+	acquireCalls int
+	commits      int
+	restores     int
+}
+
+func (p *w33DProfilePlatform) Canonical(string) (storePath, error) { return p.canonical, nil }
+func (p *w33DProfilePlatform) Acquire(storePath, time.Duration, monotonicWaiter) (authority, error) {
+	p.acquireCalls++
+	p.authority.held = true
+	*p.trace = append(*p.trace, "profile-acquire")
+	return p.authority, nil
+}
+func (p *w33DProfilePlatform) Read(authority) ([]byte, bool, error) {
+	return append([]byte(nil), p.raw...), p.present, nil
+}
+func (p *w33DProfilePlatform) Commit(owned authority, _, next []byte) error {
+	if owned != p.authority || !p.authority.held {
+		return errors.New("profile commit without authority")
+	}
+	*p.trace = append(*p.trace, "profile-write")
+	if err := p.fail["profile-write"]; err != nil {
+		return err
+	}
+	p.commits++
+	p.raw, p.present = append([]byte(nil), next...), true
+	return nil
+}
+func (p *w33DProfilePlatform) snapshotHeld(owned authority) ([]byte, bool, heldProfileState, error) {
+	if owned != p.authority || !p.authority.held {
+		return nil, false, nil, errStoreAuthorityInvalidPath
+	}
+	*p.trace = append(*p.trace, "profile-snapshot")
+	if err := p.fail["profile-snapshot"]; err != nil {
+		return nil, false, nil, err
+	}
+	return append([]byte(nil), p.raw...), p.present, &w33DProfileState{owner: p.authority, present: p.present, raw: append([]byte(nil), p.raw...)}, nil
+}
+func (p *w33DProfilePlatform) restoreHeld(owned authority, prior heldProfileState) error {
+	state, ok := prior.(*w33DProfileState)
+	if !ok || state.owner != p.authority || owned != p.authority || !p.authority.held {
+		return errStoreAuthorityInvalidPath
+	}
+	*p.trace = append(*p.trace, "profile-restore")
+	if err := p.fail["profile-restore"]; err != nil {
+		return err
+	}
+	p.restores++
+	p.present, p.raw = state.present, append([]byte(nil), state.raw...)
+	return nil
+}
+
+type w33DProfileAuthority struct {
+	trace *[]string
+	held  bool
+}
+
+func (a *w33DProfileAuthority) Release() error {
+	*a.trace = append(*a.trace, "profile-release")
+	a.held = false
+	return nil
 }
 
 func transactionFixture(t *testing.T, target TargetID, root string, reverse bool) TransactionInput {

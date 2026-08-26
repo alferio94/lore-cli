@@ -3,6 +3,7 @@ package install
 import (
 	"bytes"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"reflect"
@@ -127,6 +128,7 @@ type hostedMCPCompletionHandoff struct {
 	stateCount     int
 	mutatedCount   int
 	provenancePath string
+	provenanceRel  string
 	manifestHash   string
 	profile        PersistenceFact
 	state          atomic.Uint32
@@ -140,6 +142,15 @@ type hostedMCPCompletionOwner struct {
 	journal *transactionFSJournal
 }
 
+type completionJournalPlatform interface {
+	appendCompletionBackup(string, int, []transactionFSState) (transactionFSState, error)
+	publishCompletionManifest(string, []byte, transactionFSFailpoint) error
+}
+
+type hostedMCPManifestEncoder func(manifest.Manifest) ([]byte, error)
+
+var errTransactionPostCommitCleanup = errors.New("transaction post-commit cleanup failed")
+
 func newHostedMCPCompletionHandoff(plan TransactionPlan, input TransactionInput, resealed TransactionPlan, journal *transactionFSJournal, resource string) (*hostedMCPCompletionHandoff, error) {
 	if plan.IsZero() || resealed.IsZero() || !reflect.DeepEqual(plan.DryRun(nil), resealed.DryRun(nil)) || !validHostedMCPJournalState(journal, resource) {
 		return nil, hostedMCPError(CodeHostedMCPInvalidIntent)
@@ -150,6 +161,10 @@ func newHostedMCPCompletionHandoff(plan TransactionPlan, input TransactionInput,
 		return nil, hostedMCPError(CodeHostedMCPInvalidIntent)
 	}
 	paths := hostedMCPJournalStatePaths(journal)
+	provenanceRel, err := filepath.Rel(root, filepath.Clean(report.ProvenancePath))
+	if err != nil || !validTransactionRelativePath(provenanceRel) || filepath.Base(provenanceRel) != provenanceV3Name {
+		return nil, hostedMCPError(CodeHostedMCPInvalidIntent)
+	}
 	return &hostedMCPCompletionHandoff{
 		journal:        journal,
 		report:         cloneTransactionReport(report),
@@ -162,6 +177,7 @@ func newHostedMCPCompletionHandoff(plan TransactionPlan, input TransactionInput,
 		stateCount:     len(journal.states),
 		mutatedCount:   journal.mutated,
 		provenancePath: report.ProvenancePath,
+		provenanceRel:  provenanceRel,
 		manifestHash:   report.ManifestHash,
 		profile:        report.Profile,
 	}, nil
@@ -179,6 +195,7 @@ func claimHostedMCPCompletionHandoff(handoff *hostedMCPCompletionHandoff, plan T
 	journal := handoff.journal
 	if plan.IsZero() || !reflect.DeepEqual(plan.DryRun(nil), report) || !reflect.DeepEqual(handoff.report, report) ||
 		handoff.targetRoot != filepath.Clean(input.Layout.RootDir) || handoff.provenancePath != report.ProvenancePath ||
+		handoff.provenanceRel != completionProvenanceRelativePath(input.Layout.RootDir, report.ProvenancePath) ||
 		handoff.planIRID != plan.DryRun(nil).IRID || handoff.inputIRID != input.IR.IRID() || !handoff.protectedWrite ||
 		handoff.manifestHash != report.ManifestHash || !reflect.DeepEqual(handoff.profile, report.Profile) ||
 		journal == nil || journal.platform == nil || handoff.stateCount != len(journal.states) || handoff.mutatedCount != journal.mutated ||
@@ -199,6 +216,176 @@ func rollbackHostedMCPCompletion(owner *hostedMCPCompletionOwner, primary error)
 		return transactionFSResidualRiskError(primary, err)
 	}
 	return primary
+}
+
+func completionProvenanceRelativePath(root, path string) string {
+	root, path = filepath.Clean(root), filepath.Clean(path)
+	rel, err := filepath.Rel(root, path)
+	if err != nil || !validTransactionRelativePath(rel) || filepath.Base(rel) != provenanceV3Name {
+		return ""
+	}
+	return rel
+}
+
+// completeHostedMCPCompletion is D's sole completion entry. It claims exactly
+// one Unit-1 handoff, keeps target authority outermost, holds profile authority
+// through canonical v3 publication, and performs one final commit/release.
+func completeHostedMCPCompletion(handoff *hostedMCPCompletionHandoff, plan TransactionPlan, input TransactionInput, store ProfileStore, prepared PreparedProject) error {
+	return completeHostedMCPCompletionWithEncoder(handoff, plan, input, store, prepared, manifest.Encode)
+}
+
+func completeHostedMCPCompletionWithEncoder(handoff *hostedMCPCompletionHandoff, plan TransactionPlan, input TransactionInput, store ProfileStore, prepared PreparedProject, encode hostedMCPManifestEncoder) error {
+	owner, err := claimHostedMCPCompletionHandoff(handoff, plan, input)
+	if err != nil {
+		return err
+	}
+	if encode == nil || owner.handoff.provenanceRel == "" || owner.handoff.provenanceRel != completionProvenanceRelativePath(input.Layout.RootDir, input.ProvenancePath) {
+		return rollbackHostedMCPCompletion(owner, hostedMCPError(CodeHostedMCPInvalidIntent))
+	}
+
+	lease, err := store.beginHeldProfileCompletion(prepared, owner.handoff.profile, CommitOptions{WaitBudget: defaultProfileStoreWait})
+	if err != nil {
+		primary := err
+		var profileErr *ProfileStoreError
+		profileResidual := errors.As(err, &profileErr) && profileErr.ResidualRisk()
+		rolled := rollbackHostedMCPCompletion(owner, primary)
+		if profileResidual || errors.Is(rolled, CodeTransactionResidualRisk) {
+			return transactionFSResidualRiskError(primary, rolled)
+		}
+		return rolled
+	}
+
+	canonical, err := encode(input.Manifest)
+	if err != nil {
+		return rollbackHostedMCPCompletionD(owner, lease, len(owner.journal.states), err)
+	}
+	sum := sha256.Sum256(canonical)
+	if fmt.Sprintf("%x", sum) != owner.handoff.manifestHash {
+		return rollbackHostedMCPCompletionD(owner, lease, len(owner.journal.states), hostedMCPError(CodeHostedMCPInvalidIntent))
+	}
+	platform, ok := owner.journal.platform.(completionJournalPlatform)
+	if !ok || platform == nil {
+		return rollbackHostedMCPCompletionD(owner, lease, len(owner.journal.states), transactionFSIOError("transaction.journal"))
+	}
+	manifestIndex := len(owner.journal.states)
+	state, err := platform.appendCompletionBackup(owner.handoff.provenanceRel, manifestIndex, owner.journal.states)
+	if err != nil {
+		return rollbackHostedMCPCompletionD(owner, lease, manifestIndex, transactionFSIOError("transaction.journal", err))
+	}
+	owner.journal.states = append(owner.journal.states, state)
+	if err := platform.publishCompletionManifest(owner.handoff.provenanceRel, canonical, owner.journal.fail); err != nil {
+		return rollbackHostedMCPCompletionD(owner, lease, manifestIndex, transactionFSIOError("transaction.journal", err))
+	}
+	owner.journal.mutated = len(owner.journal.states)
+	return commitHostedMCPCompletionD(owner, lease, manifestIndex)
+}
+
+func rollbackHostedMCPCompletionD(owner *hostedMCPCompletionOwner, lease *profileCompletionLease, manifestIndex int, primary error) error {
+	if owner == nil || owner.handoff == nil || owner.journal == nil || owner.handoff.state.Load() != hostedMCPHandoffClaimed {
+		return hostedMCPError(CodeHostedMCPInvalidIntent)
+	}
+	journal := owner.journal
+	var causes []error
+	residual := false
+	if err := journal.platform.removeTemps(journal.states); err != nil {
+		causes = append(causes, err)
+		residual = true
+	}
+	if manifestIndex < len(journal.states) {
+		if err := journal.platform.restore(journal.states[manifestIndex]); err != nil {
+			causes = append(causes, err)
+			residual = true
+		}
+	}
+	if lease != nil {
+		if err := lease.restore(); err != nil {
+			causes = append(causes, err)
+			residual = true
+		}
+	}
+	last := manifestIndex
+	if last > len(journal.states) {
+		last = len(journal.states)
+	}
+	for i := last - 1; i >= 0; i-- {
+		state := journal.states[i]
+		if err := injectTransactionFS(journal.fail, "rollback", state.path); err != nil {
+			causes = append(causes, err)
+		}
+		if err := journal.platform.restore(state); err != nil {
+			causes = append(causes, err)
+			residual = true
+		}
+	}
+	if err := journal.platform.removeCreatedDirs(); err != nil {
+		causes = append(causes, err)
+		residual = true
+	}
+	if !residual {
+		if err := journal.platform.markRestored(); err != nil {
+			causes = append(causes, err)
+			residual = true
+		}
+	}
+	if err := injectTransactionFS(journal.fail, "cleanup", "journal"); err != nil {
+		causes = append(causes, err)
+	}
+	if !residual {
+		if err := journal.platform.cleanup(); err != nil {
+			causes = append(causes, err)
+			residual = true
+		}
+	}
+	if err := journal.guard.Release(); err != nil {
+		causes = append(causes, err)
+		residual = true
+	}
+	if lease != nil {
+		if err := lease.releaseRollback(); err != nil {
+			causes = append(causes, err)
+			residual = true
+		}
+	}
+	journal.active = false
+	owner.handoff.state.Store(hostedMCPHandoffDisposed)
+	if residual {
+		return transactionFSResidualRiskError(append([]error{primary}, causes...)...)
+	}
+	return primary
+}
+
+func commitHostedMCPCompletionD(owner *hostedMCPCompletionOwner, lease *profileCompletionLease, manifestIndex int) error {
+	journal := owner.journal
+	primary := transactionFSIOError("transaction.journal")
+	if err := injectTransactionFS(journal.fail, "final-commit", "journal"); err != nil {
+		return rollbackHostedMCPCompletionD(owner, lease, manifestIndex, transactionFSIOError("transaction.journal", err))
+	}
+	if err := injectTransactionFS(journal.fail, "cleanup", "journal"); err != nil {
+		return rollbackHostedMCPCompletionD(owner, lease, manifestIndex, transactionFSIOError("transaction.journal", err))
+	}
+	if err := journal.platform.markCommitted(); err != nil {
+		return rollbackHostedMCPCompletionD(owner, lease, manifestIndex, transactionFSIOError("transaction.journal", err))
+	}
+	if err := journal.platform.cleanup(); err != nil {
+		// The durable committed marker makes this a post-commit cleanup outcome,
+		// not a pre-commit apply failure. Recovery may only finish cleanup.
+		primary = transactionFSIOError("transaction.journal", errTransactionPostCommitCleanup)
+	}
+	if err := journal.guard.Release(); err != nil {
+		journal.active = false
+		owner.handoff.state.Store(hostedMCPHandoffDisposed)
+		profileErr := lease.commit()
+		return transactionFSResidualRiskError(primary, err, profileErr)
+	}
+	journal.active = false
+	owner.handoff.state.Store(hostedMCPHandoffDisposed)
+	if err := lease.commit(); err != nil {
+		return transactionFSResidualRiskError(primary, err)
+	}
+	if errors.Is(primary, errTransactionPostCommitCleanup) {
+		return primary
+	}
+	return nil
 }
 
 func validHostedMCPJournalState(journal *transactionFSJournal, resource string) bool {

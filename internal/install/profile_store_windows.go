@@ -38,6 +38,15 @@ type windowsStoreAuthority struct {
 	released  bool
 }
 
+type windowsHeldProfileState struct {
+	authority *windowsStoreAuthority
+	present   bool
+	raw       []byte
+	acl       string
+}
+
+func (*windowsHeldProfileState) heldProfileState() {}
+
 func newWindowsStorePlatform() windowsStorePlatform { return windowsStorePlatform{} }
 func defaultStorePlatform() storePlatform           { return newWindowsStorePlatform() }
 
@@ -245,6 +254,75 @@ func (windowsStorePlatform) Read(owned authority) ([]byte, bool, error) {
 	return raw, true, nil
 }
 
+func (p windowsStorePlatform) snapshotHeld(owned authority) ([]byte, bool, heldProfileState, error) {
+	a, ok := owned.(*windowsStoreAuthority)
+	if !ok || a == nil || a.released || a.path.revalidate() != nil {
+		return nil, false, nil, errStoreAuthorityInvalidPath
+	}
+	raw, present, err := p.Read(owned)
+	if err != nil {
+		return nil, false, nil, err
+	}
+	state := &windowsHeldProfileState{authority: a, present: present, raw: append([]byte(nil), raw...)}
+	if present {
+		state.acl, err = windowsTransactionACL(filepath.Join(a.path.finalPath, a.path.leaf))
+		if err != nil {
+			return nil, false, nil, errStoreAuthorityInvalidPath
+		}
+	}
+	return append([]byte(nil), raw...), present, state, nil
+}
+
+func (p windowsStorePlatform) restoreHeld(owned authority, prior heldProfileState) error {
+	a, ok := owned.(*windowsStoreAuthority)
+	state, stateOK := prior.(*windowsHeldProfileState)
+	if !ok || !stateOK || a == nil || state == nil || state.authority != a || a.released || a.path.revalidate() != nil {
+		return errStoreAuthorityInvalidPath
+	}
+	if err := p.inject("held-restore"); err != nil {
+		return err
+	}
+	destination := filepath.Join(a.path.finalPath, a.path.leaf)
+	if !state.present {
+		if a.path.revalidate() != nil {
+			return errStoreAuthorityInvalidPath
+		}
+		if err := os.Remove(destination); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return p.inject("held-restore-cleanup")
+	}
+	tmp, err := os.CreateTemp(a.path.finalPath, ".profiles-*.tmp")
+	if err != nil {
+		return err
+	}
+	name := tmp.Name()
+	defer os.Remove(name)
+	if err = windowsProtectFile(name); err == nil {
+		_, err = tmp.Write(state.raw)
+	}
+	if err == nil {
+		err = tmp.Sync()
+	}
+	if closeErr := tmp.Close(); err == nil {
+		err = closeErr
+	}
+	if err == nil {
+		if a.path.revalidate() != nil {
+			err = errStoreAuthorityInvalidPath
+		} else {
+			err = moveWindowsFile(name, destination)
+		}
+	}
+	if err == nil {
+		err = restoreWindowsTransactionACL(destination, state.acl)
+	}
+	if err != nil {
+		return err
+	}
+	return p.inject("held-restore-cleanup")
+}
+
 func (p windowsStorePlatform) Commit(owned authority, prior, next []byte) error {
 	a, ok := owned.(*windowsStoreAuthority)
 	if !ok || a == nil || a.released || a.path.revalidate() != nil {
@@ -274,8 +352,12 @@ func (p windowsStorePlatform) Commit(owned authority, prior, next []byte) error 
 	if err == nil {
 		err = p.inject("replace")
 	}
-	if err == nil && a.path.revalidate() == nil {
-		err = moveWindowsFile(tmpPath, filepath.Join(a.path.finalPath, a.path.leaf))
+	if err == nil {
+		if a.path.revalidate() != nil {
+			err = errStoreAuthorityInvalidPath
+		} else {
+			err = moveWindowsFile(tmpPath, filepath.Join(a.path.finalPath, a.path.leaf))
+		}
 	}
 	if err != nil {
 		return err
@@ -316,6 +398,149 @@ func (p windowsStorePlatform) restore(a *windowsStoreAuthority, prior []byte) er
 		err = moveWindowsFile(name, destination)
 	}
 	return err
+}
+
+// appendCompletionBackup durably extends the active selected-target journal
+// with the prior v3 state before D publishes the canonical replacement.
+func (p *windowsTransactionFS) appendCompletionBackup(rel string, index int, states []transactionFSState) (transactionFSState, error) {
+	if p == nil || filepath.Base(rel) != provenanceV3Name || index != len(states) || !validTransactionRelativePath(rel) {
+		return transactionFSState{}, errTransactionFSUnsafePath
+	}
+	path := filepath.Join(p.root, rel)
+	if !windowsTransactionAncestorsSafe(p.root, path) {
+		return transactionFSState{}, errTransactionFSUnsafePath
+	}
+	state := transactionFSState{path: rel}
+	createdBackup, complete := "", false
+	defer func() {
+		if !complete && createdBackup != "" {
+			_ = os.Remove(createdBackup)
+		}
+	}()
+	if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
+		// Exact absence is represented independently from empty prior bytes.
+	} else if err != nil || !windowsTransactionPathSafe(path, false) {
+		return transactionFSState{}, errTransactionFSUnsafePath
+	} else {
+		acl, err := windowsTransactionACL(path)
+		if err != nil {
+			return transactionFSState{}, errTransactionFSIO
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return transactionFSState{}, errTransactionFSIO
+		}
+		backup := filepath.Join("backups", fmt.Sprintf("%06d", index))
+		backupPath := filepath.Join(p.journal, backup)
+		file, err := os.OpenFile(backupPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if err == nil {
+			err = windowsProtectFile(backupPath)
+		}
+		if err == nil {
+			_, err = file.Write(data)
+		}
+		if err == nil {
+			err = file.Sync()
+		}
+		if file != nil {
+			if closeErr := file.Close(); err == nil {
+				err = closeErr
+			}
+		}
+		if err != nil {
+			_ = os.Remove(backupPath)
+			return transactionFSState{}, errTransactionFSIO
+		}
+		createdBackup = backupPath
+		state = transactionFSState{path: rel, backup: backup, exists: true, windowsACL: acl}
+	}
+	next := append(append([]transactionFSState(nil), states...), state)
+	data, err := encodeTransactionFSDurableJournal(p.identity, next, p.createdDirs)
+	if err != nil {
+		return transactionFSState{}, err
+	}
+	temp := filepath.Join(p.journal, "journal.json.completion")
+	if _, err := os.Lstat(temp); !errors.Is(err, os.ErrNotExist) {
+		return transactionFSState{}, errTransactionFSIO
+	}
+	if err := writeTransactionWindowsDurableFile(temp, data); err != nil {
+		return transactionFSState{}, err
+	}
+	if err := moveWindowsFile(temp, filepath.Join(p.journal, "journal.json")); err != nil {
+		_ = os.Remove(temp)
+		return transactionFSState{}, errTransactionFSIO
+	}
+	complete = true
+	return state, nil
+}
+
+func (p *windowsTransactionFS) publishCompletionManifest(rel string, data []byte, fail transactionFSFailpoint) (err error) {
+	if filepath.Base(rel) != provenanceV3Name || len(data) == 0 {
+		return errTransactionFSUnsafePath
+	}
+	path := filepath.Join(p.root, rel)
+	if err := p.ensureParents(filepath.Dir(path)); err != nil {
+		return err
+	}
+	if _, err := os.Lstat(path); err == nil && !windowsTransactionPathSafe(path, false) {
+		return errTransactionFSUnsafePath
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return errTransactionFSUnsafePath
+	}
+	name, err := p.transactionTempPath(path)
+	if err != nil {
+		return err
+	}
+	if err := injectTransactionFS(fail, "manifest-temp", rel); err != nil {
+		return err
+	}
+	tmp, err := os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return errTransactionFSIO
+	}
+	closed := false
+	defer func() {
+		if !closed {
+			if closeErr := tmp.Close(); err == nil && closeErr != nil {
+				err = errTransactionFSIO
+			}
+		}
+		if removeErr := os.Remove(name); err == nil && removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			err = errTransactionFSIO
+		}
+	}()
+	if err = windowsProtectFile(name); err == nil {
+		err = injectTransactionFS(fail, "manifest-write", rel)
+	}
+	if err == nil {
+		_, err = tmp.Write(data)
+	}
+	if err == nil {
+		err = injectTransactionFS(fail, "manifest-sync", rel)
+	}
+	if err == nil {
+		err = tmp.Sync()
+	}
+	if closeErr := tmp.Close(); err == nil {
+		err = closeErr
+	}
+	closed = true
+	if err == nil {
+		err = injectTransactionFS(fail, "manifest-replace", rel)
+	}
+	if err == nil {
+		err = moveWindowsFile(name, path)
+	}
+	if err == nil {
+		err = injectTransactionFS(fail, "manifest-dirsync", rel)
+	}
+	if err == nil {
+		err = injectTransactionFS(fail, "manifest-cleanup", rel)
+	}
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func moveWindowsFile(from, to string) error {

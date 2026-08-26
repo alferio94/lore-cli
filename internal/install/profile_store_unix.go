@@ -39,6 +39,15 @@ type unixStoreAuthority struct {
 	released    bool
 }
 
+type unixHeldProfileState struct {
+	authority *unixStoreAuthority
+	present   bool
+	raw       []byte
+	mode      uint32
+}
+
+func (*unixHeldProfileState) heldProfileState() {}
+
 func newUnixStorePlatform() unixStorePlatform { return unixStorePlatform{} }
 func defaultStorePlatform() storePlatform     { return newUnixStorePlatform() }
 
@@ -280,6 +289,87 @@ func (unixStorePlatform) Read(owned authority) ([]byte, bool, error) {
 	return raw, true, err
 }
 
+func (p unixStorePlatform) snapshotHeld(owned authority) ([]byte, bool, heldProfileState, error) {
+	a, ok := owned.(*unixStoreAuthority)
+	if !ok || a == nil || a.released || a.path.revalidate() != nil {
+		return nil, false, nil, errStoreAuthorityInvalidPath
+	}
+	raw, present, err := p.Read(owned)
+	if err != nil {
+		return nil, false, nil, err
+	}
+	state := &unixHeldProfileState{authority: a, present: present, raw: append([]byte(nil), raw...)}
+	if present {
+		var stat unix.Stat_t
+		if a.state == nil || unix.Fstat(int(a.state.Fd()), &stat) != nil || !safeUnixFile(stat) || !unixFileMatchesLeaf(a.path, a.path.leaf, a.state, false) {
+			return nil, false, nil, errStoreAuthorityInvalidPath
+		}
+		state.mode = uint32(stat.Mode & 0o777)
+	}
+	return append([]byte(nil), raw...), present, state, nil
+}
+
+func (p unixStorePlatform) restoreHeld(owned authority, prior heldProfileState) error {
+	a, ok := owned.(*unixStoreAuthority)
+	state, stateOK := prior.(*unixHeldProfileState)
+	if !ok || !stateOK || a == nil || state == nil || state.authority != a || a.released || a.path.revalidate() != nil {
+		return errStoreAuthorityInvalidPath
+	}
+	if err := p.inject("held-restore"); err != nil {
+		return err
+	}
+	if !state.present {
+		if a.sidecar == nil || !unixFileMatchesLeaf(a.path, a.path.lockLeaf, a.sidecar, true) {
+			sidecar, created, err := openUnixAuthorityLeaf(a.path)
+			if err != nil || !created {
+				if sidecar != nil {
+					_ = sidecar.Close()
+				}
+				return errStoreAuthorityInvalidPath
+			}
+			locked, err := lockUnixFile(sidecar)
+			if err != nil || !locked {
+				_ = sidecar.Close()
+				return errStoreAuthorityInvalidPath
+			}
+			a.sidecar, a.ownsSidecar = sidecar, true
+			a.locks = append(a.locks, sidecar)
+		}
+		if a.state != nil && !unixFileMatchesLeaf(a.path, a.path.leaf, a.state, false) {
+			return errStoreAuthorityInvalidPath
+		}
+		if err := unix.Unlinkat(int(a.parent.Fd()), a.path.leaf, 0); err != nil && !errors.Is(err, unix.ENOENT) {
+			return err
+		}
+		a.state = nil
+		if err := syncUnixDirectory(a.parent); err != nil {
+			return err
+		}
+		return p.inject("held-restore-cleanup")
+	}
+	if state.mode != 0o600 {
+		return errStoreAuthorityInvalidPath
+	}
+	name, file, err := p.writeTemp(a, state.raw)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = unix.Unlinkat(int(a.parent.Fd()), name, 0) }()
+	if err = unix.Fchmod(int(file.Fd()), state.mode); err == nil {
+		err = unix.Renameat(int(a.parent.Fd()), name, int(a.parent.Fd()), a.path.leaf)
+	}
+	if err != nil {
+		_ = file.Close()
+		return err
+	}
+	name = ""
+	a.state, a.locks = file, append(a.locks, file)
+	if err = syncUnixDirectory(a.parent); err != nil {
+		return err
+	}
+	return p.inject("held-restore-cleanup")
+}
+
 func (p unixStorePlatform) Commit(owned authority, prior, next []byte) error {
 	a, ok := owned.(*unixStoreAuthority)
 	if !ok || a == nil || a.released || a.path.revalidate() != nil {
@@ -390,6 +480,149 @@ func syncUnixDirectory(parent *os.File) error {
 		return nil
 	}
 	return err
+}
+
+// appendCompletionBackup extends the already sealed selected-target journal
+// with D's target-scoped v3 state. The durable header is replaced before the
+// manifest write, so owner death still restores the complete boundary.
+func (p *unixTransactionFS) appendCompletionBackup(rel string, index int, states []transactionFSState) (transactionFSState, error) {
+	if p == nil || filepath.Base(rel) != provenanceV3Name || index != len(states) || !validTransactionRelativePath(rel) {
+		return transactionFSState{}, errTransactionFSUnsafePath
+	}
+	path := filepath.Join(p.root, rel)
+	info, err := p.validate(path, true)
+	state := transactionFSState{path: rel}
+	createdBackup, complete := "", false
+	defer func() {
+		if !complete && createdBackup != "" {
+			_ = os.Remove(createdBackup)
+		}
+	}()
+	if errors.Is(err, os.ErrNotExist) {
+		err = nil
+	} else if err != nil || info.IsDir() {
+		return transactionFSState{}, errTransactionFSUnsafePath
+	} else {
+		fd, openErr := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+		if openErr != nil {
+			return transactionFSState{}, errTransactionFSIO
+		}
+		source := os.NewFile(uintptr(fd), "completion-manifest-source")
+		if source == nil {
+			_ = unix.Close(fd)
+			return transactionFSState{}, errTransactionFSIO
+		}
+		defer source.Close()
+		var stat unix.Stat_t
+		if unix.Fstat(fd, &stat) != nil || !safeTransactionUnixFile(stat) {
+			return transactionFSState{}, errTransactionFSUnsafePath
+		}
+		backup := filepath.Join("backups", fmt.Sprintf("%06d", index))
+		backupPath := filepath.Join(p.journal, backup)
+		out, createErr := os.OpenFile(backupPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if createErr == nil {
+			_, createErr = out.ReadFrom(source)
+		}
+		if createErr == nil {
+			createErr = out.Sync()
+		}
+		if out != nil {
+			if closeErr := out.Close(); createErr == nil {
+				createErr = closeErr
+			}
+		}
+		if createErr != nil || syncTransactionUnixDir(filepath.Dir(backupPath)) != nil {
+			_ = os.Remove(backupPath)
+			return transactionFSState{}, errTransactionFSIO
+		}
+		createdBackup = backupPath
+		state = transactionFSState{path: rel, backup: backup, exists: true, mode: uint32(info.Mode().Perm())}
+	}
+	next := append(append([]transactionFSState(nil), states...), state)
+	data, err := encodeTransactionFSDurableJournal(p.identity, next, p.createdDirs)
+	if err != nil {
+		return transactionFSState{}, err
+	}
+	temp := filepath.Join(p.journal, "journal.json.completion")
+	if _, err := os.Lstat(temp); !errors.Is(err, os.ErrNotExist) {
+		return transactionFSState{}, errTransactionFSIO
+	}
+	if err := writeTransactionUnixDurableFile(temp, data); err != nil {
+		return transactionFSState{}, err
+	}
+	if err := os.Rename(temp, filepath.Join(p.journal, "journal.json")); err != nil || syncTransactionUnixDir(p.journal) != nil {
+		_ = os.Remove(temp)
+		return transactionFSState{}, errTransactionFSIO
+	}
+	complete = true
+	return state, nil
+}
+
+func (p *unixTransactionFS) publishCompletionManifest(rel string, data []byte, fail transactionFSFailpoint) (err error) {
+	if filepath.Base(rel) != provenanceV3Name || len(data) == 0 {
+		return errTransactionFSUnsafePath
+	}
+	path := filepath.Join(p.root, rel)
+	if err := p.ensureParents(filepath.Dir(path)); err != nil {
+		return err
+	}
+	if _, err := p.validate(path, true); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return errTransactionFSUnsafePath
+	}
+	name, err := p.transactionTempPath(path)
+	if err != nil {
+		return err
+	}
+	if err := injectTransactionFS(fail, "manifest-temp", rel); err != nil {
+		return err
+	}
+	tmp, err := os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return errTransactionFSIO
+	}
+	closed := false
+	defer func() {
+		if !closed {
+			if closeErr := tmp.Close(); err == nil && closeErr != nil {
+				err = errTransactionFSIO
+			}
+		}
+		if removeErr := os.Remove(name); err == nil && removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			err = errTransactionFSIO
+		}
+	}()
+	if err = injectTransactionFS(fail, "manifest-write", rel); err == nil {
+		_, err = tmp.Write(data)
+	}
+	if err == nil {
+		err = injectTransactionFS(fail, "manifest-sync", rel)
+	}
+	if err == nil {
+		err = tmp.Sync()
+	}
+	if closeErr := tmp.Close(); err == nil {
+		err = closeErr
+	}
+	closed = true
+	if err == nil {
+		err = injectTransactionFS(fail, "manifest-replace", rel)
+	}
+	if err == nil {
+		err = os.Rename(name, path)
+	}
+	if err == nil {
+		err = injectTransactionFS(fail, "manifest-dirsync", rel)
+	}
+	if err == nil {
+		err = syncTransactionUnixDir(filepath.Dir(path))
+	}
+	if err == nil {
+		err = injectTransactionFS(fail, "manifest-cleanup", rel)
+	}
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func unixFileMatchesLeaf(path *unixStorePath, leaf string, file *os.File, authorityLeaf bool) bool {

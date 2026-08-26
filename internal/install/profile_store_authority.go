@@ -62,48 +62,90 @@ type storePlatform interface {
 	Commit(authority, []byte, []byte) error
 }
 
-// withStoreAuthority supplies the common fail-closed lifecycle around
-// build-tagged platform adapters. It intentionally does not implement a lock.
-func withStoreAuthority(platform storePlatform, rawPath string, options CommitOptions, waiter monotonicWaiter, work func(authority) error) (err error) {
-	if platform == nil || waiter == nil || work == nil || !options.valid() {
-		return newProfileStoreError(CodeProfileInvalid, "profile_store.authority", false)
+// heldProfileState is adapter-private restoration evidence. It binds one exact
+// canonical state leaf to the authority object that captured it.
+type heldProfileState interface{ heldProfileState() }
+
+type heldRestorePlatform interface {
+	snapshotHeld(authority) ([]byte, bool, heldProfileState, error)
+	restoreHeld(authority, heldProfileState) error
+}
+
+// heldStoreAuthority is the single internal lifecycle used by both public
+// profile completion and D's reversible completion lease.
+type heldStoreAuthority struct {
+	platform storePlatform
+	restore  heldRestorePlatform
+	owned    authority
+	released bool
+}
+
+func acquireStoreAuthority(platform storePlatform, rawPath string, options CommitOptions, waiter monotonicWaiter) (*heldStoreAuthority, error) {
+	if platform == nil || waiter == nil || !options.valid() {
+		return nil, newProfileStoreError(CodeProfileInvalid, "profile_store.authority", false)
 	}
 	path, canonicalErr := platform.Canonical(rawPath)
 	if canonicalErr != nil || !path.valid() {
-		return newProfileStoreError(CodeProfileInvalid, "profile_store.path", false)
+		return nil, newProfileStoreError(CodeProfileInvalid, "profile_store.path", false)
 	}
 	owned, acquireErr := platform.Acquire(path, options.WaitBudget, waiter)
 	if acquireErr != nil {
 		switch {
 		case errors.Is(acquireErr, errStoreAuthorityBusy):
-			return newProfileStoreError(CodeProfileBusy, "profile_store.authority", false)
+			return nil, newProfileStoreError(CodeProfileBusy, "profile_store.authority", false)
 		case errors.Is(acquireErr, errStoreAuthorityTimeout):
-			return newProfileStoreError(CodeProfileTimeout, "profile_store.authority", false)
+			return nil, newProfileStoreError(CodeProfileTimeout, "profile_store.authority", false)
 		case errors.Is(acquireErr, errStoreAuthorityInvalidPath):
-			return newProfileStoreError(CodeProfileInvalid, "profile_store.path", false)
+			return nil, newProfileStoreError(CodeProfileInvalid, "profile_store.path", false)
 		default:
-			return newProfileStoreError(CodeProfileIO, "profile_store.commit", false)
+			return nil, newProfileStoreError(CodeProfileIO, "profile_store.commit", false)
 		}
 	}
 	if owned == nil {
-		return newProfileStoreError(CodeProfileIO, "profile_store.commit", false)
+		return nil, newProfileStoreError(CodeProfileIO, "profile_store.commit", false)
 	}
-	// Release failures remain observable through a fixed sentinel and typed I/O error.
-	// Adapter causes stay private because they can carry raw filesystem context.
-	// When work already failed, its typed error remains first in the joined chain.
-	// This preserves primary Code and Path while retaining deterministic cleanup evidence.
-	defer func() {
-		if releaseErr := owned.Release(); releaseErr != nil {
-			cleanupErr := errors.Join(
-				errStoreAuthorityCleanupFailed,
-				newProfileStoreError(CodeProfileIO, "profile_store.commit", false),
-			)
-			if err == nil {
-				err = cleanupErr
-				return
-			}
-			err = errors.Join(err, cleanupErr)
-		}
-	}()
-	return work(owned)
+	restore, _ := platform.(heldRestorePlatform)
+	return &heldStoreAuthority{platform: platform, restore: restore, owned: owned}, nil
+}
+
+func (h *heldStoreAuthority) release() error {
+	if h == nil || h.released {
+		return nil
+	}
+	h.released = true
+	if h.owned == nil || h.owned.Release() != nil {
+		return errStoreAuthorityCleanupFailed
+	}
+	return nil
+}
+
+func profileReleaseResult(primary error, held *heldStoreAuthority, rollback bool) error {
+	releaseErr := held.release()
+	if releaseErr == nil {
+		return primary
+	}
+	path := "profile_store.commit"
+	if rollback {
+		path = "profile_store.rollback"
+	}
+	cleanup := errors.Join(releaseErr, newProfileStoreError(CodeProfileIO, path, rollback))
+	if primary == nil {
+		return cleanup
+	}
+	return errors.Join(primary, cleanup)
+}
+
+// withStoreAuthority supplies the common fail-closed lifecycle around
+// build-tagged platform adapters. Public Complete* and the D lease therefore
+// cannot diverge in canonical identity, acquisition order, or release handling.
+func withStoreAuthority(platform storePlatform, rawPath string, options CommitOptions, waiter monotonicWaiter, work func(authority) error) (err error) {
+	if work == nil {
+		return newProfileStoreError(CodeProfileInvalid, "profile_store.authority", false)
+	}
+	held, err := acquireStoreAuthority(platform, rawPath, options, waiter)
+	if err != nil {
+		return err
+	}
+	defer func() { err = profileReleaseResult(err, held, false) }()
+	return work(held.owned)
 }

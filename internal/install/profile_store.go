@@ -158,49 +158,161 @@ func (s ProfileStore) CompleteWithOptions(prepared PreparedProject, fact Persist
 	default:
 		return profileStoreError(CodeProfileInvalid)
 	}
-	if !options.valid() || s.platform == nil || s.waiter == nil || !filepath.IsAbs(s.path) || prepared.path != s.path || prepared.root == "" || prepared.root != filepath.Clean(prepared.root) || prepared.id != stableProjectID(prepared.root) || validateProfileState(prepared.state) != nil || !validPersistenceFact(prepared, fact) {
-		return profileStoreError(CodeProfileInvalid)
+	if err := s.validateCompletion(prepared, fact, options); err != nil {
+		return err
 	}
-	dir := filepath.Dir(s.path)
-	if os.MkdirAll(dir, 0o700) != nil || protectStoreDirectory(dir) != nil {
-		return newProfileStoreError(CodeProfileIO, "profile_store.commit", false)
+	if err := s.protectCompletionDirectory(); err != nil {
+		return err
 	}
 	return withStoreAuthority(s.platform, s.path, options, s.waiter, func(owned authority) error {
 		raw, exists, err := s.platform.Read(owned)
 		if err != nil {
-			if errors.Is(err, errStoreAuthorityInvalidPath) {
-				return newProfileStoreError(CodeProfileInvalid, "profile_store.path", false)
-			}
-			return newProfileStoreError(CodeProfileIO, "profile_store.commit", false)
+			return mapProfileReadError(err)
 		}
-		current, err := decodeProfileState(raw, exists)
-		if err != nil {
+		data, changed, err := profileCompletionBytes(prepared, fact, raw, exists)
+		if err != nil || !changed {
 			return err
 		}
-		next, err := rebaseProfileState(prepared, fact, current)
-		if err != nil {
-			return err
-		}
-		data, err := json.MarshalIndent(next, "", "  ")
-		if err != nil {
-			return profileStoreError(CodeProfileInvalid)
-		}
-		data = append(data, '\n')
-		if exists && bytes.Equal(raw, data) {
-			return nil
-		}
-		commit := s.commit
-		if commit == nil {
-			commit = s.platform.Commit
-		}
-		if err := commit(owned, raw, data); err != nil {
-			if errors.Is(err, errStoreRollbackFailed) {
-				return newProfileStoreError(CodeProfileIO, "profile_store.rollback", true)
-			}
-			return newProfileStoreError(CodeProfileIO, "profile_store.commit", false)
-		}
-		return nil
+		return s.commitProfileBytes(owned, raw, data)
 	})
+}
+
+// profileCompletionLease keeps the W3.2 authority live across D's provisional
+// profile publication, canonical v3 publication, and final selected-target
+// completion. It is internal and cannot be used as a general restore API.
+type profileCompletionLease struct {
+	held     *heldStoreAuthority
+	prior    heldProfileState
+	changed  bool
+	restored bool
+	closed   bool
+}
+
+func (s ProfileStore) beginHeldProfileCompletion(prepared PreparedProject, fact PersistenceFact, options CommitOptions) (*profileCompletionLease, error) {
+	if err := s.validateCompletion(prepared, fact, options); err != nil {
+		return nil, err
+	}
+	if err := s.protectCompletionDirectory(); err != nil {
+		return nil, err
+	}
+	held, err := acquireStoreAuthority(s.platform, s.path, options, s.waiter)
+	if err != nil {
+		return nil, err
+	}
+	if held.restore == nil {
+		return nil, profileReleaseResult(newProfileStoreError(CodeProfileIO, "profile_store.commit", false), held, false)
+	}
+	raw, exists, prior, err := held.restore.snapshotHeld(held.owned)
+	if err != nil || prior == nil {
+		if errors.Is(err, errStoreAuthorityInvalidPath) {
+			err = newProfileStoreError(CodeProfileInvalid, "profile_store.path", false)
+		} else {
+			err = newProfileStoreError(CodeProfileIO, "profile_store.commit", false)
+		}
+		return nil, profileReleaseResult(err, held, false)
+	}
+	data, changed, err := profileCompletionBytes(prepared, fact, raw, exists)
+	if err != nil {
+		return nil, profileReleaseResult(err, held, false)
+	}
+	lease := &profileCompletionLease{held: held, prior: prior, changed: changed}
+	if !changed {
+		return lease, nil
+	}
+	if err := s.commitProfileBytes(held.owned, raw, data); err != nil {
+		var typed *ProfileStoreError
+		residual := errors.As(err, &typed) && typed.ResidualRisk()
+		return nil, profileReleaseResult(err, held, residual)
+	}
+	return lease, nil
+}
+
+func (s ProfileStore) validateCompletion(prepared PreparedProject, fact PersistenceFact, options CommitOptions) error {
+	if !options.valid() || s.platform == nil || s.waiter == nil || !filepath.IsAbs(s.path) || prepared.path != s.path || prepared.root == "" || prepared.root != filepath.Clean(prepared.root) || prepared.id != stableProjectID(prepared.root) || validateProfileState(prepared.state) != nil || !validPersistenceFact(prepared, fact) {
+		return profileStoreError(CodeProfileInvalid)
+	}
+	return nil
+}
+
+func (s ProfileStore) protectCompletionDirectory() error {
+	dir := filepath.Dir(s.path)
+	if os.MkdirAll(dir, 0o700) != nil || protectStoreDirectory(dir) != nil {
+		return newProfileStoreError(CodeProfileIO, "profile_store.commit", false)
+	}
+	return nil
+}
+
+func profileCompletionBytes(prepared PreparedProject, fact PersistenceFact, raw []byte, exists bool) ([]byte, bool, error) {
+	current, err := decodeProfileState(raw, exists)
+	if err != nil {
+		return nil, false, err
+	}
+	next, err := rebaseProfileState(prepared, fact, current)
+	if err != nil {
+		return nil, false, err
+	}
+	data, err := json.MarshalIndent(next, "", "  ")
+	if err != nil {
+		return nil, false, profileStoreError(CodeProfileInvalid)
+	}
+	data = append(data, '\n')
+	return data, !exists || !bytes.Equal(raw, data), nil
+}
+
+func (s ProfileStore) commitProfileBytes(owned authority, prior, next []byte) error {
+	commit := s.commit
+	if commit == nil {
+		commit = s.platform.Commit
+	}
+	if err := commit(owned, prior, next); err != nil {
+		if errors.Is(err, errStoreRollbackFailed) {
+			return newProfileStoreError(CodeProfileIO, "profile_store.rollback", true)
+		}
+		return newProfileStoreError(CodeProfileIO, "profile_store.commit", false)
+	}
+	return nil
+}
+
+func mapProfileReadError(err error) error {
+	if errors.Is(err, errStoreAuthorityInvalidPath) {
+		return newProfileStoreError(CodeProfileInvalid, "profile_store.path", false)
+	}
+	return newProfileStoreError(CodeProfileIO, "profile_store.commit", false)
+}
+
+func (l *profileCompletionLease) commit() error {
+	if l == nil || l.closed || l.held == nil {
+		return newProfileStoreError(CodeProfileIO, "profile_store.commit", false)
+	}
+	l.closed = true
+	return profileReleaseResult(nil, l.held, false)
+}
+
+func (l *profileCompletionLease) restore() error {
+	if l == nil || l.closed || l.restored || l.held == nil || l.prior == nil {
+		return newProfileStoreError(CodeProfileIO, "profile_store.rollback", true)
+	}
+	l.restored = true
+	if l.changed {
+		if restoreErr := l.held.restore.restoreHeld(l.held.owned, l.prior); restoreErr != nil {
+			return newProfileStoreError(CodeProfileIO, "profile_store.rollback", true)
+		}
+	}
+	return nil
+}
+
+func (l *profileCompletionLease) releaseRollback() error {
+	if l == nil || l.closed || !l.restored || l.held == nil {
+		return newProfileStoreError(CodeProfileIO, "profile_store.rollback", true)
+	}
+	l.closed = true
+	return profileReleaseResult(nil, l.held, true)
+}
+
+func (l *profileCompletionLease) rollback() error {
+	restoreErr := l.restore()
+	releaseErr := l.releaseRollback()
+	return errors.Join(restoreErr, releaseErr)
 }
 
 func validPersistenceFact(prepared PreparedProject, fact PersistenceFact) bool {
