@@ -12,6 +12,7 @@
 - W3.3-D option 1 is now scoped accepted/verified; current C→D correction/reverification is closed.
 - W3.3 is accepted/verified by the canonical aggregate report; W4 remains blocked; legacy `lore-install.json` v2 stays preserved.
 - Historical D cap 875 is planning history only and must not be reused as an active transfer budget.
+- W4.2 split authorized: 4.2A (248/250) and 4.2B (150/150) are pending child tasks; aggregate 398/400 is non-transferable, 4.2B has zero spare lines, and any drift requires fail-stop/new preflight; original/gofmt/SIGPIPE/cap-failure lineages are preserved.
 
 ## Checklist
 - [x] 1.1-1.4 W1a schema/identity/purity.
@@ -43,7 +44,9 @@
 
 ## W4 Ordered Checklist (supersedes stale 4.1-4.4)
 - [x] 4.1 Read-only preflight from clean W3.3 checkpoint `ccfc222ce854349e86577d7bcee888949e773e12`; PASS verified in Lore `0510017a-8785-4aac-82fb-852192eaad44` for commit `30e86dcd1121ee2040a53d01961efe42b75aef36`; freeze the W4 slice cap, confirm no W4 branch/worktree mutation, and stop on dirty base or hash drift.
-- [ ] 4.2 Add `internal/install/{workflow_contract,route_policy,legacy_adapter,result,event,error}.go` plus tests for Request/Prepared/Result/Event/Error, per-target E→D→A gates, demotion evidence, and no legacy fallback.
+- [ ] 4.2 Split pending W4 task into child tasks 4.2A and 4.2B; keep parent unchecked until both children independently validate/verify; aggregate 398/400 is non-transferable, and 4.2B has zero spare lines.
+  - [ ] 4.2A Add `internal/install/{workflow_contract,result,event,error,legacy_adapter}.go` plus `workflow_contract_test.go` for Request/Prepared/Result/Event/Error, Observer, defensive-copy, one-shot, and error coverage; cap250; authority from candidate `454b65f5-c0a7-4c0c-aa1c-6567f8312e12` and report `05991af6-00f9-48f3-a276-b99fee18a821`.
+  - [ ] 4.2B Add `internal/install/route_policy.go` plus `route_policy_test.go` for per-target Gate/RoutePolicy demotion, E→D→A gating, explicit legacy/no-fallback behavior, and table-driven route coverage; cap150; depends on accepted exact 4.2A manifest/tree from the preflight report, candidate `3f242308-6f80-4553-91ce-2724655c7145`, and zero-drift fail-stop on any line drift.
 - [ ] 4.3 Extend `internal/install/projector.go` and adapter seams so local `ProjectID`, server UUID/key, and explicit `repository_id` stay distinct; cover C1-C4 and D56-D62.
 - [ ] 4.4 Implement sealed `internal/install/explain.go` with zero mutation/network/credential/authority effect, stable ordering, and redaction; verify D24-D27 and D1-D10.
 - [ ] 4.5 Wire `install --explain` in `internal/cli/{app,actions}.go`, `internal/cli/install_presenter.go`, and `internal/output/*` for human/json stdout/stderr, schema-v1 JSON, conflict/usage exits, and non-TTY refusal; test D11-D23.
@@ -56,5 +59,5 @@
 
 ## W3.3/W4 Contract Gate
 - W3.3-D option 1 is bounded; the preflight-derived cap is authoritative.
-- W4 remains pending until 4.1-4.11 are independently verified in order; each slice stays ≤400 authored lines including tests/docs and must stop before apply if canonical artifacts or the clean base are not ready.
+- W4 remains pending until 4.1-4.11 are independently verified in order; 4.2 must land as 4.2A/4.2B under the same canonical gate, each slice stays ≤400 authored lines including tests/docs, and any 4.2B drift requires fail-stop/new preflight before apply if canonical artifacts or the clean base are not ready.
 - Rollback/hybrid checkpoint: preserve `tasks-pre-amendment-W3.3-W4`, `tasks-validation-W3.3-W4`, and W3.3 design/pre-snapshot/validation hash parity; do not unlock W4.
