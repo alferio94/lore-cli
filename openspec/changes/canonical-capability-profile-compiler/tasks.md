@@ -42,7 +42,7 @@
 - [x] 3.8 Durable orphan journal recovery + fail-closed rollback in `transaction_fs.go`/tests; cover crash/rollback/idempotent completion, residue cleanup, and independent-root concurrency. Out: profile-store authority and W4.
 
 ## W4 Ordered Checklist (supersedes stale 4.1-4.4)
-- [ ] 4.1 Read-only preflight from clean W3.3 checkpoint `ccfc222ce854349e86577d7bcee888949e773e12`; freeze the W4 slice cap, confirm no W4 branch/worktree mutation, and stop on dirty base or hash drift.
+- [x] 4.1 Read-only preflight from clean W3.3 checkpoint `ccfc222ce854349e86577d7bcee888949e773e12`; PASS verified in Lore `0510017a-8785-4aac-82fb-852192eaad44` for commit `30e86dcd1121ee2040a53d01961efe42b75aef36`; freeze the W4 slice cap, confirm no W4 branch/worktree mutation, and stop on dirty base or hash drift.
 - [ ] 4.2 Add `internal/install/{workflow_contract,route_policy,legacy_adapter,result,event,error}.go` plus tests for Request/Prepared/Result/Event/Error, per-target E→D→A gates, demotion evidence, and no legacy fallback.
 - [ ] 4.3 Extend `internal/install/projector.go` and adapter seams so local `ProjectID`, server UUID/key, and explicit `repository_id` stay distinct; cover C1-C4 and D56-D62.
 - [ ] 4.4 Implement sealed `internal/install/explain.go` with zero mutation/network/credential/authority effect, stable ordering, and redaction; verify D24-D27 and D1-D10.
