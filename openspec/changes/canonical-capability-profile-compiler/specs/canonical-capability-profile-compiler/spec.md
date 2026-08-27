@@ -988,3 +988,424 @@ Profile persistence is success-only: a provisional D profile write **MUST** be a
 ## Exclusions
 
 Excluded: E, W4, full-suite or remote-CI authority, server/API/storage/memory contract invention, post-C second transactions, design/tasks/source/test/workflow/Git changes, and acceptance of D or global W3.3.
+# Normative Product Amendment: W4 Observable Routing
+
+## Status, Authority, and Supersession
+
+This amendment supersedes canonical spec `a148536c-4af4-479c-b07b-b7525a06743d` (SHA-256 `92015e805bbfba559fdf81201e5e1e0ca2fcf11acbe3dbe6074619c7cfb051ff`) only by appending W4 public behavior. It resolves needs-input receipt `4722fcd3-c100-4339-8987-76da7c555765` from authoritative proposal `370522aa-580d-4906-ad8d-dac6f8f41e69` (SHA-256 `b532e6eb70a43fa658bbcb60ae8a7c47e8d46ce76ae35ad892fa60dbe08aab94`). The preceding 16 requirements and 123 scenarios, all accepted W1–W3.3 normative content, and their lineage remain unchanged. This amendment supersedes only preceding statements that W4 is excluded or pending.
+
+## Added Requirements
+
+### Requirement 17: Canonical and Legacy Mode Routing
+
+The CLI **MUST** route `install --explain`, `install --dry-run`, and `install` to canonical explain, dry-run, and apply. It **MUST** route `install --legacy` and `install --legacy --dry-run` to legacy apply and dry-run. `--explain` **MUST** conflict with `--dry-run`, `--legacy`, and `--yes`; `--yes` **MUST** be valid only for canonical or legacy apply. Apply **MUST** prompt only on a TTY unless `--yes` is present; non-TTY apply without `--yes` **MUST** return `confirmation_required` without reading stdin.
+
+#### Scenario D1: Route canonical explain
+- GIVEN canonical explain is enabled for the target
+- WHEN `install --explain` is invoked
+- THEN the canonical explain route runs and reports zero mutation
+
+#### Scenario D2: Route canonical dry-run
+- GIVEN canonical dry-run is enabled for the target
+- WHEN `install --dry-run` is invoked
+- THEN the canonical dry-run route runs and reports zero mutation
+
+#### Scenario D3: Route default canonical apply
+- GIVEN canonical apply is enabled for the target
+- WHEN `install` is invoked and confirmation is satisfied
+- THEN the canonical apply route runs
+
+#### Scenario D4: Route explicit legacy apply
+- GIVEN the legacy compatibility path remains available
+- WHEN `install --legacy` is invoked and confirmation is satisfied
+- THEN only legacy apply runs and the route is identified as `legacy`
+
+#### Scenario D5: Route explicit legacy dry-run
+- GIVEN the legacy compatibility path remains available
+- WHEN `install --legacy --dry-run` is invoked
+- THEN only legacy dry-run runs with zero mutation
+
+#### Scenario D6: Reject every explain conflict
+- GIVEN any of `--dry-run`, `--legacy`, or `--yes` accompanies `--explain`
+- WHEN flags are parsed
+- THEN the CLI writes conflict guidance to stderr, exits 2, and runs no route
+
+#### Scenario D7: Reject yes with either dry-run route
+- GIVEN `--yes` accompanies canonical or legacy `--dry-run`
+- WHEN flags are parsed
+- THEN the CLI writes usage guidance to stderr, exits 2, and runs no route
+
+#### Scenario D8: Accept yes only for apply
+- GIVEN canonical or legacy apply is selected with `--yes`
+- WHEN routing begins
+- THEN confirmation is satisfied without a prompt and the selected apply route continues
+
+#### Scenario D9: Confirm or decline interactively
+- GIVEN apply is selected on a TTY without `--yes`
+- WHEN the user accepts or declines the confirmation prompt
+- THEN acceptance continues apply, while decline performs zero effects and exits 0
+
+#### Scenario D10: Refuse noninteractive confirmation
+- GIVEN apply is selected without `--yes` and stdin or stdout is not an interactive TTY
+- WHEN confirmation is required
+- THEN `confirmation_required` is returned with exit 1 and no byte is read from stdin
+
+### Requirement 18: Human, JSON, and TUI Rendering
+
+CLI modes **MUST** accept `--format human|json`, defaulting to `human`. Human final success reports **MUST** use stdout; progress, warnings, deprecation, and errors **MUST** use stderr. JSON mode **MUST** emit exactly one newline-terminated object on stdout using `schema_version: "lore.install.result/v1"`; it **MUST** include mode, route, target, outcome, admission, changed-state, rollback, residual-risk, report, warnings, and structured-error facts as applicable, and **MUST NOT** emit ANSI, animation, spinner, progress chatter, or a second object. Syntactically admitted failures **MUST** use that object; parser failures **MUST** use stderr and exit 2 without JSON. The TUI **MUST** render the same typed result and event meanings.
+
+#### Scenario D11: Render human success channels
+- GIVEN human explain, dry-run, or apply succeeds
+- WHEN final output is emitted
+- THEN the final report is on stdout and stdout contains no warning, progress, or error line
+
+#### Scenario D12: Render human diagnostics channels
+- GIVEN human mode emits progress, warning, deprecation, or failure
+- WHEN streams are inspected
+- THEN those records are on stderr and no failure is duplicated as a stdout final report
+
+#### Scenario D13: Render one JSON success object
+- GIVEN a syntactically valid JSON-mode invocation succeeds
+- WHEN output is captured
+- THEN stdout is one `lore.install.result/v1` object plus one final newline and stderr is empty
+- AND no ANSI, spinner, animation, or progress record appears
+
+#### Scenario D14: Structure an admitted JSON failure
+- GIVEN a syntactically valid route returns non-admission, confirmation-required, disabled-route, apply, rollback, cancellation, or residual-risk failure
+- WHEN JSON output is captured
+- THEN stdout contains exactly one versioned object with the stable outcome/error and rollback facts
+- AND stderr is empty and secrets are absent
+
+#### Scenario D15: Keep parser errors outside JSON
+- GIVEN an unknown flag, conflicting flag, missing value, or format other than `human` or `json`
+- WHEN parsing fails
+- THEN stderr contains actionable usage text, stdout is empty, and exit code is 2
+
+#### Scenario D16: Preserve renderer parity
+- GIVEN one typed result/event sequence is rendered by human CLI, JSON CLI, and TUI
+- WHEN semantic fields are compared
+- THEN mode, route, target, outcome, admission, effects, rollback, residual risk, warnings, and error code agree
+
+### Requirement 19: Exact Exit Status Precedence
+
+The command **MUST** use only exits 0, 1, 2, 3, and 130 for W4 outcomes. Exit 0 **MUST** mean success or voluntary pre-execution decline/cancel; 1 **MUST** mean non-admission, disabled route, confirmation required, or failure/cancellation with complete rollback; 2 **MUST** mean usage, flag, or format error; 3 **MUST** mean residual risk and override every primary outcome; 130 **MUST** mean signal interruption and, after mutation authority is acquired, **MUST** occur only after complete rollback.
+
+#### Scenario D17: Return zero for clean completion
+- GIVEN success or voluntary cancellation before execution
+- WHEN the command ends without residual risk
+- THEN it exits 0
+
+#### Scenario D18: Return one for operational refusal or recovered failure
+- GIVEN non-admission, disabled routing, confirmation-required, or an execution failure/cancel with complete rollback
+- WHEN no usage error or residual risk exists
+- THEN it exits 1
+
+#### Scenario D19: Return two for usage rejection
+- GIVEN parsing, flag combination, format, or TUI-TTY validation fails
+- WHEN the command ends
+- THEN it exits 2 before domain execution
+
+#### Scenario D20: Give residual risk absolute precedence
+- GIVEN any primary success, failure, cancellation, or interruption leaves incomplete coherent rollback or cleanup
+- WHEN the final outcome is selected
+- THEN it exits 3 and reports residual risk
+
+#### Scenario D21: Interrupt before authority
+- GIVEN a termination signal arrives before mutation authority is acquired
+- WHEN handling completes
+- THEN no rollback is invented, no effects remain, and exit is 130
+
+#### Scenario D22: Interrupt after authority with complete rollback
+- GIVEN a termination signal arrives after mutation authority is acquired
+- WHEN rollback and required cleanup complete
+- THEN the command reports interruption only after completion and exits 130
+
+#### Scenario D23: Interrupt with incomplete rollback
+- GIVEN a termination signal arrives after authority and rollback cannot restore coherence
+- WHEN the final outcome is selected
+- THEN residual risk overrides interruption and exit is 3 rather than 130
+
+### Requirement 20: Sealed Explain Behavior
+
+Canonical explain **MUST** validate and seal the deterministic non-secret report while performing no mutation, credential resolution, network call, finalizer action, target/profile authority acquisition, backup, journal, profile persistence, or runtime activation. It **MUST** include deterministic ordering, route/gate status, admission, guidance, and redacted errors; repeated equivalent inputs and relevant local facts **MUST** produce byte-identical format-specific output.
+
+#### Scenario D24: Explain without effects or external access
+- GIVEN a valid or rejected canonical request
+- WHEN explain runs
+- THEN mutation, authority, credential, network, finalizer, backup, journal, and persistence counts are zero
+
+#### Scenario D25: Seal an admitted report
+- GIVEN identical normalized input and relevant local facts
+- WHEN explain is repeated in one format
+- THEN ordered output bytes match and identify canonical explain, target gate, and admission
+
+#### Scenario D26: Explain rejection actionably
+- GIVEN profile, capability, ownership, migration, or route validation rejects the request
+- WHEN explain completes
+- THEN each safe error has stable guidance and admission is false without effects
+
+#### Scenario D27: Redact and repeat safely
+- GIVEN rejected facts contain credentials, paths, project/repository-sensitive values, or payloads
+- WHEN human or JSON explain is repeated
+- THEN forbidden values never appear and deterministic safe output remains stable
+
+### Requirement 21: Canonical Dry-Run and Apply Execution
+
+Canonical dry-run and apply **MUST** consume the accepted W3.3 compile, reconciliation, transaction, finalization, completion, and outcome seams rather than reconstructing them. Both **MUST** identify the canonical route; dry-run **MUST** stop before confirmation, credential resolution, authority, backup, journal, finalizer, profile persistence, and mutation. Apply **MUST** confirm before authority, resolve credentials only at the accepted post-seal finalization boundary, expose typed phase/progress events, preserve rollback and residual-risk precedence, leave legacy v2 untouched, publish v3 manifest last, and leave no owned temporary/journal residue after coherent completion.
+
+#### Scenario D28: Execute a sealed canonical dry-run
+- GIVEN canonical dry-run is enabled and compilation is admitted
+- WHEN dry-run executes accepted pre-mutation seams
+- THEN it reports the complete prospective result with zero confirmation, credential, authority, finalizer, persistence, or mutation activity
+
+#### Scenario D29: Apply only after route and confirmation
+- GIVEN canonical apply is enabled and confirmation is satisfied
+- WHEN execution starts
+- THEN canonical route discrimination and sealed-plan admission precede target authority or mutation
+
+#### Scenario D30: Resolve credentials only at finalization
+- GIVEN a sealed canonical apply requires a credential slot
+- WHEN accepted W3.3 finalization is reached
+- THEN resolution occurs exactly at that boundary and never during explain, dry-run, confirmation, or preflight
+
+#### Scenario D31: Emit typed progress without changing semantics
+- GIVEN canonical apply advances through accepted W3.3 phases
+- WHEN events are observed
+- THEN ordered textual phase/progress records identify the canonical route and never claim a phase before its boundary
+
+#### Scenario D32: Roll back an apply failure completely
+- GIVEN canonical apply fails after authority with recoverable prior state
+- WHEN accepted rollback completes
+- THEN prior coherent target/profile state is restored, outcome records complete rollback, and exit is 1
+
+#### Scenario D33: Report residual risk from apply
+- GIVEN canonical apply or rollback cannot restore required coherence or cleanup
+- WHEN outcome is rendered
+- THEN residual risk overrides the primary failure and exit is 3
+
+#### Scenario D34: Preserve publication and residue invariants
+- GIVEN canonical apply succeeds or rolls back coherently
+- WHEN target bytes are inspected
+- THEN legacy `lore-install.json` v2 is byte/mode unchanged, v3 was the last publication, and no owned temporary or journal residue remains
+
+### Requirement 22: TUI State and Cancellation
+
+The TUI **MUST** require a TTY and use the same typed domain workflow as CLI renderers without duplicating transaction logic. It **MUST** support deterministic prepare, confirmation, execute, result, navigation, cancellation, retry, and resize behavior. Back/Esc before Execute **MUST** discard Prepared with zero effects; during Execute navigation **MUST** remain blocked and cancellation **MUST** wait for rollback/final result. Retry **MUST** re-Prepare from current facts and **MUST NOT** reuse or reconstruct Prepared; residual risk **MUST** disable retry. Text phase/progress **MUST** always exist; animation **MUST** be decorative and disabled by `LORE_NO_ANIMATION=1`.
+
+#### Scenario D35: Reject TUI without a TTY
+- GIVEN TUI is requested without an interactive terminal
+- WHEN startup validates the environment
+- THEN it emits CLI usage guidance, performs no domain work, and exits 2
+
+#### Scenario D36: Navigate before execution safely
+- GIVEN a plan is Prepared but Execute has not begun
+- WHEN Back or Esc is selected
+- THEN Prepared is discarded, the prior selection state is shown, and effects remain zero
+
+#### Scenario D37: Confirm before TUI execute
+- GIVEN TUI displays an admitted Prepared plan
+- WHEN the user accepts confirmation
+- THEN Execute begins through the same canonical or explicit legacy domain route
+
+#### Scenario D38: Block navigation during execute
+- GIVEN target authority or mutation is active
+- WHEN navigation keys are pressed
+- THEN no screen transition abandons execution and current textual progress remains visible
+
+#### Scenario D39: Cancel execute coherently
+- GIVEN the user requests cancellation during Execute
+- WHEN cancellation is processed
+- THEN the TUI waits for rollback and a typed final result before allowing exit or navigation
+
+#### Scenario D40: Retry from fresh facts
+- GIVEN a retryable failure with no residual risk
+- WHEN Retry is selected
+- THEN current facts are re-read and a new Prepare occurs without reuse or reconstruction of prior Prepared
+
+#### Scenario D41: Disable retry on residual risk
+- GIVEN the final result reports residual risk
+- WHEN result actions are rendered
+- THEN Retry is unavailable and recovery guidance remains visible
+
+#### Scenario D42: Reflow on resize without semantic change
+- GIVEN any nonterminal TUI state
+- WHEN terminal dimensions change
+- THEN content reflows without changing selection, phase, route, outcome, or domain execution
+
+#### Scenario D43: Provide reduced-motion text parity
+- GIVEN `LORE_NO_ANIMATION=1` or animation is unavailable
+- WHEN TUI work proceeds
+- THEN animation is absent while the same textual phases, progress, cancellation, and final semantics remain available
+
+### Requirement 23: Per-Target Canonical Gates and Kill Switch
+
+Pi, OpenCode, Codex, and Antigravity **MUST** each have independent canonical gates: E admits explain; D admits explain and dry-run; A admits explain, dry-run, and apply. Off admits none. A disabled canonical route **MUST** return `canonical_route_disabled` with exit 1 and **MUST NOT** fall back to legacy. Emergency policy **MAY** demote A→D→E→off per target. Canonical apply **MUST** become the default only for a target at A; E and D **MUST NOT** silently change the default route.
+
+#### Scenario D44: Enforce E gate
+- GIVEN a target is at E
+- WHEN explain, dry-run, and apply are each requested
+- THEN only explain is admitted and the other canonical routes return `canonical_route_disabled`
+
+#### Scenario D45: Enforce D gate
+- GIVEN a target is at D
+- WHEN explain, dry-run, and apply are each requested
+- THEN explain and dry-run are admitted while apply returns `canonical_route_disabled`
+
+#### Scenario D46: Enforce A gate and default
+- GIVEN a target is at A
+- WHEN explain, dry-run, or default install is invoked
+- THEN each canonical route is admitted and default install selects canonical apply
+
+#### Scenario D47: Enforce off gate
+- GIVEN a target is off
+- WHEN any canonical mode is requested
+- THEN `canonical_route_disabled` is returned with exit 1 and zero canonical or legacy execution
+
+#### Scenario D48: Never fall back to legacy
+- GIVEN a canonical route is disabled at any gate
+- WHEN routing fails
+- THEN no legacy adapter, confirmation, preparation, or mutation runs unless `--legacy` was explicitly supplied in a separate valid invocation
+
+#### Scenario D49: Demote one target independently
+- GIVEN emergency policy demotes one target from A through D, E, or off
+- WHEN all four targets are inspected
+- THEN only that target loses the corresponding canonical routes and explicit legacy availability is unchanged
+
+### Requirement 24: Explicit Legacy Deprecation and Retirement
+
+Every explicit legacy invocation **MUST** identify the legacy route and emit actionable deprecation guidance without changing its selected behavior. Human mode **MUST** place that warning on stderr; JSON and TUI **MUST** carry the same typed warning in their final/result rendering. Retirement **MUST NOT** be automatic. Eligibility **MUST** require all four targets at A, CLI/TUI and compatibility/golden parity, no rollback regressions, a reviewed adoption assessment, and both one published deprecation-bearing version and 30 elapsed days after its publication. Removal **MUST** require a separate reviewed change.
+
+#### Scenario D50: Warn on human legacy use
+- GIVEN explicit legacy apply or dry-run uses human format
+- WHEN routing succeeds
+- THEN stderr identifies legacy/deprecation and the selected legacy behavior remains unchanged
+
+#### Scenario D51: Structure machine-readable legacy warning
+- GIVEN explicit legacy use is rendered as JSON or TUI
+- WHEN the final result is observed
+- THEN route is `legacy` and typed deprecation guidance is present without extra JSON stderr chatter
+
+#### Scenario D52: Block retirement before all targets reach A
+- GIVEN any of Pi, OpenCode, Codex, or Antigravity is below A
+- WHEN retirement eligibility is reviewed
+- THEN legacy remains available regardless of other evidence
+
+#### Scenario D53: Require parity, rollback, and adoption evidence
+- GIVEN all four targets are at A but parity, no-regression, or adoption review is missing
+- WHEN eligibility is evaluated
+- THEN retirement is ineligible and the missing evidence is identified
+
+#### Scenario D54: Enforce the full deprecation window
+- GIVEN all technical/review evidence exists
+- WHEN no deprecation-bearing version is published or fewer than 30 days have elapsed since publication
+- THEN retirement remains ineligible
+
+#### Scenario D55: Remove legacy only through separate review
+- GIVEN every eligibility condition is satisfied
+- WHEN legacy removal is proposed
+- THEN a separate reviewed change must authorize deletion of the flag, TUI choice, adapter, and old callers; W4 itself deletes none
+
+### Requirement 25: Harness Guidance and Server Authority
+
+Canonical projections for Pi, OpenCode, Codex, and Antigravity **MUST** use each target's validated parser contract and preserve target asymmetry. Guidance **MUST** distinguish local compiler `ProjectID` from Lore Server project UUID/key, accept an optional repository selector only as an explicit server-bound repository UUID, and direct discovery through bounded `lore_project_activity`, then `lore_project_context` or filter-driven `lore_memory_search`, then scoped `lore_memory_get` for full content. Server authority, authorization, filtering, ordering, budgets, errors, audit, and security/redaction **MUST** remain unchanged and **MUST NOT** be inferred or reimplemented locally.
+
+#### Scenario D56: Project parser-valid guidance to four targets
+- GIVEN equivalent admitted guidance for Pi, OpenCode, Codex, and Antigravity
+- WHEN each projection is parsed by its supported target contract
+- THEN each is accepted in target-native form and unsupported parity is explained rather than emulated
+
+#### Scenario D57: Keep local ProjectID separate
+- GIVEN local profile state has a compiler `ProjectID` and guidance needs server project scope
+- WHEN any target projection is rendered
+- THEN the local value is never converted, substituted, or sent as a server UUID or key
+
+#### Scenario D58: Require explicit repository UUID
+- GIVEN repository-scoped guidance is selected
+- WHEN projection input is validated
+- THEN only an explicit bound repository UUID is accepted and none is inferred from paths, remotes, URLs, titles, metadata, or text
+
+#### Scenario D59: Render the bounded discovery sequence
+- GIVEN an agent needs project orientation and then a full memory body
+- WHEN guidance is followed
+- THEN activity is used first, context or filter-driven search narrows discovery, and full get uses the same project and optional repository scope
+
+#### Scenario D60: Preserve filter-only search semantics
+- GIVEN guidance describes `lore_memory_search`
+- WHEN its accepted inputs are presented
+- THEN only type, scope, limit, and optional repository filtering are claimed, with no query-text or relevance promise
+
+#### Scenario D61: Preserve compact/full-body boundaries
+- GIVEN activity, context, or search returns compact metadata, summary, or preview
+- WHEN guidance presents the result
+- THEN it claims no full body or generated summary and requires full get for content
+
+#### Scenario D62: Preserve server security and authority
+- GIVEN authorization, project/repository binding, pair filtering, ordering, budgets, stable errors, audit, or redaction is involved
+- WHEN CLI output or projected guidance describes behavior
+- THEN it attributes enforcement to Lore Server and exposes no secret or locally invented authority
+
+### Requirement 26: Deterministic W4 Acceptance Evidence
+
+W4 acceptance **MUST** be traceable to D1–D69 and include deterministic human/JSON/TUI goldens, canonical-versus-legacy route markers, accepted W3.3 event/outcome traces, target and host-platform coverage, race and vet checks, the full suite, and required CI evidence. Fixtures **MUST** be isolated from user state and live services and **MUST** inspect all streams for secret disclosure. Existing Requirement 16 baseline isolation remains authoritative; any additional regression **MUST** block acceptance.
+
+#### Scenario D63: Reproduce deterministic goldens
+- GIVEN fixed inputs, terminal dimensions, gate state, and local facts
+- WHEN human, JSON, and TUI fixtures repeat
+- THEN bytes match approved goldens, JSON is singular/versioned, and no ANSI appears where prohibited
+
+#### Scenario D64: Trace every W4 scenario
+- GIVEN the W4 acceptance ledger
+- WHEN traceability is reviewed
+- THEN each D1–D69 scenario maps to an automated test or explicit platform/CI evidence with no orphan test claim
+
+#### Scenario D65: Distinguish canonical and legacy paths
+- GIVEN equivalent canonical and explicit legacy invocations
+- WHEN result/event traces and goldens are inspected
+- THEN stable route markers prove which path ran and prove disabled canonical routing never invoked legacy
+
+#### Scenario D66: Cover targets, platforms, concurrency, and cancellation
+- GIVEN Pi, OpenCode, Codex, and Antigravity across supported darwin, linux, and windows evidence
+- WHEN acceptance runs route, TTY/non-TTY, signal, resize, retry, and authority-bound cancellation cases
+- THEN observable outcomes match this amendment without race-dependent variance
+
+#### Scenario D67: Pass focused race and vet checks
+- GIVEN the W4 candidate
+- WHEN focused tests, `go test -race ./...`, and `go vet ./...` run in supported evidence environments
+- THEN they pass without new race, vet, stream, redaction, or residue defect
+
+#### Scenario D68: Evaluate the full suite and CI
+- GIVEN focused evidence passes
+- WHEN `go test ./...` and required remote CI complete
+- THEN every W4-related job passes and any failure beyond the isolated Requirement 16 baseline blocks acceptance
+
+#### Scenario D69: Keep acceptance hermetic and secret-safe
+- GIVEN golden, parser, TUI, signal, rollback, and platform fixtures execute
+- WHEN filesystem, network, stdout, stderr, event, and recovery evidence are inspected
+- THEN tests use isolated state/fakes, make no unintended live-service call, and disclose no token, credential, sensitive path, or payload
+
+## W4 Traceability Map
+
+| W4 area | Requirement | Scenarios |
+| --- | --- | --- |
+| Modes, conflicts, confirmation | R17 | D1–D10 |
+| Formats, streams, renderer parity | R18 | D11–D16 |
+| Exit precedence | R19 | D17–D23 |
+| Explain purity and determinism | R20 | D24–D27 |
+| Canonical W3.3 execution seams | R21 | D28–D34 |
+| TUI state and accessibility | R22 | D35–D43 |
+| Per-target rollout gates | R23 | D44–D49 |
+| Legacy deprecation/retirement | R24 | D50–D55 |
+| Harness guidance/server boundary | R25 | D56–D62 |
+| Deterministic acceptance | R26 | D63–D69 |
+
+## Active Specification Accounting
+
+- Requirements: **26** (preserved 16 + W4 R17–R26)
+- Scenarios: **192** (preserved 123 + W4 D1–D69)
+- Superseded canonical spec: `a148536c-4af4-479c-b07b-b7525a06743d` / `92015e805bbfba559fdf81201e5e1e0ca2fcf11acbe3dbe6074619c7cfb051ff`
+- Resolved needs-input receipt: `4722fcd3-c100-4339-8987-76da7c555765`
+- W4 proposal authority: `370522aa-580d-4906-ad8d-dac6f8f41e69` / `b532e6eb70a43fa658bbcb60ae8a7c47e8d46ce76ae35ad892fa60dbe08aab94`
+
+## Boundaries
+
+This amendment specifies W4 behavior only. It does not redesign W3.3, normalize the parallel W4 design, authorize tasks or implementation, mutate source/tests/workflows/CI/Git, alter server contracts, publish or remove legacy behavior, or accept W4.

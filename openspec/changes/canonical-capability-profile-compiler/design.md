@@ -1,47 +1,64 @@
-# Design: Canonical Capability Profile Compiler — W3.3-D Unit-2 Restore Amendment
+# Design: Canonical Capability Profile Compiler — W4 Observable Routing
 
-## Status and invariant boundary
-This amendment supersedes design `c501f036-fdd3-4db2-b488-897d5513b9c6` (`2d9bce27…21f7`) only for Unit 2, following blocked preflight `cb095df9-acc6-4922-9d2d-e7844c2cf8c9` and parity readback `bd6c9568-6d5b-4830-9054-14a79b3ca57e`. Normative spec `a148536c-4af4-479c-b07b-b7525a06743d` (`92015e80…51ff`) and observable semantics do not change. Validated independent-PASS Unit 1 is immutable.
+## Authority and approach
 
-The sequence remains: consume Unit-1 handoff → hold selected-target authority → acquire profile authority → authoritative snapshot/rebase/provisional profile write → canonical v3 publication last → sole final commit → target release → profile release. Authority order, deadlock design, reverse rollback (D residue, prior v3, profile, then remaining C/B journal in reverse), manifest-last, residual-risk precedence, redaction, unrelated-root independence, v2 non-mutation, server exclusion, and prohibition on a second transaction remain unchanged.
+Supersedes design `a6e719f1-4f73-470c-a004-b973a138edf7` (SHA-256 `36e17e8e0bda5629143fe0524dd4bd25eaed3b8b78abb9b19f66d844aee4f3ec`) under recovered proposal `370522aa-580d-4906-ad8d-dac6f8f41e69` (`b532e6eb…ab94`) and resolves the design details requested by spec needs-input `4722fcd3-c100-4339-8987-76da7c555765`. Accepted W1–W3.3/C1–C46 and the shared Workflow/Prepared/Result/Event architecture remain unchanged; W4 is still pending specification/tasks/apply.
 
-## Decisions and internal interfaces
-
-| Choice | Rejected alternative | Rationale |
-|---|---|---|
-| Add the two build-tagged adapters to Unit 2 | Common-code raw-path deletion | Only adapters retain accepted B12/B13 canonical identity, no-follow/reparse, OS authority, durability, and cleanup semantics. |
-| Use an opaque held-state contract | Exported delete API or platform handles | D needs exact rollback, not general deletion or leaked kernel/journal internals. |
-| Preserve public `Complete*` through the same acquisition primitive | Parallel lock lifecycle | One acquisition implementation preserves ordering and avoids split authority. |
-
-```go
-type heldProfileState interface{ heldProfileState() }
-type heldRestorePlatform interface {
-    snapshotHeld(authority) ([]byte, bool, heldProfileState, error)
-    restoreHeld(authority, heldProfileState) error
-}
-type heldStoreAuthority struct { /* unexported platform + owned authority */ }
+```text
+CLI parser ─┐
+            ├─> Workflow.Prepare ─> compiler.Explain/Compile ─> adapters ─> sealed Prepared
+TUI Cmd  ───┘                                                        │
+ human/json/TUI presenters <── ordered Events + Result <── Workflow.Execute ─> accepted W3.3 transaction
 ```
 
-`acquireStoreAuthority` returns the internal held lifecycle; `withStoreAuthority` delegates to it and preserves current public behavior. The D-only lease asserts `heldRestorePlatform`, snapshots and rebases while the same authority is held, and calls `restoreHeld` before release on abort. The opaque state binds the exact authority object and canonical target identity; it records presence independently of byte length and adapter-private restoration facts. The seam is unexported, adds no dependency, exposes no handle or journal value, and cannot serve as a general delete API.
+`runInstall → installActionWithOptions → Plan*Install → Execute*Install` is replaced at the presentation boundary, not duplicated. One injected `install.Workflow` owns admission, preparation, execution, and `RoutePolicy`; target `Plan*/Execute*` paths remain only behind `LegacyAdapter`. Existing compiler, projector, `SealTransactionPlan`, transaction journal/authority, hosted-MCP finalizer, and profile-store authority remain the sole canonical seams.
 
-For prior absence, `restoreHeld` may remove only the adapter-validated canonical leaf while the originating authority is live. Unix uses held-parent descriptor-relative no-follow identity checks; Windows revalidates parent volume/index, folded leaf, reparse state, and owned mutex before deletion. Raw caller paths are forbidden. Both adapters durably flush applicable directory state and remove only owned matching residue. For prior presence, restoration uses same-directory protected temporary creation, exact bytes and POSIX mode or Windows protected state, file flush, atomic replacement, directory/write-through durability, and temporary cleanup. Any identity, restore, durability, cleanup, or release failure preserves redacted recovery evidence and promotes existing residual risk. No v2 path is named or mutated.
+## Decisions and interfaces
 
-## Serialized eight-file universe
-
-| Role | File | Required starting SHA-256 |
+| Decision | Rejected | Why |
 |---|---|---|
-| Unit-1 preservation | `internal/install/hosted_mcp_finalizer.go` | `7fdb2b7ea24594dead4fa14dde1d51c535686dab85ed50f6c906a895a6ee8289` |
-| Unit-1 preservation | `internal/install/hosted_mcp_finalizer_test.go` | `a719f9fdaad4ff4e065390d90f04d3f4c12178d565ca845a8ecd7010f65e1663` |
-| Unit-2 edit | `internal/install/profile_store.go` | `d83e2bf7ac560353337e892876f113fbe72c21312041b39b4e7d870d5b84d1bb` |
-| Unit-2 edit | `internal/install/profile_store_authority.go` | `321a4d516e3ed7a6c8257eb45d681adbcb699b00863d26d01e259fb3f889c44e` |
-| Unit-2 edit | `internal/install/profile_store_unix.go` | `5acdf670df1adc1ae9db1681dcc1848964bf165aadb0657ab30c04f692fc2b7f` |
-| Unit-2 edit | `internal/install/profile_store_windows.go` | `11f8ce898403285e1a3e90fddd3ca11ec539b1b756aba1b0bc999c95271cb47b` |
-| Unit-1 result gate + Unit-2 edit | `internal/install/transaction.go` | `acd952c917948fbdca98d589008087d7081ecb9b9bad3b8d71e7dee7208d116f` |
-| Unit-1 result gate + Unit-2 edit/test | `internal/install/transaction_test.go` | `d4421dd83b8caf9dce608b7f2926915ce5108dfc6ee7e19299b5c7033fcbddcd` |
+| Opaque, sealed, single-consumption `Prepared` | reconstruct/reuse after confirmation or retry | Prevents drift and substitution. |
+| Typed `Result`/ordered `Event`; separate presenters | presenter-owned domain state | Gives CLI/TUI parity and centralized redaction. |
+| Per-target policy with route markers | global gate or fallback | Supports observable, reversible rollout. |
 
-No other file, dependency, workflow, Git/CI surface, E, or W4 enters the candidate. Unit 2 starts only after all eight hashes and Unit-1 PASS lineage match, then freezes one unsplit candidate and a fresh cap. Historical cap 875 is invalid.
+```go
+type Mode string // explain, dry-run, apply, legacy-dry-run, legacy-apply
+type Workflow interface {
+  Prepare(context.Context, Request) (Prepared, Result)
+  Execute(context.Context, Prepared, Observer) Result
+}
+type Result struct { SchemaVersion int; Mode Mode; Route string; Status Status; Report TransactionReport; Operations []Operation; Guidance []Guidance; Rollback RollbackResult; Error *InstallError }
+type Event struct { Seq uint64; Phase Phase; Kind EventKind; Progress Progress; Operation *Operation; Error *InstallError }
+```
 
-## Verification strategy and evidence scope
-`transaction_test.go` adds table-driven absent/present rollback, failure-order, v2-preservation, and residue assertions. A fake `heldRestorePlatform` proves authority identity and call order; each native adapter’s existing `fail(stage)` hook is reached through an unexported optional test seam, so the same tests execute Unix or Windows behavior on that OS without new files. Later native runners/overlays are validation evidence, not design-file authority.
+Collections stay copied/ordered and observers cannot affect execution. Errors expose fixed codes and logical/redacted paths only. Server identity/authorization remains server-owned; explain performs no network or hosted effect. Credential resolution occurs once after sealing and only during apply. Target authority, rollback, v3-manifest-last/v2 preservation, Unix no-follow/mode/flock, and Windows reparse/ACL/mutex/owner-thread rules are unchanged.
 
-W3.2 acceptance `w3.2-acceptance-accepted-1-dg-6e8e4ac1` at candidate `1fd4dd2d…a766` and final B1–B18 verification digest `a774564a…469e` remain valid historical authority. Unchanged acquisition identity/order, contention/timeouts, rebase/conflict/idempotence, crash/live-owner safety, B12 path rejection, permissions, redaction, and public `Complete*` evidence remain reusable subject to preservation checks. Scoped reverification is required for both adapters’ new held snapshot/restore path: absent canonical deletion, present exact bytes/mode/protection, authority ownership, no-follow/reparse resistance, durability ordering, injected restore failures, residue cleanup, D reverse rollback, and residual-risk precedence. No build or test runs in this design phase.
+## CLI and presentation matrix
+
+| Invocation | Mode |
+|---|---|
+| `install --explain`; `install --dry-run`; `install` | canonical explain; dry-run; apply |
+| `install --legacy --dry-run`; `install --legacy` | legacy dry-run; apply |
+
+`--explain` conflicts with `--dry-run`, `--legacy`, and `--yes`. `--yes` with either dry-run is usage error; it is valid only for canonical/legacy apply. Apply prompts on a TTY unless `--yes`; non-TTY apply without it returns typed `confirmation_required` and never reads stdin.
+
+All modes accept `--format human|json` (human default). Human final success/reports use stdout; progress, warnings, deprecation, and errors use stderr. JSON writes exactly one `{"schema_version":1,"result":...}` object to stdout, with no ANSI, spinner, progress, or chatter; admitted domain/apply failures are structured there. Parser, unknown-flag, combination, and invalid-format errors use stderr only.
+
+Exit precedence is: residual risk **3**; otherwise usage **2**; signal interruption **130**; domain/non-admission/disabled/confirmation-required or failure with complete rollback **1**; success or voluntary pre-execution decline/cancel **0**. A signal before authority yields 130; after authority it cancels execution, blocks return, waits for rollback/result, then yields 130 only if restoration is complete, otherwise 3.
+
+## TUI sequencing
+
+TUI is a separate presenter over the same typed data and rejects non-TTY launch with usage guidance. Back/Esc before `Execute` discards `Prepared` with zero effects. During execution, cancel requests context cancellation while navigation remains blocked until rollback/result. Retry always re-Prepares; residual risk disables retry. Resize only reflows the view. Phase and numeric/text progress are always rendered; animation is decorative, and `LORE_NO_ANIMATION=1` disables it.
+
+## Files, rollout, and verification
+
+| Boundary | Files |
+|---|---|
+| Workflow/policy/legacy | create `internal/install/workflow_{contract,prepare,execute,legacy}.go`; extend `projector.go`, `hosted_mcp_finalizer.go`, `transaction*.go`, `profile_store*.go`, four adapters |
+| Presenters | modify `internal/cli/{app,actions}.go`; create `internal/cli/install_presenter.go`; split `internal/tui/install_{model,update,view,cmd}.go`; extend `internal/output/` |
+
+Each Pi/OpenCode/Codex/Antigravity target advances **E→D→A**: E enables explain; D adds dry-run; A adds apply and alone permits canonical default. Disabled modes return `canonical_route_disabled`, never legacy fallback. Results/tests expose `canonical-sealed` or `explicit-legacy`. Emergency demotion is A→D→E→off; legacy stays explicit.
+
+Legacy retirement requires all four targets at A, compatibility/golden parity, no unresolved rollback regressions, adoption review, and at least one published deprecation version plus 30 days. A later separately reviewed compatibility change removes the flag, TUI choice, adapter, and old callers.
+
+Verification uses table tests, mutation/credential/network spies, exact flag/TTY/format/exit matrices, JSON/human goldens and sensitive-output scans, four-target route/parity tests, rollback/signal/no-residue tests, deterministic model/teatest cancel/back/retry/resize/reduced-motion tests, race/vet/full suite, and native/cross-platform CI. Stack review slices by contracts, explain, dry-run, apply, presenters, adapters, and goldens; each keeps tests with behavior, is ≤400 authored lines, independently reversible, and names prior/follow-up dependencies.

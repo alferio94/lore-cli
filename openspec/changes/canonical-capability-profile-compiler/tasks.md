@@ -40,11 +40,21 @@
 - [x] 3.6 Unix authority/owner-death in `transaction_authority_unix.go`; add tests for `O_DIRECTORY|O_NOFOLLOW`, `flock`, zero-wait busy, five-second timeout, redacted `target_authority_busy` / `target_authority_timeout` at `selected_target.authority`, and orphan recovery before mutation.
 - [x] 3.7 Windows authority/owner-death in `transaction_authority_windows.go`; add Windows CI/runtime tests for `FILE_FLAG_OPEN_REPARSE_POINT`, mutex abandonment, case/volume/reparse aliases, ACL retention, and redacted outcomes.
 - [x] 3.8 Durable orphan journal recovery + fail-closed rollback in `transaction_fs.go`/tests; cover crash/rollback/idempotent completion, residue cleanup, and independent-root concurrency. Out: profile-store authority and W4.
-- [ ] 4.1 RED→GREEN adapter projections/parsing for Codex/Antigravity and the local/server identity namespace split. Trace C1-C4.
-- [ ] 4.2 RED→GREEN explain/dry-run guidance: compact activity/context/search, full-get handoff, and no query/cursor promise. Trace C6-C10.
-- [ ] 4.3 Generate goldens for all R1-R16/123 scenarios; include C1-C10 traces and frozen server fixtures.
-- [ ] 4.4 Verify focused/vet/full suite; isolate the known baseline; keep W3.2/B13 untouched; rerun preserved W3.3-B independent verification and keep 3.3 unchecked until it passes.
+
+## W4 Ordered Checklist (supersedes stale 4.1-4.4)
+- [ ] 4.1 Read-only preflight from clean W3.3 checkpoint `ccfc222ce854349e86577d7bcee888949e773e12`; freeze the W4 slice cap, confirm no W4 branch/worktree mutation, and stop on dirty base or hash drift.
+- [ ] 4.2 Add `internal/install/{workflow_contract,route_policy,legacy_adapter,result,event,error}.go` plus tests for Request/Prepared/Result/Event/Error, per-target E→D→A gates, demotion evidence, and no legacy fallback.
+- [ ] 4.3 Extend `internal/install/projector.go` and adapter seams so local `ProjectID`, server UUID/key, and explicit `repository_id` stay distinct; cover C1-C4 and D56-D62.
+- [ ] 4.4 Implement sealed `internal/install/explain.go` with zero mutation/network/credential/authority effect, stable ordering, and redaction; verify D24-D27 and D1-D10.
+- [ ] 4.5 Wire `install --explain` in `internal/cli/{app,actions}.go`, `internal/cli/install_presenter.go`, and `internal/output/*` for human/json stdout/stderr, schema-v1 JSON, conflict/usage exits, and non-TTY refusal; test D11-D23.
+- [ ] 4.6 Add TUI explain parity in `internal/tui/install_{model,update,view,cmd}.go` with no-TTY rejection, reduced-motion, navigation/cancel/retry/resize, and typed route/status parity; test D35-D43 and D65.
+- [ ] 4.7 Route canonical dry-run through the shared Workflow using sealed Prepare/Result only, with zero side effects, typed phase/event ordering, and canonical-vs-legacy route markers; test D2, D28-D34, D44-D49.
+- [ ] 4.8 Route canonical apply through the same Workflow into accepted W3.3 seams with confirmation, signal 130 precedence, residual-risk code 3, rollback/recovery, and `transaction*`/`profile_store*` authority boundaries; test D3, D9-D10, D17-D23, D29-D34.
+- [ ] 4.9 Keep explicit legacy dry-run/apply behind `LegacyAdapter` only; emit warnings/route markers, block fallback/kill-switch shortcuts, and keep retirement/removal out of W4; test D4-D5, D48-D55.
+- [ ] 4.10 Add goldens and stream guards in `internal/{cli,tui,install}/testdata` for human/json/TUI outputs, redaction, path/no-effect checks, and four-target E→D→A matrices; cover D63-D69.
+- [ ] 4.11 Run focused race/vet/full-suite and cross-platform CI checks with an independent verify slice before closing any W4 task; isolate the known baseline and keep W3.2/B13 and W3.3 lineage untouched.
 
 ## W3.3/W4 Contract Gate
 - W3.3-D option 1 is bounded; the preflight-derived cap is authoritative.
+- W4 remains pending until 4.1-4.11 are independently verified in order; each slice stays ≤400 authored lines including tests/docs and must stop before apply if canonical artifacts or the clean base are not ready.
 - Rollback/hybrid checkpoint: preserve `tasks-pre-amendment-W3.3-W4`, `tasks-validation-W3.3-W4`, and W3.3 design/pre-snapshot/validation hash parity; do not unlock W4.
