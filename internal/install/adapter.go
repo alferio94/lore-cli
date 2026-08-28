@@ -49,6 +49,7 @@ type RenderRequest struct {
 	HarnessRoot     string
 	RuntimeContract RuntimeContract
 	AgentConfig     agentconfig.Config
+	ServerScope     ServerScope
 }
 
 type RenderedFile struct {
@@ -101,6 +102,9 @@ func (r *Registry) Resolve(target TargetID) (HarnessAdapter, error) {
 }
 
 func (r RenderRequest) Validate() error {
+	if path := serverScopeValidationPath(r.ServerScope, false); path != "" {
+		return fmt.Errorf("server scope is invalid at %s", path)
+	}
 	if r.Target == "" {
 		return fmt.Errorf("target is required")
 	}

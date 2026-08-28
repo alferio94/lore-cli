@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/alferio94/lore-cli/internal/agentpack"
 	"github.com/alferio94/lore-cli/internal/compiler"
 	"github.com/alferio94/lore-cli/internal/reconcile"
 )
@@ -48,6 +49,23 @@ type SensitiveReference struct {
 	Slot        string
 }
 
+// Server identity types are intentionally incompatible with compiler.ProjectID.
+// They describe only explicit Lore Server guidance scope and carry no local
+// repository lookup, authorization, or transaction authority.
+type ServerProjectID string
+type ServerProjectKey string
+type ServerRepositoryID string
+
+type ServerScope struct {
+	ProjectID    ServerProjectID
+	ProjectKey   ServerProjectKey
+	RepositoryID ServerRepositoryID
+}
+
+func (s ServerScope) IsZero() bool {
+	return s.ProjectID == "" && s.ProjectKey == "" && s.RepositoryID == ""
+}
+
 type SemanticResource struct {
 	Resource            string
 	Component           ComponentID
@@ -63,8 +81,9 @@ type SemanticResource struct {
 }
 
 type ProjectorInput struct {
-	Target    TargetID
-	Resources []SemanticResource
+	Target      TargetID
+	ServerScope ServerScope
+	Resources   []SemanticResource
 }
 
 type OwnershipMarker struct {
@@ -115,6 +134,8 @@ type SemanticResourceFact struct {
 type TargetFacts struct {
 	Target       TargetID
 	IRID         string
+	ServerScope  ServerScope
+	Guidance     []string
 	Profile      ProfileFact
 	Roles        []RoleFact
 	Capabilities []compiler.CapabilityDecision
@@ -136,6 +157,7 @@ func (p SemanticPlan) Intents() []reconcile.Intent { return cloneIntents(p.inten
 var (
 	secretValuePattern      = regexp.MustCompile(`(?i)\b(?:bearer|basic)[ \t]+[^\r\n]+|["']?(?:secret|token|password|authorization|api[_-]?key)["']?[ \t]*[:=][ \t]*["'][^"']+["']`)
 	secretAssignmentPattern = regexp.MustCompile(`(?i)\b(?:secret|token|password|bearer|credential|authorization|api[_-]?key|apikey)\b[ \t]*[:=][ \t]*[^ \t\r\n][^\r\n]*`)
+	serverUUIDPattern       = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 )
 
 // ProjectSemanticPlan maps caller-supplied, already-sanitized target facts to
@@ -155,12 +177,15 @@ func ProjectSemanticPlan(ir compiler.ResolvedIR, input ProjectorInput) (Semantic
 		return SemanticPlan{}, projectorError(CodeProjectorTargetMismatch, "target")
 	}
 	resources := cloneSemanticResources(input.Resources)
+	if path := serverScopeValidationPath(input.ServerScope, resourcesRequireServerScope(resources)); path != "" {
+		return SemanticPlan{}, projectorError(CodeProjectorInvalidFact, path)
+	}
 	sort.Slice(resources, func(i, j int) bool { return resources[i].Resource < resources[j].Resource })
 	if len(resources) == 0 {
 		return SemanticPlan{}, projectorError(CodeProjectorInvalidFact, "resources")
 	}
 
-	facts := targetFactsFromIR(ir, input.Target)
+	facts := targetFactsFromIR(ir, input.Target, input.ServerScope)
 	facts.Resources = make([]SemanticResourceFact, 0, len(resources))
 	intents := make([]reconcile.Intent, 0, len(resources))
 	for i := range resources {
@@ -206,18 +231,61 @@ func ProjectSemanticPlan(ir compiler.ResolvedIR, input ProjectorInput) (Semantic
 }
 
 func knownProjectorTarget(target TargetID) bool {
-	return target == TargetPi || target == TargetOpenCode
+	return target == TargetPi || target == TargetOpenCode || target == TargetCodex || target == TargetAntigravity
 }
 
 func projectorTargetSupports(target TargetID, component ComponentID) bool {
+	var adapter HarnessAdapter
 	switch target {
 	case TargetPi:
-		return defaultPiAdapter().Supports(component)
+		adapter = defaultPiAdapter()
 	case TargetOpenCode:
-		return defaultOpenCodeAdapter().Supports(component)
+		adapter = defaultOpenCodeAdapter()
+	case TargetCodex:
+		adapter = defaultCodexAdapter()
+	case TargetAntigravity:
+		adapter = defaultAntigravityAdapter()
 	default:
 		return false
 	}
+	return adapter.Supports(component)
+}
+
+func resourcesRequireServerScope(resources []SemanticResource) bool {
+	for _, resource := range resources {
+		if resource.Component == ComponentLoreServerMCP {
+			return true
+		}
+	}
+	return false
+}
+
+func serverScopeValidationPath(scope ServerScope, required bool) string {
+	projectID := strings.TrimSpace(string(scope.ProjectID))
+	projectKey := strings.TrimSpace(string(scope.ProjectKey))
+	repositoryID := strings.TrimSpace(string(scope.RepositoryID))
+	if scope.IsZero() {
+		if required {
+			return "server_scope"
+		}
+		return ""
+	}
+	if projectID != string(scope.ProjectID) || strings.ContainsAny(projectID, "\x00\r\n") {
+		return "server_scope.project_id"
+	}
+	if projectKey != string(scope.ProjectKey) || strings.ContainsAny(projectKey, "\x00\r\n") {
+		return "server_scope.project_key"
+	}
+	if (projectID == "") == (projectKey == "") {
+		return "server_scope.project"
+	}
+	if projectID != "" && !serverUUIDPattern.MatchString(projectID) {
+		return "server_scope.project_id"
+	}
+	if repositoryID != string(scope.RepositoryID) || (repositoryID != "" && !serverUUIDPattern.MatchString(repositoryID)) {
+		return "server_scope.repository_id"
+	}
+	return ""
 }
 
 func reconciliationMode(mode MergeMode) (reconcile.Mode, bool) {
@@ -281,9 +349,12 @@ func declaredCredential(ir compiler.ResolvedIR, ref SensitiveReference) bool {
 	return false
 }
 
-func targetFactsFromIR(ir compiler.ResolvedIR, target TargetID) TargetFacts {
+func targetFactsFromIR(ir compiler.ResolvedIR, target TargetID, scope ServerScope) TargetFacts {
 	profile := ir.Profile()
-	facts := TargetFacts{Target: target, IRID: ir.IRID(), Profile: ProfileFact{Winner: sourceFact(profile.Winner), Shadowed: sourceFacts(profile.Shadowed)}, Capabilities: ir.Capabilities()}
+	facts := TargetFacts{Target: target, IRID: ir.IRID(), ServerScope: scope, Profile: ProfileFact{Winner: sourceFact(profile.Winner), Shadowed: sourceFacts(profile.Shadowed)}, Capabilities: ir.Capabilities()}
+	if !scope.IsZero() {
+		facts.Guidance = agentpack.LoreMCPGuidance()
+	}
 	for _, role := range ir.Roles() {
 		facts.Roles = append(facts.Roles, RoleFact{Role: role.Role, Model: role.Model, Winner: sourceFact(role.Winner), Shadowed: sourceFacts(role.Shadowed)})
 	}
@@ -349,6 +420,7 @@ func cloneSemanticResources(resources []SemanticResource) []SemanticResource {
 }
 func cloneTargetFacts(facts TargetFacts) TargetFacts {
 	out := facts
+	out.Guidance = append([]string(nil), facts.Guidance...)
 	out.Profile.Shadowed = append([]SourceFact(nil), facts.Profile.Shadowed...)
 	out.Roles = append([]RoleFact(nil), facts.Roles...)
 	for i := range out.Roles {

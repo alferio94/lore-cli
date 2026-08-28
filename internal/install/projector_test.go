@@ -6,12 +6,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/alferio94/lore-cli/internal/agentpack"
 	"github.com/alferio94/lore-cli/internal/compiler"
 	"github.com/alferio94/lore-cli/internal/reconcile"
 )
 
-func TestW3ProjectSemanticPlanNormalizesPiAndOpenCodeFacts(t *testing.T) {
-	for _, target := range []TargetID{TargetPi, TargetOpenCode} {
+func TestW4ProjectSemanticPlanNormalizesFourTargetFacts(t *testing.T) {
+	for _, target := range []TargetID{TargetPi, TargetOpenCode, TargetCodex, TargetAntigravity} {
 		t.Run(string(target), func(t *testing.T) {
 			ir := projectorIR(t, target)
 			first := projectorInput(target, false)
@@ -35,6 +36,15 @@ func TestW3ProjectSemanticPlanNormalizesPiAndOpenCodeFacts(t *testing.T) {
 			}
 			if !facts.Persistence.Requested || facts.Persistence.Scope != compiler.ProfileScopeProject || facts.Persistence.ProjectID != "project:alpha" || facts.Persistence.ProfileID != "project" {
 				t.Fatalf("persistence fact = %#v", facts.Persistence)
+			}
+			if facts.ServerScope != first.ServerScope || facts.ServerScope.ProjectKey != "lore-cli" || facts.ServerScope.RepositoryID == "" || string(facts.ServerScope.ProjectKey) == string(facts.Persistence.ProjectID) {
+				t.Fatalf("local/server identity separation = local:%q server:%#v", facts.Persistence.ProjectID, facts.ServerScope)
+			}
+			guidance := strings.Join(facts.Guidance, "\n")
+			for _, marker := range []string{"lore_project_activity", "lore_project_context", "lore_memory_search", "do not pass query text", "lore_memory_get", "OMIT full `content`", "exactly one of `project_id` (UUID) or `project_key`"} {
+				if !strings.Contains(guidance, marker) {
+					t.Fatalf("guidance missing %q: %q", marker, guidance)
+				}
 			}
 			if len(facts.Roles) != 2 || facts.Roles[0].Role != "default" || facts.Roles[1].Role != "worker" || facts.Roles[1].Winner.SourceKey != "project-source" {
 				t.Fatalf("role provenance = %#v", facts.Roles)
@@ -90,6 +100,7 @@ func TestW3ProjectSemanticPlanDefensiveCopiesAndSecretRejection(t *testing.T) {
 	}
 
 	facts := plan.TargetFacts()
+	facts.Guidance[0] = "mutated"
 	facts.Resources[0].Desired[0] = 'X'
 	facts.Resources[2].OwnershipMarkers[0].Value = "mutated"
 	facts.Roles[0].Shadowed[0].SourceKey = "mutated"
@@ -139,7 +150,6 @@ func TestW3ProjectSemanticPlanRejectsSecretOwnershipMarkerOverlay(t *testing.T) 
 
 func TestW3ProjectSemanticPlanRejectsUnsupportedInvalidAndMismatchedTargets(t *testing.T) {
 	pi := projectorIR(t, TargetPi)
-	codex := projectorIR(t, TargetCodex)
 	unsupportedComponent := projectorInput(TargetOpenCode, false)
 	unsupportedComponent.Resources[0].Component = ComponentBoundedReviewProjection
 	cases := []struct {
@@ -151,7 +161,7 @@ func TestW3ProjectSemanticPlanRejectsUnsupportedInvalidAndMismatchedTargets(t *t
 	}{
 		{"invalid target", pi, ProjectorInput{}, CodeProjectorInvalidTarget, "target"},
 		{"mismatch", pi, projectorInput(TargetOpenCode, false), CodeProjectorTargetMismatch, "target"},
-		{"unsupported", codex, projectorInput(TargetCodex, false), CodeProjectorUnsupportedTarget, "target"},
+		{"unsupported", pi, projectorInput(TargetClaudeCode, false), CodeProjectorUnsupportedTarget, "target"},
 		{"unsupported component", projectorIR(t, TargetOpenCode), unsupportedComponent, CodeProjectorInvalidFact, "resources.config/settings.json.component"},
 		{"invalid mode", pi, projectorInput(TargetPi, false), CodeProjectorInvalidFact, "resources.config/settings.json.mode"},
 	}
@@ -164,6 +174,48 @@ func TestW3ProjectSemanticPlanRejectsUnsupportedInvalidAndMismatchedTargets(t *t
 				t.Fatalf("ProjectSemanticPlan output = %#v, want zero", got)
 			}
 		})
+	}
+}
+
+func TestW4ProjectSemanticPlanValidatesOnlyExplicitServerScope(t *testing.T) {
+	validProjectID := ServerProjectID("86836476-c996-4c1a-b21e-361caab8b8d4")
+	validRepositoryID := ServerRepositoryID("7f15a7a7-f499-4725-93bd-6ad2c72f42be")
+	cases := []struct {
+		name  string
+		scope ServerScope
+		path  string
+	}{
+		{"missing", ServerScope{}, "server_scope"},
+		{"local id is not server uuid", ServerScope{ProjectID: "project:alpha"}, "server_scope.project_id"},
+		{"both project selectors", ServerScope{ProjectID: validProjectID, ProjectKey: "lore-cli"}, "server_scope.project"},
+		{"repository path", ServerScope{ProjectKey: "lore-cli", RepositoryID: "../repo"}, "server_scope.repository_id"},
+		{"padded key", ServerScope{ProjectKey: " lore-cli"}, "server_scope.project_key"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			in := projectorInput(TargetPi, false)
+			in.ServerScope = tc.scope
+			got, err := ProjectSemanticPlan(projectorIR(t, TargetPi), in)
+			assertProjectorError(t, err, CodeProjectorInvalidFact, tc.path)
+			if !got.IsZero() || strings.Contains(err.Error(), string(tc.scope.ProjectID)) && tc.scope.ProjectID != "" {
+				t.Fatalf("invalid scope leaked or admitted: %#v / %q", got, err)
+			}
+		})
+	}
+
+	for _, scope := range []ServerScope{
+		{ProjectID: validProjectID},
+		{ProjectKey: "lore-cli", RepositoryID: validRepositoryID},
+	} {
+		in := projectorInput(TargetCodex, false)
+		in.ServerScope = scope
+		if _, err := ProjectSemanticPlan(projectorIR(t, TargetCodex), in); err != nil {
+			t.Fatalf("ProjectSemanticPlan(valid server scope) error = %v", err)
+		}
+		req := RenderRequest{Target: TargetCodex, Definition: agentpack.DefaultDefinition(), Components: []ComponentID{ComponentCorePack}, ServerScope: scope}
+		if err := req.Validate(); err != nil {
+			t.Fatalf("RenderRequest.Validate(valid server scope) error = %v", err)
+		}
 	}
 }
 
@@ -194,7 +246,7 @@ func projectorInput(target TargetID, reverse bool) ProjectorInput {
 		resources[1].OwnershipMarkers = map[string]string{"managed_by": "lore-cli", "managed_layer": "agent-pack"}
 		resources[reverseIndex(resources, "config/settings.json")].AdditiveClaims[0], resources[reverseIndex(resources, "config/settings.json")].AdditiveClaims[1] = resources[reverseIndex(resources, "config/settings.json")].AdditiveClaims[1], resources[reverseIndex(resources, "config/settings.json")].AdditiveClaims[0]
 	}
-	return ProjectorInput{Target: target, Resources: resources}
+	return ProjectorInput{Target: target, ServerScope: ServerScope{ProjectKey: "lore-cli", RepositoryID: "7f15a7a7-f499-4725-93bd-6ad2c72f42be"}, Resources: resources}
 }
 
 func reverseIndex(resources []SemanticResource, resource string) int {
@@ -207,7 +259,7 @@ func reverseIndex(resources []SemanticResource, resource string) int {
 }
 
 func cloneProjectorInput(in ProjectorInput) ProjectorInput {
-	out := ProjectorInput{Target: in.Target, Resources: append([]SemanticResource(nil), in.Resources...)}
+	out := ProjectorInput{Target: in.Target, ServerScope: in.ServerScope, Resources: append([]SemanticResource(nil), in.Resources...)}
 	for i := range out.Resources {
 		out.Resources[i].Observed = append([]byte(nil), in.Resources[i].Observed...)
 		out.Resources[i].Desired = append([]byte(nil), in.Resources[i].Desired...)
