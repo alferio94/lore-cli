@@ -62,6 +62,7 @@ type App struct {
 	TUIRunner            func(context.Context, InteractiveActions) error
 	UpdateServiceFactory func() (cliupdate.Service, error)
 	InstallWorkflow      install.Workflow
+	LegacyAdapter        install.LegacyAdapter
 	InstallConfirm       func() (bool, error)
 	BuildInfo            version.Info
 	// AgentConfigStore is the optional agent-config store for read-only diagnostics
@@ -88,6 +89,7 @@ func New(configDir string, stdout, stderr io.Writer, buildInfo version.Info) *Ap
 		BuildInfo:       buildInfo.Normalized(),
 	}
 	app.AgentConfigStore = agentconfig.NewStore(configDir)
+	app.LegacyAdapter = &appLegacyAdapter{app: app}
 	return app
 }
 
@@ -380,16 +382,18 @@ func (a *App) runInstall(_ InteractiveActions, args []string) int {
 		request.Mode = install.ModeExplain
 		return a.presentInstallResult(selectedFormat, a.installExplainAction(context.Background(), request))
 	}
-	if *dryRun && !*legacy {
+	if *dryRun {
 		request.Mode = install.ModeDryRun
+		if *legacy {
+			request.Mode = install.ModeLegacyDryRun
+			return a.presentInstallResult(selectedFormat, a.installLegacyAction(context.Background(), request, nil))
+		}
 		return a.presentInstallResult(selectedFormat, a.installDryRunAction(context.Background(), request))
 	}
-	if *legacy {
-		fmt.Fprintln(a.Stderr, "--legacy routes are not available before their bounded W4.9 slice")
-		return 2
-	}
-
 	request.Mode = install.ModeApply
+	if *legacy {
+		request.Mode = install.ModeLegacyApply
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	var observer install.Observer
@@ -397,6 +401,9 @@ func (a *App) runInstall(_ InteractiveActions, args []string) int {
 		observer = install.ObserverFunc(func(event install.Event) {
 			fmt.Fprintf(a.Stderr, "progress phase=%s kind=%s completed=%d total=%d\n", event.Phase, event.Kind, event.Progress.Completed, event.Progress.Total)
 		})
+	}
+	if *legacy {
+		return a.presentInstallResult(selectedFormat, a.installLegacyAction(ctx, request, observer))
 	}
 	return a.presentInstallResult(selectedFormat, a.installApplyAction(ctx, request, observer))
 }

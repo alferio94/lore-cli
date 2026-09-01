@@ -113,6 +113,7 @@ type InteractiveActions struct {
 	PlanPiInstall    func(ctx context.Context) (install.PiInstallPlan, ActionReport, bool)
 	ExecutePiInstall func(ctx context.Context, plan install.PiInstallPlan) ActionReport
 	InstallWorkflow  install.Workflow
+	LegacyAdapter    install.LegacyAdapter
 	CheckForUpdate   func(ctx context.Context) UpdateAvailability
 	Update           func(ctx context.Context) ActionReport
 }
@@ -134,6 +135,7 @@ func (a *App) InteractiveActions() InteractiveActions {
 		},
 		ExecutePiInstall: a.executePiInstallAction,
 		InstallWorkflow:  a.InstallWorkflow,
+		LegacyAdapter:    a.LegacyAdapter,
 		CheckForUpdate:   a.checkForUpdateAction,
 		Update:           a.updateApplyAction,
 	}
@@ -443,38 +445,79 @@ func (a *App) installApplyAction(ctx context.Context, request install.Request, o
 	if result.Error != nil || !result.Admitted {
 		return result
 	}
-	if !request.AssumeYes {
-		confirmed, interactive := false, false
-		if a.InstallConfirm != nil {
-			var err error
-			confirmed, err = a.InstallConfirm()
-			interactive = err == nil
-		} else if stdin, inOK := a.Stdin.(*os.File); inOK {
-			if stdout, outOK := a.Stdout.(*os.File); outOK && term.IsTerminal(stdin.Fd()) && term.IsTerminal(stdout.Fd()) {
-				interactive = true
-				fmt.Fprint(a.Stderr, "Apply this canonical sealed install plan? [y/N] ")
-				answer := make(chan bool, 1)
-				go func() {
-					line, err := bufio.NewReader(stdin).ReadString('\n')
-					answer <- err == nil && strings.EqualFold(strings.TrimSpace(line), "y")
-				}()
-				select {
-				case confirmed = <-answer:
-				case <-ctx.Done():
-					result.Status, result.Interrupted = install.StatusCancelled, true
-					return result
-				}
+	return a.confirmAndExecuteInstall(ctx, request, result, func() install.Result {
+		return workflow.Execute(ctx, prepared, observer)
+	})
+}
+
+func (a *App) installLegacyAction(ctx context.Context, request install.Request, observer install.Observer) install.Result {
+	if a.LegacyAdapter == nil {
+		return install.CompleteExplicitLegacy(request, false)
+	}
+	prepared, result := a.LegacyAdapter.PrepareLegacy(ctx, request)
+	if result.Error != nil || !result.Admitted {
+		return result
+	}
+	execute := func() install.Result { return a.LegacyAdapter.ExecuteLegacy(ctx, prepared, observer) }
+	if request.Mode == install.ModeLegacyDryRun {
+		return execute()
+	}
+	return a.confirmAndExecuteInstall(ctx, request, result, execute)
+}
+
+func (a *App) confirmAndExecuteInstall(ctx context.Context, request install.Request, result install.Result, execute func() install.Result) install.Result {
+	if request.AssumeYes {
+		return execute()
+	}
+	confirmed, interactive := false, false
+	if a.InstallConfirm != nil {
+		var err error
+		confirmed, err = a.InstallConfirm()
+		interactive = err == nil
+	} else if stdin, inOK := a.Stdin.(*os.File); inOK {
+		if stdout, outOK := a.Stdout.(*os.File); outOK && term.IsTerminal(stdin.Fd()) && term.IsTerminal(stdout.Fd()) {
+			interactive = true
+			fmt.Fprintf(a.Stderr, "Apply this %s install plan? [y/N] ", result.Route)
+			answer := make(chan bool, 1)
+			go func() {
+				line, err := bufio.NewReader(stdin).ReadString('\n')
+				answer <- err == nil && strings.EqualFold(strings.TrimSpace(line), "y")
+			}()
+			select {
+			case confirmed = <-answer:
+			case <-ctx.Done():
+				result.Status, result.Interrupted = install.StatusCancelled, true
+				return result
 			}
 		}
-		if !interactive {
-			return install.ConfirmationRequiredResult(request)
-		}
-		if !confirmed {
-			result.Status, result.ChangedState = install.StatusCancelled, false
-			return result
-		}
 	}
-	return workflow.Execute(ctx, prepared, observer)
+	if !interactive {
+		return install.ConfirmationRequiredResult(request)
+	}
+	if !confirmed {
+		result.Status, result.ChangedState = install.StatusCancelled, false
+		return result
+	}
+	return execute()
+}
+
+// appLegacyAdapter is the sole bridge to the pre-W4 target Plan/Execute paths.
+type appLegacyAdapter struct{ app *App }
+
+func (a *appLegacyAdapter) PrepareLegacy(_ context.Context, request install.Request) (install.Prepared, install.Result) {
+	return install.PrepareExplicitLegacy(request)
+}
+
+func (a *appLegacyAdapter) ExecuteLegacy(ctx context.Context, prepared install.Prepared, _ install.Observer) install.Result {
+	request, ok := install.ConsumeExplicitLegacy(prepared)
+	if !ok {
+		return install.CompleteExplicitLegacy(request, false)
+	}
+	report := a.app.installActionWithOptions(ctx, installCommandOptions{
+		DryRun: request.Mode == install.ModeLegacyDryRun, Yes: true,
+		Target: request.Target, Components: request.Components,
+	})
+	return install.CompleteExplicitLegacy(request, report.ExitCode == 0)
 }
 
 func (a *App) installWorkflow() install.Workflow {

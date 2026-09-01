@@ -170,6 +170,63 @@ func TestTUIRetryRepreparesAndResidualRiskDisablesRetry(t *testing.T) {
 	}
 }
 
+type tuiLegacyAdapterSpy struct{ prepares, executes int }
+
+func (s *tuiLegacyAdapterSpy) PrepareLegacy(_ context.Context, request install.Request) (install.Prepared, install.Result) {
+	s.prepares++
+	return install.PrepareExplicitLegacy(request)
+}
+func (s *tuiLegacyAdapterSpy) ExecuteLegacy(_ context.Context, prepared install.Prepared, _ install.Observer) install.Result {
+	s.executes++
+	request, ok := install.ConsumeExplicitLegacy(prepared)
+	return install.CompleteExplicitLegacy(request, ok)
+}
+
+func TestW49TUIRequiresAdvancedLegacySelectionAndConfirmation(t *testing.T) {
+	blockedLegacy := &tuiLegacyAdapterSpy{}
+	blocked := newInstallModel(&tuiWorkflowSpy{result: install.Result{Mode: install.ModeExplain, Route: install.RouteCanonical, Target: install.TargetPi, Status: install.StatusFailed}}, install.Request{Mode: install.ModeExplain, Target: install.TargetPi}, true)
+	blocked.legacy = blockedLegacy
+	blocked.update(blocked.prepareCmd()())
+	if cmd := blocked.update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}}); cmd == nil {
+		t.Fatal("canonical gate failure hid explicit legacy selection")
+	}
+
+	newLegacyModel := func() (*installModel, *tuiLegacyAdapterSpy) {
+		legacy := &tuiLegacyAdapterSpy{}
+		m := newInstallModel(&tuiWorkflowSpy{result: explainTUIResult()}, install.Request{Mode: install.ModeExplain, Target: install.TargetPi}, true)
+		m.legacy = legacy
+		m.update(m.prepareCmd()())
+		return m, legacy
+	}
+	m, legacy := newLegacyModel()
+	cmd := m.update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	if cmd == nil || legacy.prepares != 0 || legacy.executes != 0 {
+		t.Fatal("advanced legacy selection did not require preparation")
+	}
+	m.update(cmd())
+	view := renderInstallView(m, 80)
+	for _, want := range []string{"mode=legacy-apply", "route=explicit-legacy", "legacy-deprecated", "confirm explicit legacy apply"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("missing %q in %q", want, view)
+		}
+	}
+	m.update(tea.KeyMsg{Type: tea.KeyEsc})
+	if !m.back || legacy.executes != 0 {
+		t.Fatal("legacy cancellation executed adapter")
+	}
+
+	m, legacy = newLegacyModel()
+	m.update(m.update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})())
+	cmd = m.update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil || legacy.executes != 0 {
+		t.Fatal("legacy confirmation did not defer execution")
+	}
+	m.update(cmd())
+	if legacy.prepares != 1 || legacy.executes != 1 || m.result.Route != install.RouteLegacy || m.result.Status != install.StatusSucceeded {
+		t.Fatalf("legacy parity prepares=%d executes=%d result=%#v", legacy.prepares, legacy.executes, m.result)
+	}
+}
+
 func TestTUIRejectsNonTTYBeforeDomainWork(t *testing.T) {
 	file, err := os.CreateTemp(t.TempDir(), "not-a-tty")
 	if err != nil {

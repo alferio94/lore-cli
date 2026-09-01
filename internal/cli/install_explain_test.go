@@ -115,6 +115,7 @@ func TestInstallExplainRejectsUsageBeforeWorkflow(t *testing.T) {
 		{"install", "--explain", "--yes"},
 		{"install", "--explain", "--format", "yaml"},
 		{"install", "--explain", "--unknown"},
+		{"install", "--legacy", "--dry-run", "--yes"},
 	}
 	for _, args := range cases {
 		app, stdout, stderr := newTestApp(&fakeStore{path: "/unused"}, nil)
@@ -198,6 +199,70 @@ func explainSuccessResult() install.Result {
 		Report:     install.TransactionReport{IRID: "ir-safe", ProvenancePath: "/Users/private/project", ManifestHash: "manifest-safe", AllAdmitted: true},
 		Operations: []install.Operation{{Resource: "skills/a.md", Action: "create"}},
 		Guidance:   []install.Guidance{{Code: "canonical-gate", Message: "E"}},
+	}
+}
+
+type legacyAdapterSpy struct{ prepares, executes int }
+
+func (s *legacyAdapterSpy) PrepareLegacy(_ context.Context, request install.Request) (install.Prepared, install.Result) {
+	s.prepares++
+	return install.PrepareExplicitLegacy(request)
+}
+func (s *legacyAdapterSpy) ExecuteLegacy(_ context.Context, prepared install.Prepared, _ install.Observer) install.Result {
+	s.executes++
+	request, ok := install.ConsumeExplicitLegacy(prepared)
+	return install.CompleteExplicitLegacy(request, ok)
+}
+
+func TestW49ExplicitLegacyCLIUsesOnlyAdapterWithStableRedactedParity(t *testing.T) {
+	for _, tc := range []struct {
+		name, format string
+		args         []string
+		mode         install.Mode
+	}{
+		{name: "dry-run-human", format: "human", args: []string{"install", "--legacy", "--dry-run"}, mode: install.ModeLegacyDryRun},
+		{name: "apply-json", format: "json", args: []string{"install", "--legacy", "--yes", "--format=json"}, mode: install.ModeLegacyApply},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			app, stdout, stderr := newTestApp(&fakeStore{path: "/secret/config"}, nil)
+			canonical, legacy := &explainWorkflowSpy{}, &legacyAdapterSpy{}
+			app.InstallWorkflow, app.LegacyAdapter = canonical, legacy
+			exit := app.Run(tc.args)
+			if exit != 0 || canonical.prepareCalls != 0 || canonical.executeCalls != 0 || legacy.prepares != 1 || legacy.executes != 1 {
+				t.Fatalf("exit/canonical/legacy=%d/%d:%d/%d:%d streams=%q/%q", exit, canonical.prepareCalls, canonical.executeCalls, legacy.prepares, legacy.executes, stdout.String(), stderr.String())
+			}
+			combined := stdout.String() + stderr.String()
+			for _, want := range []string{string(tc.mode), "explicit-legacy", "legacy-deprecated"} {
+				if !strings.Contains(combined, want) {
+					t.Fatalf("missing %q in %q", want, combined)
+				}
+			}
+			if tc.format == "json" && stderr.Len() != 0 || strings.Contains(combined, "/secret/config") || strings.Contains(combined, "token") {
+				t.Fatalf("stream/redaction drift stdout=%q stderr=%q", stdout.String(), stderr.String())
+			}
+		})
+	}
+}
+
+func TestW49CanonicalFailuresNeverInvokeLegacyAdapter(t *testing.T) {
+	cases := [][]string{
+		{"install", "--explain"}, {"install", "--dry-run"}, {"install", "--yes"}, {"install", "--yes", "--target", "unsupported"},
+	}
+	for _, args := range cases {
+		app, _, _ := newTestApp(&fakeStore{path: "/unused"}, nil)
+		legacy := &legacyAdapterSpy{}
+		app.InstallWorkflow, app.LegacyAdapter = defaultInstallWorkflow(), legacy
+		if exit := app.Run(args); exit != 1 || legacy.prepares != 0 || legacy.executes != 0 {
+			t.Fatalf("canonical refusal %v fell back: exit=%d legacy=%d/%d", args, exit, legacy.prepares, legacy.executes)
+		}
+	}
+	ready, failed := explainSuccessResult(), dryRunSuccessResult()
+	ready.Mode, ready.Status, failed.Mode, failed.Status = install.ModeApply, install.StatusReady, install.ModeApply, install.StatusFailed
+	app, _, _ := newTestApp(&fakeStore{path: "/unused"}, nil)
+	legacy := &legacyAdapterSpy{}
+	app.InstallWorkflow, app.LegacyAdapter = &explainWorkflowSpy{result: ready, executeResult: failed}, legacy
+	if exit := app.Run([]string{"install", "--yes"}); exit != 1 || legacy.prepares != 0 || legacy.executes != 0 {
+		t.Fatalf("canonical transaction failure fell back: exit=%d legacy=%d/%d", exit, legacy.prepares, legacy.executes)
 	}
 }
 

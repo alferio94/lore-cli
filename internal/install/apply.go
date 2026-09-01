@@ -190,5 +190,10 @@ func applyRejectedError() *InstallError {
 	return &InstallError{code: CodeApplyRejected, path: "apply.plan", message: "canonical apply facts were rejected"}
 }
 func ConfirmationRequiredResult(request Request) Result {
+	if request.Mode == ModeLegacyApply {
+		result := explicitLegacyResult(request, StatusFailed)
+		result.Error = &InstallError{code: CodeConfirmationRequired, path: "confirmation", message: "interactive confirmation is required"}
+		return result
+	}
 	return Result{SchemaVersion: ResultSchemaVersion, Mode: ModeApply, Route: RouteCanonical, Target: request.Target, Status: StatusFailed, Error: &InstallError{code: CodeConfirmationRequired, path: "confirmation", message: "interactive confirmation is required"}}
 }

@@ -610,6 +610,7 @@ func (m model) activateSelection() (tea.Model, tea.Cmd) {
 		if m.actions.InstallWorkflow != nil {
 			m.installSelectionPending = false
 			m.installTUI = newInstallModel(m.actions.InstallWorkflow, install.Request{Mode: install.ModeExplain, Target: selectedTarget.ID}, os.Getenv("LORE_NO_ANIMATION") == "1")
+			m.installTUI.legacy = m.actions.LegacyAdapter
 			return m, m.installTUI.prepareCmd()
 		}
 		m.installSelectionPending = false

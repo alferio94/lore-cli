@@ -17,6 +17,7 @@ const (
 
 type installModel struct {
 	workflow    install.Workflow
+	legacy      install.LegacyAdapter
 	request     install.Request
 	prepared    install.Prepared
 	result      install.Result

@@ -10,7 +10,7 @@ func renderInstallView(m *installModel, width int) string {
 		return ""
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "Canonical install %s\n", m.request.Mode)
+	fmt.Fprintf(&b, "Install %s\n", m.request.Mode)
 	fmt.Fprintf(&b, "phase=%s", m.stage)
 	if m.cancelling {
 		b.WriteString(" cancellation=requested; waiting for final rollback result")
@@ -45,12 +45,24 @@ func renderInstallView(m *installModel, width int) string {
 		b.WriteString("r retry from fresh facts • Esc back")
 	} else if m.stage == installResult && m.request.Mode == "dry-run" && m.result.Status == "succeeded" {
 		b.WriteString("Enter prepare canonical apply • Esc back")
-	} else if m.stage == installPrepared && m.request.Mode == "explain" && m.result.Admitted {
-		b.WriteString("Enter canonical dry-run • Esc back")
+	} else if (m.stage == installPrepared || m.stage == installResult) && m.request.Mode == "explain" {
+		if m.result.Admitted && m.legacy != nil {
+			b.WriteString("Enter canonical dry-run • l Legacy (advanced, deprecated) • Esc back")
+		} else if m.result.Admitted {
+			b.WriteString("Enter canonical dry-run • Esc back")
+		} else if m.legacy != nil {
+			b.WriteString("l Legacy (advanced, deprecated) • Esc back")
+		} else {
+			b.WriteString("Esc back")
+		}
 	} else if m.stage == installPrepared && m.request.Mode == "dry-run" && m.result.Admitted {
 		b.WriteString("Enter execute zero-effect dry-run • Esc back")
 	} else if m.stage == installPrepared && m.request.Mode == "apply" && m.result.Admitted {
 		b.WriteString("Enter confirm canonical apply • Esc back")
+	} else if m.stage == installPrepared && m.request.Mode == "legacy-apply" && m.result.Admitted {
+		b.WriteString("Enter confirm explicit legacy apply • d legacy dry-run • Esc cancel")
+	} else if m.stage == installPrepared && m.request.Mode == "legacy-dry-run" && m.result.Admitted {
+		b.WriteString("Enter execute explicit legacy dry-run • Esc cancel")
 	} else {
 		b.WriteString("Esc back")
 	}

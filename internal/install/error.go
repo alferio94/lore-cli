@@ -7,6 +7,7 @@ const (
 	CodeInvalidWorkflowRequest InstallErrorCode = "invalid_workflow_request"
 	CodeInvalidRoutePolicy     InstallErrorCode = "invalid_route_policy"
 	CodeInvalidRouteDemotion   InstallErrorCode = "invalid_route_demotion"
+	CodeLegacyExecutionFailed  InstallErrorCode = "legacy_execution_failed"
 )
 
 func (c InstallErrorCode) Error() string { return string(c) }
@@ -36,6 +37,8 @@ func newInstallError(code InstallErrorCode) *InstallError {
 		return &InstallError{code: code, path: "route_policy.gate", message: "route policy demotion is invalid"}
 	case CodeInvalidRoutePolicy:
 		return &InstallError{code: code, path: "route_policy", message: "route policy is invalid"}
+	case CodeLegacyExecutionFailed:
+		return &InstallError{code: code, path: "legacy.execution", message: "explicit legacy install failed"}
 	default:
 		return &InstallError{code: CodeInvalidWorkflowRequest, path: "request", message: "install workflow request is invalid"}
 	}

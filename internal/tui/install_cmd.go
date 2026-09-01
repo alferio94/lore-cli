@@ -38,7 +38,13 @@ func requireTTY(files ...*os.File) error {
 func (m *installModel) prepareCmd() tea.Cmd {
 	request := m.request.Clone()
 	return func() tea.Msg {
-		prepared, result := m.workflow.Prepare(context.Background(), request)
+		var prepared install.Prepared
+		var result install.Result
+		if request.Mode == install.ModeLegacyApply || request.Mode == install.ModeLegacyDryRun {
+			prepared, result = m.legacy.PrepareLegacy(context.Background(), request)
+		} else {
+			prepared, result = m.workflow.Prepare(context.Background(), request)
+		}
 		return installPreparedMsg{prepared: prepared, result: result.Clone()}
 	}
 }
@@ -49,7 +55,13 @@ func (m *installModel) executeCmd() tea.Cmd {
 	prepared := m.prepared
 	return func() tea.Msg {
 		var events []install.Event
-		result := m.workflow.Execute(ctx, prepared, install.ObserverFunc(func(event install.Event) { events = append(events, event.Clone()) }))
+		observer := install.ObserverFunc(func(event install.Event) { events = append(events, event.Clone()) })
+		var result install.Result
+		if prepared.Route() == install.RouteLegacy {
+			result = m.legacy.ExecuteLegacy(ctx, prepared, observer)
+		} else {
+			result = m.workflow.Execute(ctx, prepared, observer)
+		}
 		return installDoneMsg{result: result.Clone(), events: events}
 	}
 }

@@ -40,6 +40,14 @@ func (m *installModel) update(msg tea.Msg) tea.Cmd {
 			m.prepared, m.events, m.stage = install.Prepared{}, nil, installPreparing
 			return m.prepareCmd()
 		}
+		if m.legacy != nil && key == "l" && (m.stage == installPrepared || m.stage == installResult) && m.request.Mode == install.ModeExplain {
+			m.request.Mode, m.prepared, m.events, m.stage = install.ModeLegacyApply, install.Prepared{}, nil, installPreparing
+			return m.prepareCmd()
+		}
+		if key == "d" && m.stage == installPrepared && m.request.Mode == install.ModeLegacyApply {
+			m.request.Mode, m.prepared, m.events, m.stage = install.ModeLegacyDryRun, install.Prepared{}, nil, installPreparing
+			return m.prepareCmd()
+		}
 		if key == "enter" && m.stage == installResult && m.request.Mode == install.ModeDryRun && m.result.Status == install.StatusSucceeded {
 			m.request.Mode, m.prepared, m.events, m.stage = install.ModeApply, install.Prepared{}, nil, installPreparing
 			return m.prepareCmd()

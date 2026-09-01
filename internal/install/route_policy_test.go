@@ -3,6 +3,7 @@ package install
 import (
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -47,6 +48,26 @@ func TestRoutePolicyDemotionIsTargetLocalAndRecorded(t *testing.T) {
 		t.Fatalf("promotion error = %v, want %s", err, CodeInvalidRouteDemotion)
 	}
 }
+func TestW49ExplicitLegacyPreparationIsGateIndependentOneShotAndRedacted(t *testing.T) {
+	for _, mode := range []Mode{ModeLegacyDryRun, ModeLegacyApply} {
+		request := Request{Mode: mode, Target: TargetPi}
+		prepared, result := PrepareExplicitLegacy(request)
+		if result.Error != nil || !result.Admitted || result.Route != RouteLegacy || len(result.Warnings) != 1 || result.Warnings[0].Code != "legacy-deprecated" {
+			t.Fatalf("%s preparation = %#v", mode, result)
+		}
+		if got, ok := ConsumeExplicitLegacy(prepared); !ok || got.Mode != mode {
+			t.Fatalf("%s was not consumable once", mode)
+		}
+		if _, ok := ConsumeExplicitLegacy(prepared); ok {
+			t.Fatalf("%s was reusable", mode)
+		}
+	}
+	_, invalid := PrepareExplicitLegacy(Request{Mode: ModeLegacyApply, Target: TargetID("unsupported")})
+	if invalid.Error == nil || invalid.Admitted || invalid.Route != RouteLegacy || strings.Contains(invalid.Error.Error(), "unsupported") {
+		t.Fatalf("unsupported target was admitted or disclosed: %#v", invalid)
+	}
+}
+
 func routePolicyFixture(t *testing.T, gate Gate) RoutePolicy {
 	t.Helper()
 	gates := make(map[TargetID]Gate)
