@@ -1,0 +1,16 @@
+pi off explain=blocked/canonical-sealed dry-run=blocked/canonical-sealed apply=blocked/canonical-sealed legacy-dry-run=admitted/explicit-legacy legacy-apply=admitted/explicit-legacy
+pi E explain=admitted/canonical-sealed dry-run=blocked/canonical-sealed apply=blocked/canonical-sealed legacy-dry-run=admitted/explicit-legacy legacy-apply=admitted/explicit-legacy
+pi D explain=admitted/canonical-sealed dry-run=admitted/canonical-sealed apply=blocked/canonical-sealed legacy-dry-run=admitted/explicit-legacy legacy-apply=admitted/explicit-legacy
+pi A explain=admitted/canonical-sealed dry-run=admitted/canonical-sealed apply=admitted/canonical-sealed legacy-dry-run=admitted/explicit-legacy legacy-apply=admitted/explicit-legacy
+opencode off explain=blocked/canonical-sealed dry-run=blocked/canonical-sealed apply=blocked/canonical-sealed legacy-dry-run=admitted/explicit-legacy legacy-apply=admitted/explicit-legacy
+opencode E explain=admitted/canonical-sealed dry-run=blocked/canonical-sealed apply=blocked/canonical-sealed legacy-dry-run=admitted/explicit-legacy legacy-apply=admitted/explicit-legacy
+opencode D explain=admitted/canonical-sealed dry-run=admitted/canonical-sealed apply=blocked/canonical-sealed legacy-dry-run=admitted/explicit-legacy legacy-apply=admitted/explicit-legacy
+opencode A explain=admitted/canonical-sealed dry-run=admitted/canonical-sealed apply=admitted/canonical-sealed legacy-dry-run=admitted/explicit-legacy legacy-apply=admitted/explicit-legacy
+codex off explain=blocked/canonical-sealed dry-run=blocked/canonical-sealed apply=blocked/canonical-sealed legacy-dry-run=admitted/explicit-legacy legacy-apply=admitted/explicit-legacy
+codex E explain=admitted/canonical-sealed dry-run=blocked/canonical-sealed apply=blocked/canonical-sealed legacy-dry-run=admitted/explicit-legacy legacy-apply=admitted/explicit-legacy
+codex D explain=admitted/canonical-sealed dry-run=admitted/canonical-sealed apply=blocked/canonical-sealed legacy-dry-run=admitted/explicit-legacy legacy-apply=admitted/explicit-legacy
+codex A explain=admitted/canonical-sealed dry-run=admitted/canonical-sealed apply=admitted/canonical-sealed legacy-dry-run=admitted/explicit-legacy legacy-apply=admitted/explicit-legacy
+antigravity off explain=blocked/canonical-sealed dry-run=blocked/canonical-sealed apply=blocked/canonical-sealed legacy-dry-run=admitted/explicit-legacy legacy-apply=admitted/explicit-legacy
+antigravity E explain=admitted/canonical-sealed dry-run=blocked/canonical-sealed apply=blocked/canonical-sealed legacy-dry-run=admitted/explicit-legacy legacy-apply=admitted/explicit-legacy
+antigravity D explain=admitted/canonical-sealed dry-run=admitted/canonical-sealed apply=blocked/canonical-sealed legacy-dry-run=admitted/explicit-legacy legacy-apply=admitted/explicit-legacy
+antigravity A explain=admitted/canonical-sealed dry-run=admitted/canonical-sealed apply=admitted/canonical-sealed legacy-dry-run=admitted/explicit-legacy legacy-apply=admitted/explicit-legacy

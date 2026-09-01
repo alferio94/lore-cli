@@ -1,0 +1,64 @@
+## explain
+Install explain
+phase=result
+mode=explain route=canonical-sealed target=pi outcome=ready admitted=true
+changed_state=false
+rollback_attempted=false rollback_complete=false residual_risk=false
+operation action=replace resource=AGENTS.md
+operation action=create resource=skills/a.md
+guidance[canonical-gate]: stable guidance
+Enter canonical dry-run • l Legacy (advanced, deprecated) • Esc back
+## dry-run
+Install dry-run
+phase=result
+mode=dry-run route=canonical-sealed target=pi outcome=succeeded
+admitted=true changed_state=false
+rollback_attempted=false rollback_complete=false residual_risk=false
+operation action=replace resource=AGENTS.md
+operation action=create resource=skills/a.md
+guidance[canonical-gate]: stable guidance
+Enter prepare canonical apply • Esc back
+## apply
+Install apply
+phase=result
+mode=apply route=canonical-sealed target=pi outcome=succeeded admitted=true
+changed_state=true
+rollback_attempted=false rollback_complete=false residual_risk=false
+operation action=replace resource=AGENTS.md
+operation action=create resource=skills/a.md
+guidance[canonical-gate]: stable guidance
+Esc back
+## legacy-dry-run
+Install legacy-dry-run
+phase=result
+mode=legacy-dry-run route=explicit-legacy target=pi outcome=succeeded
+admitted=true changed_state=false
+rollback_attempted=false rollback_complete=false residual_risk=false
+operation action=replace resource=AGENTS.md
+operation action=create resource=skills/a.md
+guidance[canonical-gate]: stable guidance
+warning[legacy-deprecated]: legacy install is deprecated; use canonical
+routing
+Esc back
+## legacy-apply
+Install legacy-apply
+phase=result
+mode=legacy-apply route=explicit-legacy target=pi outcome=succeeded
+admitted=true changed_state=true
+rollback_attempted=false rollback_complete=false residual_risk=false
+operation action=replace resource=AGENTS.md
+operation action=create resource=skills/a.md
+guidance[canonical-gate]: stable guidance
+warning[legacy-deprecated]: legacy install is deprecated; use canonical
+routing
+Esc back
+## cancelled
+Install apply
+phase=result
+mode=apply route=canonical-sealed target=pi outcome=cancelled admitted=true
+changed_state=false
+rollback_attempted=true rollback_complete=true residual_risk=false
+operation action=replace resource=AGENTS.md
+operation action=create resource=skills/a.md
+guidance[canonical-gate]: stable guidance
+Esc back
