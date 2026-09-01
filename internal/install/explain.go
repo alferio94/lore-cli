@@ -7,6 +7,7 @@ import "context"
 type CanonicalWorkflow struct {
 	policy RoutePolicy
 	input  TransactionInput
+	apply  *canonicalApplyRuntime
 }
 
 func NewCanonicalWorkflow(policy RoutePolicy, input TransactionInput) *CanonicalWorkflow {
@@ -18,13 +19,20 @@ func NewExplainWorkflow(policy RoutePolicy, input TransactionInput) *CanonicalWo
 }
 
 func (w *CanonicalWorkflow) Prepare(_ context.Context, request Request) (Prepared, Result) {
-	if request.Mode == ModeDryRun {
+	switch request.Mode {
+	case ModeDryRun:
 		return PrepareDryRun(w.policy, request, w.input)
+	case ModeApply:
+		return PrepareApply(w.policy, request, w.input)
+	default:
+		return PrepareExplain(w.policy, request, w.input)
 	}
-	return PrepareExplain(w.policy, request, w.input)
 }
 
-func (w *CanonicalWorkflow) Execute(_ context.Context, prepared Prepared, observer Observer) Result {
+func (w *CanonicalWorkflow) Execute(ctx context.Context, prepared Prepared, observer Observer) Result {
+	if prepared.Request().Mode == ModeApply {
+		return w.executeApply(ctx, prepared, observer)
+	}
 	return ExecuteDryRun(prepared, observer)
 }
 

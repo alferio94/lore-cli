@@ -26,6 +26,7 @@ type installResultView struct {
 	Outcome      install.Status    `json:"outcome"`
 	Admitted     bool              `json:"admitted"`
 	ChangedState bool              `json:"changed_state"`
+	Interrupted  bool              `json:"interrupted"`
 	Rollback     rollbackView      `json:"rollback"`
 	ResidualRisk bool              `json:"residual_risk"`
 	Report       installReportView `json:"report"`
@@ -94,7 +95,7 @@ func (a *App) presentInstallResult(format installFormat, result install.Result) 
 func newInstallResultEnvelope(result install.Result) installResultEnvelope {
 	view := installResultView{
 		Mode: result.Mode, Route: result.Route, Target: result.Target, Outcome: result.Status,
-		Admitted: result.Admitted, ChangedState: result.ChangedState,
+		Admitted: result.Admitted, ChangedState: result.ChangedState, Interrupted: result.Interrupted,
 		Rollback:     rollbackView{Attempted: result.Rollback.Attempted, Complete: result.Rollback.Complete},
 		ResidualRisk: result.ResidualRisk,
 		Report: installReportView{
@@ -132,7 +133,7 @@ func guidanceViews(guidance []install.Guidance) []guidanceView {
 func renderHumanInstallResult(result install.Result) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Lore install %s\n", result.Mode)
-	fmt.Fprintf(&b, "mode=%s route=%s target=%s outcome=%s admitted=%t changed_state=%t residual_risk=%t\n", result.Mode, result.Route, result.Target, result.Status, result.Admitted, result.ChangedState, result.ResidualRisk)
+	fmt.Fprintf(&b, "mode=%s route=%s target=%s outcome=%s admitted=%t changed_state=%t interrupted=%t residual_risk=%t\n", result.Mode, result.Route, result.Target, result.Status, result.Admitted, result.ChangedState, result.Interrupted, result.ResidualRisk)
 	if result.Error != nil {
 		fmt.Fprintf(&b, "error[%s] path=%s: %s\n", result.Error.Code(), result.Error.Path(), result.Error.Error())
 	} else {
@@ -154,6 +155,9 @@ func installResultSucceeded(result install.Result) bool {
 func installExitCode(result install.Result) int {
 	if result.ResidualRisk || result.Status == install.StatusResidualRisk || result.Error != nil && result.Error.ResidualRisk() {
 		return 3
+	}
+	if result.Interrupted {
+		return 130
 	}
 	if result.Status == install.StatusCancelled && !result.ChangedState && !result.Rollback.Attempted {
 		return 0

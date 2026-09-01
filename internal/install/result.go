@@ -33,6 +33,7 @@ type Result struct {
 	Status        Status
 	Admitted      bool
 	ChangedState  bool
+	Interrupted   bool
 	ResidualRisk  bool
 	Report        TransactionReport
 	Operations    []Operation

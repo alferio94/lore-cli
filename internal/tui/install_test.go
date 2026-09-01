@@ -14,12 +14,14 @@ import (
 type tuiWorkflowSpy struct {
 	prepares      int
 	executes      int
+	request       install.Request
 	result        install.Result
 	executeResult install.Result
 }
 
 func (w *tuiWorkflowSpy) Prepare(_ context.Context, request install.Request) (install.Prepared, install.Result) {
 	w.prepares++
+	w.request = request.Clone()
 	result := w.result.Clone()
 	result.Mode, result.Target = request.Mode, request.Target
 	return install.Prepared{}, result
@@ -104,6 +106,14 @@ func TestW47TUIDryRunRepreparesAndRendersCanonicalResultParity(t *testing.T) {
 	}
 	if workflow.prepares != 2 || workflow.executes != 1 || strings.Contains(view, "explicit-legacy") {
 		t.Fatalf("workflow parity = prepares:%d executes:%d view:%s", workflow.prepares, workflow.executes, view)
+	}
+	cmd = m.update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.update(cmd())
+	workflow.executeResult.Mode = install.ModeApply
+	cmd = m.update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.update(cmd())
+	if workflow.prepares != 3 || workflow.executes != 2 || m.result.Mode != install.ModeApply || m.result.Route != install.RouteCanonical {
+		t.Fatalf("apply parity = prepares:%d executes:%d result:%#v", workflow.prepares, workflow.executes, m.result)
 	}
 }
 

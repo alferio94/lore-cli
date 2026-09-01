@@ -8,7 +8,9 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/alferio94/lore-cli/internal/agentconfig"
 	"github.com/alferio94/lore-cli/internal/auth"
@@ -60,6 +62,7 @@ type App struct {
 	TUIRunner            func(context.Context, InteractiveActions) error
 	UpdateServiceFactory func() (cliupdate.Service, error)
 	InstallWorkflow      install.Workflow
+	InstallConfirm       func() (bool, error)
 	BuildInfo            version.Info
 	// AgentConfigStore is the optional agent-config store for read-only diagnostics
 	// in status/doctor and install summaries. When nil, agent-config checks are skipped.
@@ -372,7 +375,7 @@ func (a *App) runInstall(_ InteractiveActions, args []string) int {
 		fs.Usage()
 		return 2
 	}
-	request := install.Request{Target: install.TargetID(strings.TrimSpace(*target)), Components: components.ComponentIDs()}
+	request := install.Request{Target: install.TargetID(strings.TrimSpace(*target)), Components: components.ComponentIDs(), AssumeYes: *yes}
 	if *explain {
 		request.Mode = install.ModeExplain
 		return a.presentInstallResult(selectedFormat, a.installExplainAction(context.Background(), request))
@@ -381,14 +384,21 @@ func (a *App) runInstall(_ InteractiveActions, args []string) int {
 		request.Mode = install.ModeDryRun
 		return a.presentInstallResult(selectedFormat, a.installDryRunAction(context.Background(), request))
 	}
-	if *legacy || selectedFormat == installFormatJSON {
-		fmt.Fprintln(a.Stderr, "--legacy and JSON apply routes are not available before their bounded W4 slices")
+	if *legacy {
+		fmt.Fprintln(a.Stderr, "--legacy routes are not available before their bounded W4.9 slice")
 		return 2
 	}
 
-	report := a.installActionWithOptions(context.Background(), installCommandOptions{Yes: *yes, Target: install.TargetID(strings.TrimSpace(*target)), Components: components.ComponentIDs()})
-	fmt.Fprint(a.Stdout, output.RenderChecks(report.Title, report.Checks))
-	return report.ExitCode
+	request.Mode = install.ModeApply
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	var observer install.Observer
+	if selectedFormat == installFormatHuman {
+		observer = install.ObserverFunc(func(event install.Event) {
+			fmt.Fprintf(a.Stderr, "progress phase=%s kind=%s completed=%d total=%d\n", event.Phase, event.Kind, event.Progress.Completed, event.Progress.Total)
+		})
+	}
+	return a.presentInstallResult(selectedFormat, a.installApplyAction(ctx, request, observer))
 }
 
 func (a *App) runUpdate(args []string) int {

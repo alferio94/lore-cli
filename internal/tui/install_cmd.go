@@ -14,7 +14,10 @@ type installPreparedMsg struct {
 	result   install.Result
 }
 type installEventMsg struct{ event install.Event }
-type installDoneMsg struct{ result install.Result }
+type installDoneMsg struct {
+	result install.Result
+	events []install.Event
+}
 
 type tuiUsageError struct{}
 
@@ -45,7 +48,8 @@ func (m *installModel) executeCmd() tea.Cmd {
 	m.cancel = cancel
 	prepared := m.prepared
 	return func() tea.Msg {
-		result := m.workflow.Execute(ctx, prepared, install.ObserverFunc(func(event install.Event) {}))
-		return installDoneMsg{result: result.Clone()}
+		var events []install.Event
+		result := m.workflow.Execute(ctx, prepared, install.ObserverFunc(func(event install.Event) { events = append(events, event.Clone()) }))
+		return installDoneMsg{result: result.Clone(), events: events}
 	}
 }

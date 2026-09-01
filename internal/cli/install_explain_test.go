@@ -150,6 +150,26 @@ func TestW47InstallDryRunHumanAndJSONUseOneSharedWorkflow(t *testing.T) {
 	}
 }
 
+func TestW48InstallApplyConfirmsThenUsesOneSharedWorkflowWithExitPrecedence(t *testing.T) {
+	app, stdout, stderr := newTestApp(&fakeStore{path: "/unused"}, nil)
+	ready, done := explainSuccessResult(), dryRunSuccessResult()
+	ready.Mode, done.Mode, ready.Status, done.ChangedState = install.ModeApply, install.ModeApply, install.StatusReady, true
+	workflow := &explainWorkflowSpy{result: ready, executeResult: done}
+	app.InstallWorkflow, app.InstallConfirm = workflow, func() (bool, error) { return true, nil }
+	if exit := app.Run([]string{"install", "--format=json"}); exit != 0 || workflow.prepareCalls != 1 || workflow.executeCalls != 1 || workflow.request.Mode != install.ModeApply || stderr.Len() != 0 || !strings.Contains(stdout.String(), `"mode":"apply"`) {
+		t.Fatalf("apply parity = exit:%d calls:%d/%d request:%#v streams:%q/%q", exit, workflow.prepareCalls, workflow.executeCalls, workflow.request, stdout.String(), stderr.String())
+	}
+	if installExitCode(install.Result{Interrupted: true}) != 130 || installExitCode(install.Result{Interrupted: true, ResidualRisk: true}) != 3 {
+		t.Fatal("signal/residual-risk exit precedence drifted")
+	}
+	blocked, _, _ := newTestApp(&fakeStore{path: "/unused"}, nil)
+	input := strings.NewReader("y\n")
+	blocked.InstallWorkflow, blocked.Stdin = &explainWorkflowSpy{result: ready}, input
+	if exit := blocked.Run([]string{"install"}); exit != 1 || input.Len() != 2 {
+		t.Fatalf("non-TTY confirmation read stdin or returned %d", exit)
+	}
+}
+
 func TestW47InstallDryRunDisabledFailsClosedWithoutExecute(t *testing.T) {
 	app, stdout, stderr := newTestApp(&fakeStore{path: "/unused"}, nil)
 	workflow := &explainWorkflowSpy{result: install.Result{SchemaVersion: install.ResultSchemaVersion, Mode: install.ModeDryRun, Route: install.RouteCanonical, Target: install.TargetPi, Status: install.StatusFailed, Error: installDisabledErrorForTest()}}

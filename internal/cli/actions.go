@@ -437,6 +437,46 @@ func (a *App) installDryRunAction(ctx context.Context, request install.Request) 
 	return workflow.Execute(ctx, prepared, nil)
 }
 
+func (a *App) installApplyAction(ctx context.Context, request install.Request, observer install.Observer) install.Result {
+	workflow := a.installWorkflow()
+	prepared, result := workflow.Prepare(ctx, request)
+	if result.Error != nil || !result.Admitted {
+		return result
+	}
+	if !request.AssumeYes {
+		confirmed, interactive := false, false
+		if a.InstallConfirm != nil {
+			var err error
+			confirmed, err = a.InstallConfirm()
+			interactive = err == nil
+		} else if stdin, inOK := a.Stdin.(*os.File); inOK {
+			if stdout, outOK := a.Stdout.(*os.File); outOK && term.IsTerminal(stdin.Fd()) && term.IsTerminal(stdout.Fd()) {
+				interactive = true
+				fmt.Fprint(a.Stderr, "Apply this canonical sealed install plan? [y/N] ")
+				answer := make(chan bool, 1)
+				go func() {
+					line, err := bufio.NewReader(stdin).ReadString('\n')
+					answer <- err == nil && strings.EqualFold(strings.TrimSpace(line), "y")
+				}()
+				select {
+				case confirmed = <-answer:
+				case <-ctx.Done():
+					result.Status, result.Interrupted = install.StatusCancelled, true
+					return result
+				}
+			}
+		}
+		if !interactive {
+			return install.ConfirmationRequiredResult(request)
+		}
+		if !confirmed {
+			result.Status, result.ChangedState = install.StatusCancelled, false
+			return result
+		}
+	}
+	return workflow.Execute(ctx, prepared, observer)
+}
+
 func (a *App) installWorkflow() install.Workflow {
 	if a.InstallWorkflow != nil {
 		return a.InstallWorkflow
