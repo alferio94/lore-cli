@@ -59,6 +59,7 @@ type App struct {
 	ExecutablePath       func() (string, error)
 	TUIRunner            func(context.Context, InteractiveActions) error
 	UpdateServiceFactory func() (cliupdate.Service, error)
+	InstallWorkflow      install.Workflow
 	BuildInfo            version.Info
 	// AgentConfigStore is the optional agent-config store for read-only diagnostics
 	// in status/doctor and install summaries. When nil, agent-config checks are skipped.
@@ -77,10 +78,11 @@ func New(configDir string, stdout, stderr io.Writer, buildInfo version.Info) *Ap
 		ClientFactory: func(baseURL string) (httpclient.Client, error) {
 			return httpclient.New(baseURL, 0)
 		},
-		LookPath:       exec.LookPath,
-		UserHomeDir:    os.UserHomeDir,
-		ExecutablePath: os.Executable,
-		BuildInfo:      buildInfo.Normalized(),
+		LookPath:        exec.LookPath,
+		UserHomeDir:     os.UserHomeDir,
+		ExecutablePath:  os.Executable,
+		InstallWorkflow: defaultInstallWorkflow(),
+		BuildInfo:       buildInfo.Normalized(),
 	}
 	app.AgentConfigStore = agentconfig.NewStore(configDir)
 	return app
@@ -311,13 +313,17 @@ func (a *App) runDoctor(actions InteractiveActions, args []string) int {
 
 func (a *App) runInstall(_ InteractiveActions, args []string) int {
 	fs := newFlagSet("install", a.Stderr)
+	explain := fs.Bool("explain", false, "Explain the canonical sealed install plan without effects")
 	dryRun := fs.Bool("dry-run", false, "Show the selected install plan without mutating managed runtime files")
+	legacy := fs.Bool("legacy", false, "Select the explicit legacy compatibility route")
 	yes := fs.Bool("yes", false, "Accept the safe default full-backup behavior without prompting")
+	format := fs.String("format", "human", "Output format for canonical explain (human or json)")
 	target := fs.String("target", string(install.DefaultInstallTarget()), "Install target (Pi stays the default recommended target; OpenCode, Codex, and Antigravity are supported managed targets)")
 	var components componentFlag
 	fs.Var(&components, "component", "Optional component override; repeat or use a comma-separated list (Pi, OpenCode, Codex, and Antigravity support core-pack; Pi/Codex/Antigravity/OpenCode also support lore-server-mcp and context7-mcp; OpenCode also supports opencode-plugins)")
 	fs.Usage = func() {
 		fmt.Fprintln(a.Stderr, "Usage: lore install [--dry-run] [--yes] [--target pi|opencode|codex|antigravity] [--component <id>]")
+		fmt.Fprintln(a.Stderr, "       lore install --explain [--format human|json] [--target <target>] [--component <id>]")
 		fmt.Fprintln(a.Stderr, "Install the Pi-first managed runtime using saved Lore login state.")
 		fmt.Fprintln(a.Stderr, "Pi is the default and installs the portable Lore agent pack, hosted Lore MCP via pi-mcp-adapter, default Context7 MCP, and an extended-skills bundle (skill-creator, skill-registry, judgment-day).")
 		fmt.Fprintln(a.Stderr, "Antigravity is a Full projection target with the portable pack, lore-server-mcp, and extended-skills bundle.")
@@ -333,11 +339,39 @@ func (a *App) runInstall(_ InteractiveActions, args []string) int {
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
-		return 1
+		if err == flag.ErrHelp {
+			return 1
+		}
+		return 2
 	}
 	if fs.NArg() != 0 {
 		fs.Usage()
-		return 1
+		return 2
+	}
+
+	selectedFormat, ok := parseInstallFormat(*format)
+	if !ok {
+		fmt.Fprintln(a.Stderr, "install format must be human or json")
+		fs.Usage()
+		return 2
+	}
+	if *explain && (*dryRun || *legacy || *yes) {
+		fmt.Fprintln(a.Stderr, "--explain cannot be combined with --dry-run, --legacy, or --yes")
+		fs.Usage()
+		return 2
+	}
+	if *yes && *dryRun {
+		fmt.Fprintln(a.Stderr, "--yes is valid only for apply")
+		fs.Usage()
+		return 2
+	}
+	if *explain {
+		result := a.installExplainAction(context.Background(), install.Request{Mode: install.ModeExplain, Target: install.TargetID(strings.TrimSpace(*target)), Components: components.ComponentIDs()})
+		return a.presentInstallResult(selectedFormat, result)
+	}
+	if *legacy || selectedFormat == installFormatJSON {
+		fmt.Fprintln(a.Stderr, "--legacy and JSON execution routes are not available in this bounded explain slice")
+		return 2
 	}
 
 	report := a.installActionWithOptions(context.Background(), installCommandOptions{DryRun: *dryRun, Yes: *yes, Target: install.TargetID(strings.TrimSpace(*target)), Components: components.ComponentIDs()})

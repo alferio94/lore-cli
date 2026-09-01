@@ -858,8 +858,8 @@ func TestInstallUsageIncludesPiFirstGuidance(t *testing.T) {
 	store := &fakeStore{path: "/tmp/lore/config.json", loadErr: config.ErrNotFound}
 	app, _, stderr := newTestApp(store, nil)
 
-	if exitCode := app.Run([]string{"install", "unexpected"}); exitCode != 1 {
-		t.Fatalf("install exitCode = %d, want 1", exitCode)
+	if exitCode := app.Run([]string{"install", "unexpected"}); exitCode != 2 {
+		t.Fatalf("install exitCode = %d, want 2", exitCode)
 	}
 	for _, want := range []string{
 		"Usage: lore install",

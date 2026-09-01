@@ -411,6 +411,24 @@ func (a *App) installAction(ctx context.Context) ActionReport {
 	return a.installActionWithOptions(ctx, installCommandOptions{})
 }
 
+func defaultInstallWorkflow() install.Workflow {
+	gates := make(map[install.TargetID]install.Gate, len(install.SupportedTargets()))
+	for _, target := range install.SupportedTargets() {
+		gates[target] = install.GateOff
+	}
+	policy, _ := install.NewRoutePolicy(gates)
+	return install.NewExplainWorkflow(policy, install.TransactionInput{})
+}
+
+func (a *App) installExplainAction(ctx context.Context, request install.Request) install.Result {
+	workflow := a.InstallWorkflow
+	if workflow == nil {
+		workflow = defaultInstallWorkflow()
+	}
+	_, result := workflow.Prepare(ctx, request)
+	return result
+}
+
 func (a *App) checkForUpdateAction(ctx context.Context) UpdateAvailability {
 	current := a.BuildInfo.Normalized()
 	execPath, err := a.resolveExecutablePath()

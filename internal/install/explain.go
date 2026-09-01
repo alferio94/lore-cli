@@ -1,5 +1,26 @@
 package install
 
+import "context"
+
+// ExplainWorkflow is the shared domain entry point used by presentation
+// adapters for the explain-only rollout slice.
+type ExplainWorkflow struct {
+	policy RoutePolicy
+	input  TransactionInput
+}
+
+func NewExplainWorkflow(policy RoutePolicy, input TransactionInput) *ExplainWorkflow {
+	return &ExplainWorkflow{policy: policy, input: input}
+}
+
+func (w *ExplainWorkflow) Prepare(_ context.Context, request Request) (Prepared, Result) {
+	return PrepareExplain(w.policy, request, w.input)
+}
+
+func (w *ExplainWorkflow) Execute(context.Context, Prepared, Observer) Result {
+	return Result{Status: StatusFailed, Error: newInstallError(CodeInvalidWorkflowRequest)}
+}
+
 // CodeExplainRejected identifies a canonical Explain rejection without
 // disclosing the rejected local facts.
 const CodeExplainRejected InstallErrorCode = "explain_rejected"
