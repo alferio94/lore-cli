@@ -112,6 +112,7 @@ type InteractiveActions struct {
 	InstallTarget    func(ctx context.Context, target install.TargetID) ActionReport
 	PlanPiInstall    func(ctx context.Context) (install.PiInstallPlan, ActionReport, bool)
 	ExecutePiInstall func(ctx context.Context, plan install.PiInstallPlan) ActionReport
+	InstallWorkflow  install.Workflow
 	CheckForUpdate   func(ctx context.Context) UpdateAvailability
 	Update           func(ctx context.Context) ActionReport
 }
@@ -132,6 +133,7 @@ func (a *App) InteractiveActions() InteractiveActions {
 			return a.planPiInstallAction(ctx, installCommandOptions{})
 		},
 		ExecutePiInstall: a.executePiInstallAction,
+		InstallWorkflow:  a.InstallWorkflow,
 		CheckForUpdate:   a.checkForUpdateAction,
 		Update:           a.updateApplyAction,
 	}

@@ -136,7 +136,7 @@ func (a *App) Run(args []string) int {
 		}
 		if err := a.TUIRunner(context.Background(), a.InteractiveActions()); err != nil {
 			fmt.Fprintf(a.Stderr, "failed to start interactive UI: %v\n", err)
-			return 1
+			return tuiErrorExit(err)
 		}
 		return 0
 	}
@@ -155,7 +155,7 @@ func (a *App) Run(args []string) int {
 		}
 		if err := a.TUIRunner(context.Background(), actions); err != nil {
 			fmt.Fprintf(a.Stderr, "failed to start interactive UI: %v\n", err)
-			return 1
+			return tuiErrorExit(err)
 		}
 		return 0
 	case "login":
@@ -181,6 +181,13 @@ func (a *App) Run(args []string) int {
 		a.printRootHelpTo(a.Stderr)
 		return 1
 	}
+}
+
+func tuiErrorExit(err error) int {
+	if usage, ok := err.(interface{ Usage() bool }); ok && usage.Usage() {
+		return 2
+	}
+	return 1
 }
 
 func (a *App) runLogin(actions InteractiveActions, args []string) int {

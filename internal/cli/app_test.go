@@ -664,6 +664,11 @@ func TestZeroArgAndExplicitTUIDispatch(t *testing.T) {
 	}
 }
 
+type testTUIUsageError struct{}
+
+func (testTUIUsageError) Error() string { return "TTY required" }
+func (testTUIUsageError) Usage() bool   { return true }
+
 func TestTUIRunnerFailuresAndUsage(t *testing.T) {
 	store := &fakeStore{path: "/tmp/lore/config.json", loadErr: config.ErrNotFound}
 	app, _, stderr := newTestApp(store, nil)
@@ -674,6 +679,12 @@ func TestTUIRunnerFailuresAndUsage(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "failed to start interactive UI") {
 		t.Fatalf("stderr = %q, want interactive UI failure", stderr.String())
+	}
+
+	stderr.Reset()
+	app.TUIRunner = func(context.Context, InteractiveActions) error { return testTUIUsageError{} }
+	if exitCode := app.Run(nil); exitCode != 2 {
+		t.Fatalf("non-TTY exitCode = %d, want usage exit 2", exitCode)
 	}
 
 	stderr.Reset()

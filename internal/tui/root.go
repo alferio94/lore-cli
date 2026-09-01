@@ -93,6 +93,7 @@ type model struct {
 	installBackupDecisionPending bool
 	detailsVisible               bool
 	installPlan                  *install.PiInstallPlan
+	installTUI                   *installModel
 	updateChecked                bool
 	updateAvailable              bool
 	updateCurrentVersion         string
@@ -174,6 +175,19 @@ func (m model) Init() tea.Cmd {
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.installTUI != nil {
+		if size, ok := msg.(tea.WindowSizeMsg); ok {
+			m.width, m.height, m.ready = size.Width, size.Height, true
+		}
+		cmd := m.installTUI.update(msg)
+		if m.installTUI.back {
+			m.installTUI = nil
+			m.installSelectionPending = true
+			m.statusTitle = "Install Lore"
+			m.replaceStatusBody(m.renderInstallTargetSelection())
+		}
+		return m, cmd
+	}
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -593,6 +607,11 @@ func (m model) activateSelection() (tea.Model, tea.Cmd) {
 			m.statusTone = toneMuted
 			return m, nil
 		}
+		if m.actions.InstallWorkflow != nil {
+			m.installSelectionPending = false
+			m.installTUI = newInstallModel(m.actions.InstallWorkflow, install.Request{Mode: install.ModeExplain, Target: selectedTarget.ID}, os.Getenv("LORE_NO_ANIMATION") == "1")
+			return m, m.installTUI.prepareCmd()
+		}
 		m.installSelectionPending = false
 		m.installConfirmationPending = true
 		m.detailsVisible = false
@@ -906,6 +925,9 @@ func (m model) View() string {
 
 // Run starts the Lore root TUI.
 func Run(_ context.Context, actions cli.InteractiveActions) error {
+	if err := requireTTY(os.Stdin, os.Stdout); err != nil {
+		return err
+	}
 	p := tea.NewProgram(newModel(actions))
 	if _, err := p.Run(); err != nil {
 		return fmt.Errorf("start lore TUI: %w", err)

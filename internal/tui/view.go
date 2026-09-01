@@ -408,6 +408,9 @@ func appendLoginHint(content []string, maxRows int) []string {
 }
 
 func renderDetailScreen(m model, density viewportDensity) string {
+	if m.installTUI != nil {
+		return renderInstallView(m.installTUI, density.ContentWidth)
+	}
 	content := []string{renderToneTitle(m.statusTone, m.statusTitle)}
 	if density.ShowSecondaryCopy() {
 		content = append(content, mutedStyle.Render(currentModeLabel(m)))
@@ -493,6 +496,9 @@ func renderUpdateBanner(m model) string {
 }
 
 func renderFooter(m model) string {
+	if m.installTUI != nil {
+		return "Esc back • Explain uses the shared canonical workflow"
+	}
 	if m.focus == focusLogin {
 		return "Esc back • Tab next field • Enter submit • --password-stdin • --token • q quit"
 	}
