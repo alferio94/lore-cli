@@ -22,7 +22,7 @@ func TestInstallCommandDryRunAcceptsExplicitPiTargetAndComponents(t *testing.T) 
 	app.ExecutablePath = func() (string, error) { return "/usr/local/bin/lore", nil }
 	app.BuildInfo = version.Info{Version: "v1.2.3"}
 
-	if exitCode := app.Run([]string{"install", "--dry-run", "--target", "pi", "--component", "pi-extensions"}); exitCode != 0 {
+	if exitCode := app.Run([]string{"install", "--legacy", "--dry-run", "--target", "pi", "--component", "pi-extensions"}); exitCode != 0 {
 		t.Fatalf("install --dry-run --target pi --component pi-extensions exitCode = %d, want 0, stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
 	}
 	if _, err := os.Stat(filepath.Join(piAgentDir, "lore-install.json")); !errors.Is(err, os.ErrNotExist) {
@@ -79,7 +79,7 @@ func TestInstallCommandAcceptsOpenCodeTarget(t *testing.T) {
 	app.UserHomeDir = func() (string, error) { return homeDir, nil }
 	app.BuildInfo = version.Info{Version: "v1.2.3"}
 
-	if exitCode := app.Run([]string{"install", "--dry-run", "--target", "opencode"}); exitCode != 0 {
+	if exitCode := app.Run([]string{"install", "--legacy", "--dry-run", "--target", "opencode"}); exitCode != 0 {
 		t.Fatalf("install --dry-run --target opencode exitCode = %d, want 0, stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
 	}
 	out := stdout.String()
@@ -160,7 +160,7 @@ func TestInstallCommandSupportsAntigravityDryRunAndApply(t *testing.T) {
 	app.BuildInfo = version.Info{Version: "v1.2.3"}
 
 	t.Run("default antigravity install includes managed MCP config", func(t *testing.T) {
-		if exitCode := app.Run([]string{"install", "--dry-run", "--target", "antigravity"}); exitCode != 0 {
+		if exitCode := app.Run([]string{"install", "--legacy", "--dry-run", "--target", "antigravity"}); exitCode != 0 {
 			t.Fatalf("install --dry-run --target antigravity exitCode = %d, want 0, stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
 		}
 		out := stdout.String()
@@ -178,7 +178,7 @@ func TestInstallCommandSupportsAntigravityDryRunAndApply(t *testing.T) {
 	})
 
 	t.Run("managed mcp config uses direct server URL and bearer header", func(t *testing.T) {
-		if exitCode := app.Run([]string{"install", "--target", "antigravity", "--component", "lore-server-mcp"}); exitCode != 0 {
+		if exitCode := app.Run([]string{"install", "--legacy", "--yes", "--target", "antigravity", "--component", "lore-server-mcp"}); exitCode != 0 {
 			t.Fatalf("install --target antigravity --component lore-server-mcp exitCode = %d, want 0, stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
 		}
 		out := stdout.String()
@@ -271,7 +271,7 @@ func TestInstallCommandAcceptsLoreServerMCPWithPiTarget(t *testing.T) {
 	app.BuildInfo = version.Info{Version: "v1.2.3"}
 
 	// lore-server-mcp is now the default Pi backend and is accepted.
-	if exitCode := app.Run([]string{"install", "--dry-run", "--target", "pi", "--component", "lore-server-mcp"}); exitCode != 0 {
+	if exitCode := app.Run([]string{"install", "--legacy", "--dry-run", "--target", "pi", "--component", "lore-server-mcp"}); exitCode != 0 {
 		t.Fatalf("install --dry-run --target pi --component lore-server-mcp exitCode = %d, want 0, stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
 	}
 	out := stdout.String()

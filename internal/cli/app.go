@@ -378,6 +378,11 @@ func (a *App) runInstall(_ InteractiveActions, args []string) int {
 		return 2
 	}
 	request := install.Request{Target: install.TargetID(strings.TrimSpace(*target)), Components: components.ComponentIDs(), AssumeYes: *yes}
+	if _, err := install.ResolveInstallTarget(request.Target); err != nil {
+		fmt.Fprintln(a.Stdout, err)
+		fmt.Fprintln(a.Stdout, install.FormatTargetSelection(install.DefaultTargets()))
+		return 1
+	}
 	if *explain {
 		request.Mode = install.ModeExplain
 		return a.presentInstallResult(selectedFormat, a.installExplainAction(context.Background(), request))

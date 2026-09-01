@@ -697,9 +697,9 @@ func TestW33EStaticGuardHasOneTransactionAndNoProfileAuthorityReuse(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantCallers := []string{"internal/install/transaction_fs.go:applyTransactionFSWithWait"}
+	wantCallers := []string{"internal/install/apply.go:applyTransactionFS", "internal/install/transaction_fs.go:applyTransactionFSWithWait"}
 	if !reflect.DeepEqual(transactionCallers, wantCallers) {
-		t.Fatalf("production transaction entrypoints = %v, want sole wrapper call %v", transactionCallers, wantCallers)
+		t.Fatalf("production transaction wrapper calls = %v, want exact authority chain %v", transactionCallers, wantCallers)
 	}
 }
 

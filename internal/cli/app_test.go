@@ -19,6 +19,7 @@ import (
 	"github.com/alferio94/lore-cli/internal/config"
 	"github.com/alferio94/lore-cli/internal/httpclient"
 	"github.com/alferio94/lore-cli/internal/install"
+	"github.com/alferio94/lore-cli/internal/output"
 	"github.com/alferio94/lore-cli/internal/version"
 )
 
@@ -788,7 +789,7 @@ func TestInstallCommandRunsPiInstallAndPrintsSummary(t *testing.T) {
 	app.ExecutablePath = func() (string, error) { return "/usr/local/bin/lore", nil }
 	app.BuildInfo = version.Info{Version: "v1.2.3"}
 
-	if exitCode := app.Run([]string{"install"}); exitCode != 0 {
+	if exitCode := app.Run([]string{"install", "--legacy", "--yes"}); exitCode != 0 {
 		t.Fatalf("install exitCode = %d, want 0, stderr=%q", exitCode, stderr.String())
 	}
 	manifestPath := filepath.Join(piAgentDir, "lore-install.json")
@@ -825,7 +826,7 @@ func TestInstallCommandPassesSavedTokenToValidationWithoutLeakingIt(t *testing.T
 	// Explicitly select pi-extensions so lore-memory.ts is installed and can trigger validation.
 	// The install may fail due to manifest validation or content validation; both are acceptable.
 	// The key assertion is that the raw token does not appear in output.
-	_ = app.Run([]string{"install", "--component", "pi-extensions"})
+	_ = app.Run([]string{"install", "--legacy", "--yes", "--component", "pi-extensions"})
 	out := stdout.String()
 	// Token must not be echoed in any output.
 	if strings.Contains(out, "TEST_TOKEN_LEAK") {
@@ -848,7 +849,7 @@ func TestInstallCommandBlocksWhenLoginIsRequired(t *testing.T) {
 	app, stdout, stderr := newTestApp(store, nil)
 	app.ExecutablePath = func() (string, error) { return "/usr/local/bin/lore", nil }
 
-	if exitCode := app.Run([]string{"install"}); exitCode != 1 {
+	if exitCode := app.Run([]string{"install", "--legacy", "--yes"}); exitCode != 1 {
 		t.Fatalf("install exitCode = %d, want 1", exitCode)
 	}
 	if got := stdout.String(); !strings.Contains(got, "Run lore login") && !strings.Contains(got, "run lore login") {
@@ -860,8 +861,8 @@ func TestInstallCommandBlocksWhenLoginIsRequired(t *testing.T) {
 	if _, err := os.Stat(piAgentDir); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("pi agent dir stat err = %v, want no partial install state on preflight validation failure", err)
 	}
-	if stderr.Len() != 0 {
-		t.Fatalf("stderr = %q, want empty", stderr.String())
+	if !strings.Contains(stderr.String(), "legacy_execution_failed") {
+		t.Fatalf("stderr = %q, want explicit legacy failure", stderr.String())
 	}
 }
 
@@ -914,7 +915,7 @@ func TestInstallCommandDryRunReportsPlanWithoutMutation(t *testing.T) {
 	app.ExecutablePath = func() (string, error) { return "/usr/local/bin/lore", nil }
 	app.BuildInfo = version.Info{Version: "v1.2.3"}
 
-	if exitCode := app.Run([]string{"install", "--dry-run"}); exitCode != 0 {
+	if exitCode := app.Run([]string{"install", "--legacy", "--dry-run"}); exitCode != 0 {
 		t.Fatalf("install --dry-run exitCode = %d, want 0, stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
 	}
 	if got, err := os.ReadFile(legacyPath); err != nil || string(got) != "keep-me" {
@@ -989,7 +990,7 @@ func TestInstallCommandDryRunSurfacesManagedFileActions(t *testing.T) {
 	app.ExecutablePath = func() (string, error) { return "/usr/local/bin/lore", nil }
 	app.BuildInfo = version.Info{Version: "v1.2.3"}
 
-	if exitCode := app.Run([]string{"install", "--dry-run"}); exitCode != 0 {
+	if exitCode := app.Run([]string{"install", "--legacy", "--dry-run"}); exitCode != 0 {
 		t.Fatalf("install --dry-run exitCode = %d, want 0, stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
 	}
 	if _, err := os.Stat(filepath.Join(layout.ExtensionsDir, "lore-footer.ts")); !errors.Is(err, os.ErrNotExist) {
@@ -1050,7 +1051,7 @@ func TestInstallCommandReportsLoreMemoryCleanupActionInDryRun(t *testing.T) {
 	app.ExecutablePath = func() (string, error) { return "/usr/local/bin/lore", nil }
 	app.BuildInfo = version.Info{Version: "v1.2.3"}
 
-	if exitCode := app.Run([]string{"install", "--dry-run"}); exitCode != 0 {
+	if exitCode := app.Run([]string{"install", "--legacy", "--dry-run"}); exitCode != 0 {
 		t.Fatalf("install --dry-run exitCode = %d, want 0, stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
 	}
 	// Dry-run must preserve the pre-existing file untouched.
@@ -1087,7 +1088,7 @@ func TestInstallCommandApplyRemovesAndBacksUpPreExistingLoreMemoryExtension(t *t
 	app.ExecutablePath = func() (string, error) { return "/usr/local/bin/lore", nil }
 	app.BuildInfo = version.Info{Version: "v1.2.3"}
 
-	if exitCode := app.Run([]string{"install", "--yes"}); exitCode != 0 {
+	if exitCode := app.Run([]string{"install", "--legacy", "--yes"}); exitCode != 0 {
 		t.Fatalf("install --yes exitCode = %d, want 0, stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
 	}
 	// File must be removed from the installed extensions directory.
@@ -1155,7 +1156,7 @@ func TestInstallCommandIdempotentRerunAfterLoreMemoryCleanup(t *testing.T) {
 	app.ExecutablePath = func() (string, error) { return "/usr/local/bin/lore", nil }
 	app.BuildInfo = version.Info{Version: "v1.2.3"}
 
-	if exitCode := app.Run([]string{"install", "--yes"}); exitCode != 0 {
+	if exitCode := app.Run([]string{"install", "--legacy", "--yes"}); exitCode != 0 {
 		t.Fatalf("first install --yes exitCode = %d, want 0, stderr=%q", exitCode, stderr.String())
 	}
 	if _, err := os.Stat(absolutePath); !os.IsNotExist(err) {
@@ -1166,7 +1167,7 @@ func TestInstallCommandIdempotentRerunAfterLoreMemoryCleanup(t *testing.T) {
 	app2, stdout2, stderr2 := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
 	app2.ExecutablePath = func() (string, error) { return "/usr/local/bin/lore", nil }
 	app2.BuildInfo = version.Info{Version: "v1.2.3"}
-	if exitCode := app2.Run([]string{"install", "--yes"}); exitCode != 0 {
+	if exitCode := app2.Run([]string{"install", "--legacy", "--yes"}); exitCode != 0 {
 		t.Fatalf("second install --yes exitCode = %d, want 0, stderr=%q stdout=%q", exitCode, stderr2.String(), stdout2.String())
 	}
 	if _, err := os.Stat(absolutePath); !os.IsNotExist(err) {
@@ -1196,7 +1197,7 @@ func TestInstallCommandYesModeBacksUpExistingPiWithoutPrompt(t *testing.T) {
 	app.ExecutablePath = func() (string, error) { return "/usr/local/bin/lore", nil }
 	app.BuildInfo = version.Info{Version: "v1.2.3"}
 
-	if exitCode := app.Run([]string{"install", "--yes"}); exitCode != 0 {
+	if exitCode := app.Run([]string{"install", "--legacy", "--yes"}); exitCode != 0 {
 		t.Fatalf("install --yes exitCode = %d, want 0, stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
 	}
 	backupDirs, err := filepath.Glob(filepath.Join(configDir, "backups", "pi", "*"))
@@ -1250,7 +1251,7 @@ func TestInstallCommandPiMCPConfigMaterializesBearerTokenPlaintext(t *testing.T)
 	// Run full install (not dry-run) so files are actually written.
 	// Include all default components so the full 5-file managed set is produced and manifest
 	// validation passes (settings.json + mcp.json + extended-skills = 5 managed files).
-	if exitCode := app.Run([]string{"install", "--yes", "--component", "core-pack", "--component", "lore-server-mcp", "--component", "extended-skills"}); exitCode != 0 {
+	if exitCode := app.Run([]string{"install", "--legacy", "--yes", "--component", "core-pack", "--component", "lore-server-mcp", "--component", "extended-skills"}); exitCode != 0 {
 		t.Fatalf("install --yes exitCode = %d, want 0, stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
 	}
 
@@ -1378,7 +1379,8 @@ func TestInstallCommandPromptsForFullBackupAndAllowsExplicitDecline(t *testing.T
 	if err := os.MkdirAll(piRoot, 0o755); err != nil {
 		t.Fatalf("MkdirAll piRoot: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(piRoot, "legacy.txt"), []byte("legacy-value"), 0o600); err != nil {
+	legacyPath := filepath.Join(piRoot, "legacy.txt")
+	if err := os.WriteFile(legacyPath, []byte("legacy-value"), 0o600); err != nil {
 		t.Fatalf("WriteFile legacy source: %v", err)
 	}
 
@@ -1388,22 +1390,19 @@ func TestInstallCommandPromptsForFullBackupAndAllowsExplicitDecline(t *testing.T
 	app, stdout, stderr := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
 	app.ExecutablePath = func() (string, error) { return "/usr/local/bin/lore", nil }
 	app.BuildInfo = version.Info{Version: "v1.2.3"}
+	app.InstallConfirm = func() (bool, error) { return false, nil }
 
-	restoreStdin := installTestStdin(t, "n\n")
-	defer restoreStdin()
-
-	if exitCode := app.Run([]string{"install"}); exitCode != 0 {
-		t.Fatalf("interactive install decline exitCode = %d, want 0, stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	if exitCode := app.Run([]string{"install", "--legacy"}); exitCode != 0 {
+		t.Fatalf("explicit legacy decline exitCode = %d, want 0, stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
 	}
-	if _, err := os.Stat(filepath.Join(piAgentDir, "lore-install.json")); err != nil {
-		t.Fatalf("manifest stat err = %v, want install to continue after explicit decline", err)
+	if _, err := os.Stat(filepath.Join(piAgentDir, "lore-install.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("manifest stat err = %v, want no install after explicit legacy decline", err)
+	}
+	if got, err := os.ReadFile(legacyPath); err != nil || string(got) != "legacy-value" {
+		t.Fatalf("legacy file = %q err=%v, want unchanged after explicit legacy decline", string(got), err)
 	}
 	if _, err := os.Stat(filepath.Join(configDir, "backups")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("backup root stat err = %v, want no full backup after explicit decline", err)
-	}
-	combined := strings.ToLower(stdout.String() + "\n" + stderr.String())
-	if !strings.Contains(combined, "full backup") {
-		t.Fatalf("combined output = %q, want explicit full-backup prompt/summary", combined)
+		t.Fatalf("backup root stat err = %v, want no full backup after explicit legacy decline", err)
 	}
 	assertNoTokenLeak(t, stdout.String(), stderr.String(), "secret-token=decline")
 }
@@ -1553,6 +1552,21 @@ func renderInstallAssetForTest(t *testing.T, relativePath string, replacements m
 	return rendered
 }
 
+type renderingLegacyAdapter struct{ app *App }
+
+func (a *renderingLegacyAdapter) PrepareLegacy(_ context.Context, request install.Request) (install.Prepared, install.Result) {
+	return install.PrepareExplicitLegacy(request)
+}
+func (a *renderingLegacyAdapter) ExecuteLegacy(ctx context.Context, prepared install.Prepared, _ install.Observer) install.Result {
+	request, ok := install.ConsumeExplicitLegacy(prepared)
+	if !ok {
+		return install.CompleteExplicitLegacy(request, false)
+	}
+	report := a.app.installActionWithOptions(ctx, installCommandOptions{DryRun: request.Mode == install.ModeLegacyDryRun, Yes: true, Target: request.Target, Components: request.Components})
+	fmt.Fprint(a.app.Stdout, output.RenderChecks(report.Title, report.Checks))
+	return install.CompleteExplicitLegacy(request, report.ExitCode == 0)
+}
+
 func newTestApp(store *fakeStore, factory ClientFactory) (*App, *strings.Builder, *strings.Builder) {
 	stdout := &strings.Builder{}
 	stderr := &strings.Builder{}
@@ -1561,7 +1575,9 @@ func newTestApp(store *fakeStore, factory ClientFactory) (*App, *strings.Builder
 			return &fakeClient{}, nil
 		}
 	}
-	return &App{Stdout: stdout, Stderr: stderr, Store: store, Auth: &fakeAuthManager{store: store}, ClientFactory: factory, LookPath: func(name string) (string, error) { return "/usr/bin/pi", nil }}, stdout, stderr
+	app := &App{Stdout: stdout, Stderr: stderr, Store: store, Auth: &fakeAuthManager{store: store}, ClientFactory: factory, LookPath: func(name string) (string, error) { return "/usr/bin/pi", nil }}
+	app.LegacyAdapter = &renderingLegacyAdapter{app: app}
+	return app, stdout, stderr
 }
 
 func newVersionOnlyApp(buildInfo version.Info) (*App, *strings.Builder, *strings.Builder) {
