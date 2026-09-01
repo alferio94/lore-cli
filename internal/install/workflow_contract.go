@@ -34,18 +34,20 @@ func (r Request) Clone() Request {
 
 type preparedState struct{ consumed atomic.Bool }
 type Prepared struct {
-	request Request
-	route   Route
-	report  TransactionReport
-	state   *preparedState
+	request  Request
+	route    Route
+	plan     TransactionPlan
+	guidance []Guidance
+	state    *preparedState
 }
 
-func newPrepared(request Request, route Route, report TransactionReport) Prepared {
-	return Prepared{request: request.Clone(), route: route, report: cloneTransactionReport(report), state: &preparedState{}}
+func newPrepared(request Request, route Route, plan TransactionPlan, guidance []Guidance) Prepared {
+	plan.report = cloneTransactionReport(plan.report)
+	return Prepared{request: request.Clone(), route: route, plan: plan, guidance: append([]Guidance(nil), guidance...), state: &preparedState{}}
 }
 func (p Prepared) Request() Request          { return p.request.Clone() }
 func (p Prepared) Route() Route              { return p.route }
-func (p Prepared) Report() TransactionReport { return cloneTransactionReport(p.report) }
+func (p Prepared) Report() TransactionReport { return p.plan.DryRun(nil) }
 func (p Prepared) IsZero() bool              { return p.state == nil }
 func (p Prepared) consume() bool {
 	return p.state != nil && p.state.consumed.CompareAndSwap(false, true)

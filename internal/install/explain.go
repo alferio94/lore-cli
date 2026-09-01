@@ -2,23 +2,30 @@ package install
 
 import "context"
 
-// ExplainWorkflow is the shared domain entry point used by presentation
-// adapters for the explain-only rollout slice.
-type ExplainWorkflow struct {
+// CanonicalWorkflow is the single shared presentation boundary for canonical
+// modes. It carries the same sealed plan from Prepare into Execute.
+type CanonicalWorkflow struct {
 	policy RoutePolicy
 	input  TransactionInput
 }
 
-func NewExplainWorkflow(policy RoutePolicy, input TransactionInput) *ExplainWorkflow {
-	return &ExplainWorkflow{policy: policy, input: input}
+func NewCanonicalWorkflow(policy RoutePolicy, input TransactionInput) *CanonicalWorkflow {
+	return &CanonicalWorkflow{policy: policy, input: input}
 }
 
-func (w *ExplainWorkflow) Prepare(_ context.Context, request Request) (Prepared, Result) {
+func NewExplainWorkflow(policy RoutePolicy, input TransactionInput) *CanonicalWorkflow {
+	return NewCanonicalWorkflow(policy, input)
+}
+
+func (w *CanonicalWorkflow) Prepare(_ context.Context, request Request) (Prepared, Result) {
+	if request.Mode == ModeDryRun {
+		return PrepareDryRun(w.policy, request, w.input)
+	}
 	return PrepareExplain(w.policy, request, w.input)
 }
 
-func (w *ExplainWorkflow) Execute(context.Context, Prepared, Observer) Result {
-	return Result{Status: StatusFailed, Error: newInstallError(CodeInvalidWorkflowRequest)}
+func (w *CanonicalWorkflow) Execute(_ context.Context, prepared Prepared, observer Observer) Result {
+	return ExecuteDryRun(prepared, observer)
 }
 
 // CodeExplainRejected identifies a canonical Explain rejection without
@@ -73,7 +80,7 @@ func PrepareExplain(policy RoutePolicy, request Request, input TransactionInput)
 	base.Report = report
 	base.Operations = explainOperations(report)
 	base.Guidance = append(base.Guidance, explainServerGuidance(facts.Guidance)...)
-	return newPrepared(request, RouteCanonical, report), base
+	return newPrepared(request, RouteCanonical, plan, base.Guidance), base
 }
 
 func explainGateGuidance(gate Gate) []Guidance {

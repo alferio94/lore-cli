@@ -12,9 +12,10 @@ import (
 )
 
 type tuiWorkflowSpy struct {
-	prepares int
-	executes int
-	result   install.Result
+	prepares      int
+	executes      int
+	result        install.Result
+	executeResult install.Result
 }
 
 func (w *tuiWorkflowSpy) Prepare(_ context.Context, request install.Request) (install.Prepared, install.Result) {
@@ -25,6 +26,9 @@ func (w *tuiWorkflowSpy) Prepare(_ context.Context, request install.Request) (in
 }
 func (w *tuiWorkflowSpy) Execute(ctx context.Context, _ install.Prepared, _ install.Observer) install.Result {
 	w.executes++
+	if w.executeResult.SchemaVersion != "" {
+		return w.executeResult.Clone()
+	}
 	<-ctx.Done()
 	return install.Result{SchemaVersion: install.ResultSchemaVersion, Mode: install.ModeApply, Route: install.RouteCanonical, Target: install.TargetPi, Status: install.StatusCancelled}
 }
@@ -73,6 +77,33 @@ func TestTUIExplainUsesSharedWorkflowWithTypedParityAndSafeNavigation(t *testing
 	m = updated.(model)
 	if m.installTUI != nil || !m.installSelectionPending || workflow.executes != 0 {
 		t.Fatal("Esc did not discard Prepared and return to target selection without effects")
+	}
+}
+
+func TestW47TUIDryRunRepreparesAndRendersCanonicalResultParity(t *testing.T) {
+	ready := explainTUIResult()
+	workflow := &tuiWorkflowSpy{result: ready, executeResult: install.Result{
+		SchemaVersion: install.ResultSchemaVersion, Mode: install.ModeDryRun, Route: install.RouteCanonical,
+		Target: install.TargetPi, Status: install.StatusSucceeded, Admitted: true,
+		Operations: []install.Operation{{Resource: "AGENTS.md", Action: "replace"}},
+	}}
+	m := newInstallModel(workflow, install.Request{Mode: install.ModeExplain, Target: install.TargetPi}, true)
+	m.update(m.prepareCmd()())
+	cmd := m.update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil || m.request.Mode != install.ModeDryRun || m.stage != installPreparing {
+		t.Fatalf("Explain to dry-run transition = mode:%s stage:%s", m.request.Mode, m.stage)
+	}
+	m.update(cmd())
+	cmd = m.update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.update(cmd())
+	view := renderInstallView(m, 80)
+	for _, want := range []string{"mode=dry-run", "route=canonical-sealed", "outcome=succeeded", "changed_state=false", "operation action=replace"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("TUI dry-run missing %q:\n%s", want, view)
+		}
+	}
+	if workflow.prepares != 2 || workflow.executes != 1 || strings.Contains(view, "explicit-legacy") {
+		t.Fatalf("workflow parity = prepares:%d executes:%d view:%s", workflow.prepares, workflow.executes, view)
 	}
 }
 

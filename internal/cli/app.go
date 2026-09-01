@@ -324,7 +324,7 @@ func (a *App) runInstall(_ InteractiveActions, args []string) int {
 	dryRun := fs.Bool("dry-run", false, "Show the selected install plan without mutating managed runtime files")
 	legacy := fs.Bool("legacy", false, "Select the explicit legacy compatibility route")
 	yes := fs.Bool("yes", false, "Accept the safe default full-backup behavior without prompting")
-	format := fs.String("format", "human", "Output format for canonical explain (human or json)")
+	format := fs.String("format", "human", "Output format for canonical explain or dry-run (human or json)")
 	target := fs.String("target", string(install.DefaultInstallTarget()), "Install target (Pi stays the default recommended target; OpenCode, Codex, and Antigravity are supported managed targets)")
 	var components componentFlag
 	fs.Var(&components, "component", "Optional component override; repeat or use a comma-separated list (Pi, OpenCode, Codex, and Antigravity support core-pack; Pi/Codex/Antigravity/OpenCode also support lore-server-mcp and context7-mcp; OpenCode also supports opencode-plugins)")
@@ -372,16 +372,21 @@ func (a *App) runInstall(_ InteractiveActions, args []string) int {
 		fs.Usage()
 		return 2
 	}
+	request := install.Request{Target: install.TargetID(strings.TrimSpace(*target)), Components: components.ComponentIDs()}
 	if *explain {
-		result := a.installExplainAction(context.Background(), install.Request{Mode: install.ModeExplain, Target: install.TargetID(strings.TrimSpace(*target)), Components: components.ComponentIDs()})
-		return a.presentInstallResult(selectedFormat, result)
+		request.Mode = install.ModeExplain
+		return a.presentInstallResult(selectedFormat, a.installExplainAction(context.Background(), request))
+	}
+	if *dryRun && !*legacy {
+		request.Mode = install.ModeDryRun
+		return a.presentInstallResult(selectedFormat, a.installDryRunAction(context.Background(), request))
 	}
 	if *legacy || selectedFormat == installFormatJSON {
-		fmt.Fprintln(a.Stderr, "--legacy and JSON execution routes are not available in this bounded explain slice")
+		fmt.Fprintln(a.Stderr, "--legacy and JSON apply routes are not available before their bounded W4 slices")
 		return 2
 	}
 
-	report := a.installActionWithOptions(context.Background(), installCommandOptions{DryRun: *dryRun, Yes: *yes, Target: install.TargetID(strings.TrimSpace(*target)), Components: components.ComponentIDs()})
+	report := a.installActionWithOptions(context.Background(), installCommandOptions{Yes: *yes, Target: install.TargetID(strings.TrimSpace(*target)), Components: components.ComponentIDs()})
 	fmt.Fprint(a.Stdout, output.RenderChecks(report.Title, report.Checks))
 	return report.ExitCode
 }

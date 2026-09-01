@@ -10,10 +10,11 @@ import (
 )
 
 type explainWorkflowSpy struct {
-	result       install.Result
-	request      install.Request
-	prepareCalls int
-	executeCalls int
+	result        install.Result
+	executeResult install.Result
+	request       install.Request
+	prepareCalls  int
+	executeCalls  int
 }
 
 func (w *explainWorkflowSpy) Prepare(_ context.Context, request install.Request) (install.Prepared, install.Result) {
@@ -24,7 +25,7 @@ func (w *explainWorkflowSpy) Prepare(_ context.Context, request install.Request)
 
 func (w *explainWorkflowSpy) Execute(context.Context, install.Prepared, install.Observer) install.Result {
 	w.executeCalls++
-	return install.Result{}
+	return w.executeResult.Clone()
 }
 
 func TestInstallExplainHumanUsesSharedWorkflowAndStableChannels(t *testing.T) {
@@ -123,6 +124,51 @@ func TestInstallExplainRejectsUsageBeforeWorkflow(t *testing.T) {
 			t.Fatalf("args=%v exit/calls/streams=%d/%d/%q/%q", args, exit, workflow.prepareCalls, stdout.String(), stderr.String())
 		}
 	}
+}
+
+func TestW47InstallDryRunHumanAndJSONUseOneSharedWorkflow(t *testing.T) {
+	for _, format := range []string{"human", "json"} {
+		t.Run(format, func(t *testing.T) {
+			app, stdout, stderr := newTestApp(&fakeStore{path: "/unused"}, nil)
+			ready := dryRunSuccessResult()
+			ready.Status = install.StatusReady
+			workflow := &explainWorkflowSpy{result: ready, executeResult: dryRunSuccessResult()}
+			app.InstallWorkflow = workflow
+			exit := app.Run([]string{"install", "--dry-run", "--format", format, "--target", "pi", "--component", "core-pack"})
+			if exit != 0 || workflow.prepareCalls != 1 || workflow.executeCalls != 1 || workflow.request.Mode != install.ModeDryRun {
+				t.Fatalf("exit/calls/request=%d/%d/%d/%#v stdout=%q stderr=%q", exit, workflow.prepareCalls, workflow.executeCalls, workflow.request, stdout.String(), stderr.String())
+			}
+			if !strings.Contains(stdout.String(), "dry-run") || !strings.Contains(stdout.String(), "canonical-sealed") || stderr.Len() != 0 {
+				t.Fatalf("streams stdout=%q stderr=%q", stdout.String(), stderr.String())
+			}
+			first := stdout.String()
+			stdout.Reset()
+			if exit := app.Run([]string{"install", "--dry-run", "--format=" + format}); exit != 0 || stdout.String() != first {
+				t.Fatalf("repeat exit/output=%d/%q want=%q", exit, stdout.String(), first)
+			}
+		})
+	}
+}
+
+func TestW47InstallDryRunDisabledFailsClosedWithoutExecute(t *testing.T) {
+	app, stdout, stderr := newTestApp(&fakeStore{path: "/unused"}, nil)
+	workflow := &explainWorkflowSpy{result: install.Result{SchemaVersion: install.ResultSchemaVersion, Mode: install.ModeDryRun, Route: install.RouteCanonical, Target: install.TargetPi, Status: install.StatusFailed, Error: installDisabledErrorForTest()}}
+	app.InstallWorkflow = workflow
+	if exit := app.Run([]string{"install", "--dry-run", "--format=json"}); exit != 1 || workflow.prepareCalls != 1 || workflow.executeCalls != 0 || stderr.Len() != 0 || !strings.Contains(stdout.String(), "canonical_route_disabled") || strings.Contains(stdout.String(), "explicit-legacy") {
+		t.Fatalf("exit/calls/streams=%d/%d/%d/%q/%q", exit, workflow.prepareCalls, workflow.executeCalls, stdout.String(), stderr.String())
+	}
+}
+
+func dryRunSuccessResult() install.Result {
+	result := explainSuccessResult()
+	result.Mode, result.Status = install.ModeDryRun, install.StatusSucceeded
+	return result
+}
+
+func installDisabledErrorForTest() *install.InstallError {
+	workflow := defaultInstallWorkflow()
+	_, result := workflow.Prepare(context.Background(), install.Request{Mode: install.ModeDryRun, Target: install.TargetPi})
+	return result.Error
 }
 
 func explainSuccessResult() install.Result {

@@ -40,7 +40,11 @@ func (m *installModel) update(msg tea.Msg) tea.Cmd {
 			m.prepared, m.events, m.stage = install.Prepared{}, nil, installPreparing
 			return m.prepareCmd()
 		}
-		if m.stage == installPrepared && key == "enter" && m.request.Mode != install.ModeExplain && m.result.Admitted {
+		if m.stage == installPrepared && key == "enter" && m.result.Admitted {
+			if m.request.Mode == install.ModeExplain {
+				m.request.Mode, m.prepared, m.stage = install.ModeDryRun, install.Prepared{}, installPreparing
+				return m.prepareCmd()
+			}
 			m.stage = installExecuting
 			return m.executeCmd()
 		}

@@ -5,7 +5,7 @@ import "testing"
 func TestPreparedAndObservableContractsDefensivelyCopy(t *testing.T) {
 	request := Request{Mode: ModeDryRun, Target: TargetPi, Components: []ComponentID{ComponentCorePack}}
 	report := TransactionReport{Target: TargetPi, Decisions: []TransactionDecision{{Resource: "AGENTS.md"}}}
-	prepared := newPrepared(request, RouteCanonical, report)
+	prepared := newPrepared(request, RouteCanonical, TransactionPlan{report: report}, nil)
 	request.Components[0] = ComponentContext7MCP
 	report.Decisions[0].Resource = "changed"
 	if prepared.Request().Components[0] != ComponentCorePack || prepared.Report().Decisions[0].Resource != "AGENTS.md" || prepared.Route() != RouteCanonical || prepared.IsZero() {

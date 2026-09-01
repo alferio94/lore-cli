@@ -43,6 +43,10 @@ func renderInstallView(m *installModel, width int) string {
 		b.WriteString("Retry disabled • follow recovery guidance • Esc back")
 	} else if m.canRetry() {
 		b.WriteString("r retry from fresh facts • Esc back")
+	} else if m.stage == installPrepared && m.request.Mode == "explain" && m.result.Admitted {
+		b.WriteString("Enter canonical dry-run • Esc back")
+	} else if m.stage == installPrepared && m.request.Mode == "dry-run" && m.result.Admitted {
+		b.WriteString("Enter execute zero-effect dry-run • Esc back")
 	} else {
 		b.WriteString("Esc back")
 	}

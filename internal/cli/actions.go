@@ -419,16 +419,29 @@ func defaultInstallWorkflow() install.Workflow {
 		gates[target] = install.GateOff
 	}
 	policy, _ := install.NewRoutePolicy(gates)
-	return install.NewExplainWorkflow(policy, install.TransactionInput{})
+	return install.NewCanonicalWorkflow(policy, install.TransactionInput{})
 }
 
 func (a *App) installExplainAction(ctx context.Context, request install.Request) install.Result {
-	workflow := a.InstallWorkflow
-	if workflow == nil {
-		workflow = defaultInstallWorkflow()
-	}
+	workflow := a.installWorkflow()
 	_, result := workflow.Prepare(ctx, request)
 	return result
+}
+
+func (a *App) installDryRunAction(ctx context.Context, request install.Request) install.Result {
+	workflow := a.installWorkflow()
+	prepared, result := workflow.Prepare(ctx, request)
+	if result.Error != nil || !result.Admitted {
+		return result
+	}
+	return workflow.Execute(ctx, prepared, nil)
+}
+
+func (a *App) installWorkflow() install.Workflow {
+	if a.InstallWorkflow != nil {
+		return a.InstallWorkflow
+	}
+	return defaultInstallWorkflow()
 }
 
 func (a *App) checkForUpdateAction(ctx context.Context) UpdateAvailability {
