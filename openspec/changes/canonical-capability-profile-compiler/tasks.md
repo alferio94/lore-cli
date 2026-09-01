@@ -53,7 +53,7 @@
 - [x] 4.6 Add TUI explain parity in `internal/tui/install_{model,update,view,cmd}.go` with no-TTY rejection, reduced-motion, navigation/cancel/retry/resize, and typed route/status parity; test D35-D43 and D65; completed by independent PASS on commit `31790f27e53ad2a1cf7fbb7153e512b875d04b64` and verify report `sdd/canonical-capability-profile-compiler/verify-report-W4-4.6`.
 - [x] 4.7 Route canonical dry-run through the shared Workflow using sealed Prepare/Result only, with zero side effects, typed phase/event ordering, and canonical-vs-legacy route markers; test D2, D28-D34, D44-D49.
 - [x] 4.8 Route canonical apply through the same Workflow into accepted W3.3 seams with confirmation, signal 130 precedence, residual-risk code 3, rollback/recovery, and `transaction*`/`profile_store*` authority boundaries; test D3, D9-D10, D17-D23, D29-D34.
-- [ ] 4.9 Keep explicit legacy dry-run/apply behind `LegacyAdapter` only; emit warnings/route markers, block fallback/kill-switch shortcuts, and keep retirement/removal out of W4; test D4-D5, D48-D55.
+- [x] 4.9 Keep explicit legacy dry-run/apply behind `LegacyAdapter` only; emit warnings/route markers, block fallback/kill-switch shortcuts, and keep retirement/removal out of W4; test D4-D5, D48-D55.
 - [ ] 4.10 Add goldens and stream guards in `internal/{cli,tui,install}/testdata` for human/json/TUI outputs, redaction, path/no-effect checks, and four-target E→D→A matrices; cover D63-D69.
 - [ ] 4.11 Run focused race/vet/full-suite and cross-platform CI checks with an independent verify slice before closing any W4 task; isolate the known baseline and keep W3.2/B13 and W3.3 lineage untouched.
 
