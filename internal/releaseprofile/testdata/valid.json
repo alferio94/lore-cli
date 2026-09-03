@@ -1,0 +1,1 @@
+{"schema":"lore.release-profile/v1","id":"prerelease-opencode-e","version":1,"release":{"version":"v0.3.0-rc.1","channel":"prerelease","artifact_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"rollback":{"version":"v0.2.0","profile_id":"default-off"},"gates":{"pi":"off","opencode":"E","codex":"off","antigravity":"off"}}
