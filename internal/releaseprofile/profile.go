@@ -112,7 +112,7 @@ func Resolve(embedded Embedded, release ReleaseIdentity, rollback RollbackIdenti
 	if embedded == (Embedded{}) && release == (ReleaseIdentity{}) && rollback == (RollbackIdentity{}) {
 		return Snapshot{StatusDefaultOff, allOffProfile()}
 	}
-	invalid := Snapshot{StatusInvalid, allOffProfile()}
+	invalid := invalidSnapshot()
 	payload, err := base64.StdEncoding.Strict().DecodeString(embedded.PayloadBase64)
 	if err != nil {
 		return invalid
@@ -149,6 +149,7 @@ func validSHA256(value string) bool {
 	decoded, err := hex.DecodeString(value)
 	return err == nil && len(decoded) == sha256.Size && value == hex.EncodeToString(decoded)
 }
+func invalidSnapshot() Snapshot { return Snapshot{StatusInvalid, allOffProfile()} }
 func allOffProfile() Profile {
 	return Profile{Schema: Schema, ID: "default-off", Gates: TargetGates{GateOff, GateOff, GateOff, GateOff}}
 }
