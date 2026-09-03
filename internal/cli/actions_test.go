@@ -290,12 +290,29 @@ func TestStatusActionFailsClosedWhenLegacyMigrationCredentialBackendUnavailable(
 }
 
 func TestStatusAndDoctorActionsPreserveDiagnosticSemantics(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	root := filepath.Join(homeDir, ".config", "opencode")
+	if err := os.MkdirAll(filepath.Join(root, "prompts"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s) error = %v", root, err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "prompts", "lore.md"), []byte("prompt"), 0o644); err != nil {
+		t.Fatalf("WriteFile(lore prompt) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "opencode.json"), []byte(`{"agent":{"lore":{"prompt":"{file:./prompts/lore.md}"}},"mcp":{"lore":{"headers":{"Authorization":"Bearer fixture-token"}}}}`), 0o600); err != nil {
+		t.Fatalf("WriteFile(opencode.json) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "tui.json"), []byte(`{"plugin":[]}`), 0o600); err != nil {
+		t.Fatalf("WriteFile(tui.json) error = %v", err)
+	}
+
 	store := &fakeStore{path: "/tmp/lore/config.json", loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token"}}
 	client := &fakeClient{
 		readyErr: &httpclient.ReadinessError{APIError: httpclient.APIError{StatusCode: 503, Code: "service_unavailable", Message: "service not ready", RequestID: "req-ready"}},
 		meErr:    &httpclient.UnauthorizedError{APIError: httpclient.APIError{StatusCode: 401, Code: "unauthorized", Message: "invalid token", RequestID: "req-auth"}},
 	}
 	app, _, _ := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
+	app.UserHomeDir = func() (string, error) { return homeDir, nil }
 	app.LookPath = func(name string) (string, error) { return "", errors.New("missing") }
 
 	status := app.statusAction(context.Background())

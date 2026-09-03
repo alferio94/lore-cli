@@ -32,17 +32,11 @@ import (
 func TestInitialRenderShowsMenuHintsAndInstallEntry(t *testing.T) {
 	m := newModel(cli.InteractiveActions{})
 	view := m.View()
-	for _, want := range []string{"Lore", "Status", "Login", "Install", "Pi", "Antigravity", "password", "compatibility", "Explicit subcommands remain available"} {
+	for _, want := range []string{"Lore", "Status", "Login", "Install", "Explicit subcommands remain available"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view missing %q:\n%s", want, view)
 		}
 	}
-	// 3.x docs/UI slice: the install menu description MUST mention
-	// the bounded opencode-plugins bundle and the explicit exclusion
-	// list so the user sees the bounded surface before they enter the
-	// install flow. The bubbletea view wraps descriptions on word
-	// boundaries, so we assert against the underlying items[]
-	// description field instead of the wrapped view.
 	var installDescription string
 	for _, item := range m.items {
 		if item.key == "install" {
@@ -53,19 +47,14 @@ func TestInitialRenderShowsMenuHintsAndInstallEntry(t *testing.T) {
 	if installDescription == "" {
 		t.Fatal("install menu item description not found")
 	}
-	for _, want := range []string{
-		"no Lore-managed plugin registrations",
-		"no legacy runtime/statusline plugins",
-		"native prompt refs",
-		"config-only projection",
-		"default Lore MCP",
-		"default_agent=lore",
-		"`mode: \"subagent\"`",
-		"no `permission: \"allow\"` bypass",
-		"fail-closed",
-	} {
+	for _, want := range []string{"supported harnesses", "Pi remains recommended", "roadmap targets"} {
 		if !strings.Contains(installDescription, want) {
 			t.Fatalf("install menu description missing %q:\n%s", want, installDescription)
+		}
+	}
+	for _, notWant := range []string{"default_agent=lore", "`mode: \"subagent\"`", "no `permission: \"allow\"` bypass", "fail-closed"} {
+		if strings.Contains(installDescription, notWant) {
+			t.Fatalf("install menu description should stay concise; found %q in:\n%s", notWant, installDescription)
 		}
 	}
 }
@@ -120,6 +109,11 @@ func TestInstallActionRendersSuccessAndLoginRemediationStates(t *testing.T) {
 		}
 		updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 		m = updated.(model)
+		if cmd != nil || !m.installConfirmationPending {
+			t.Fatal("second install enter should show confirmation before install")
+		}
+		updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		m = updated.(model)
 		updated, _ = m.Update(cmd())
 		m = updated.(model)
 		if got := m.statusTitle; got != "Lore install" {
@@ -148,6 +142,11 @@ func TestInstallActionRendersSuccessAndLoginRemediationStates(t *testing.T) {
 		}
 		updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 		m = updated.(model)
+		if cmd != nil || !m.installConfirmationPending {
+			t.Fatal("second install enter should show confirmation before install")
+		}
+		updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		m = updated.(model)
 		updated, _ = m.Update(cmd())
 		m = updated.(model)
 		if got := m.statusTone; got != toneError {
@@ -159,6 +158,39 @@ func TestInstallActionRendersSuccessAndLoginRemediationStates(t *testing.T) {
 	})
 }
 
+func TestRootRenderUsesSingleColumnShell(t *testing.T) {
+	m := newModel(cli.InteractiveActions{})
+	m.width = 140
+	m.height = 36
+	view := m.View()
+	for _, notWant := range []string{"Actions", "Action details", "Choose an action from the left", "Tab switch panel"} {
+		if strings.Contains(view, notWant) {
+			t.Fatalf("root view contains sidebar/detail marker %q:\n%s", notWant, view)
+		}
+	}
+	for _, want := range []string{"Choose an action", "› Status", "Inspect config"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("root view missing %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestCompactRootSuppressesUnselectedHelpAndKeepsActiveHint(t *testing.T) {
+	m := newModel(cli.InteractiveActions{})
+	m.width = 38
+	m.height = 12
+	view := m.View()
+	if !strings.Contains(view, "Inspect config") {
+		t.Fatalf("compact view should keep selected help visible:\n%s", view)
+	}
+	if strings.Contains(view, "Use email + password") || strings.Contains(view, "Run actionable diagnostics") {
+		t.Fatalf("compact view should suppress unselected help:\n%s", view)
+	}
+	if strings.Contains(view, "Checking for Lore CLI updates") {
+		t.Fatalf("compact/short view should suppress decorative update copy:\n%s", view)
+	}
+}
+
 func TestInstallTargetSelectionSurfacesPiDefaultAndAntigravityMVPGuidance(t *testing.T) {
 	m := newModel(cli.InteractiveActions{})
 	for i := 0; i < 4; i++ {
@@ -167,27 +199,23 @@ func TestInstallTargetSelectionSurfacesPiDefaultAndAntigravityMVPGuidance(t *tes
 	}
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(model)
-	for _, want := range []string{"Pi remains the default recommended path.", "Antigravity", "Full Antigravity projection", "global ~/.gemini/config/mcp_config.json", "Choose an install target:", "Selected target: Pi"} {
+	for _, want := range []string{"Pi remains the default recommended path.", "Antigravity", "Full Gemini prompt/profile projection", "Choose an install target:", "Selected target: Pi", "? details"} {
 		if !strings.Contains(m.statusBody, want) {
 			t.Fatalf("statusBody = %q, want updated install guidance containing %q", m.statusBody, want)
 		}
 	}
-	// 3.x docs/UI slice: the target-selection body must surface the
-	// bounded opencode-plugins bundle and the explicit exclusion list
-	// so the user sees them when picking the OpenCode target.
-	for _, want := range []string{
+	for _, notWant := range []string{
+		"global ~/.gemini/config/mcp_config.json",
 		"opencode-plugins",
 		"legacy runtime/statusline plugins are not copied",
 		"registers no Lore-managed plugins",
 		"sdd-engram/logo exclusions",
-		"default Lore MCP",
 		"default_agent=lore",
 		"`mode: \"subagent\"`",
 		"no `permission: \"allow\"` bypass",
-		"fail-closed",
 	} {
-		if !strings.Contains(m.statusBody, want) {
-			t.Fatalf("statusBody missing %q:\n%s", want, m.statusBody)
+		if strings.Contains(m.statusBody, notWant) {
+			t.Fatalf("statusBody should keep long technical detail behind disclosure; found %q in:\n%s", notWant, m.statusBody)
 		}
 	}
 	if strings.Contains(m.statusBody, "Only Pi is selectable in this slice.") {
@@ -195,6 +223,90 @@ func TestInstallTargetSelectionSurfacesPiDefaultAndAntigravityMVPGuidance(t *tes
 	}
 	if strings.Contains(m.statusBody, "Claude Code — Recommended") {
 		t.Fatalf("statusBody = %q, did not expect non-Pi targets to be marked recommended", m.statusBody)
+	}
+}
+
+func TestInstallDetailsTogglePreservesSelectionAndEscHidesDetails(t *testing.T) {
+	m := moveSelectionToInstall(t, newModel(cli.InteractiveActions{}))
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = updated.(model)
+	selected := m.selectedInstallTarget().ID
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	m = updated.(model)
+	if !m.detailsVisible || m.selectedInstallTarget().ID != selected {
+		t.Fatalf("detailsVisible=%v selected=%q, want details preserving %q", m.detailsVisible, m.selectedInstallTarget().ID, selected)
+	}
+	if !strings.Contains(m.statusBody, "Details for") || !strings.Contains(m.statusBody, "Press ? to hide") {
+		t.Fatalf("statusBody missing details disclosure copy:\n%s", m.statusBody)
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(model)
+	if m.detailsVisible || m.selectedInstallTarget().ID != selected || !m.installSelectionPending {
+		t.Fatalf("Esc should hide details and keep picker; details=%v selected=%q picker=%v", m.detailsVisible, m.selectedInstallTarget().ID, m.installSelectionPending)
+	}
+}
+
+func TestInstallConfirmationCancelReturnsToPickerWithoutExecution(t *testing.T) {
+	calls := 0
+	m := moveSelectionToInstall(t, newModel(cli.InteractiveActions{Install: func(context.Context) cli.ActionReport {
+		calls++
+		return cli.ActionReport{Title: "install", ExitCode: 0}
+	}}))
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	if cmd != nil || !m.installConfirmationPending {
+		t.Fatal("install should enter confirmation without starting")
+	}
+	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(model)
+	if cmd != nil || calls != 0 || !m.installSelectionPending || m.installConfirmationPending {
+		t.Fatalf("cancel should return to picker without execution; calls=%d picker=%v confirmation=%v", calls, m.installSelectionPending, m.installConfirmationPending)
+	}
+}
+
+func TestUnavailableInstallTargetCannotExecute(t *testing.T) {
+	calls := 0
+	m := moveSelectionToInstall(t, newModel(cli.InteractiveActions{InstallTarget: func(context.Context, install.TargetID) cli.ActionReport {
+		calls++
+		return cli.ActionReport{Title: "install", ExitCode: 0}
+	}}))
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	m.installTargetIndex = 1 // Claude Code roadmap entry; normal navigation skips it.
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	if cmd != nil || calls != 0 || m.installConfirmationPending {
+		t.Fatalf("unavailable target should not execute or confirm; calls=%d confirmation=%v", calls, m.installConfirmationPending)
+	}
+	if !strings.Contains(m.statusTitle, "unavailable") {
+		t.Fatalf("statusTitle = %q, want unavailable guard", m.statusTitle)
+	}
+}
+
+func TestResultScreenEscBackAndQuit(t *testing.T) {
+	m := newModel(cli.InteractiveActions{Status: func(context.Context) cli.ActionReport {
+		return cli.ActionReport{Title: "Lore status", ExitCode: 0, Checks: []output.Check{{Name: "healthz", Status: output.StatusOK, Detail: "server is live"}}}
+	}})
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	updated, _ = m.Update(cmd())
+	m = updated.(model)
+	if m.focus != focusDetail || !strings.Contains(m.statusBody, "server is live") {
+		t.Fatalf("status result not shown in shell: focus=%v body=%q", m.focus, m.statusBody)
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(model)
+	if m.focus != focusMenu {
+		t.Fatalf("Esc from result focus=%v, want menu", m.focus)
+	}
+	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	m = updated.(model)
+	if cmd == nil || !m.quitting {
+		t.Fatalf("q from menu should quit; cmd nil=%v quitting=%v", cmd == nil, m.quitting)
 	}
 }
 
@@ -242,8 +354,13 @@ func TestInstallTargetSelectionAllowsAntigravityExecutionWithoutPiBackupPrompt(t
 	}
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(model)
+	if cmd != nil || !m.installConfirmationPending {
+		t.Fatal("enter on Antigravity should show confirmation before install")
+	}
+	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
 	if cmd == nil {
-		t.Fatal("enter on Antigravity should start install")
+		t.Fatal("confirmed Antigravity install should start install")
 	}
 	if m.installBackupDecisionPending {
 		t.Fatal("Antigravity should not trigger Pi full-backup confirmation")
@@ -315,8 +432,13 @@ func TestInstallDetectsExistingPiAndPromptsForFullBackupBeforeMutation(t *testin
 
 	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(model)
+	if cmd != nil || !m.installConfirmationPending {
+		t.Fatal("second install enter should show confirmation before install")
+	}
+	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
 	if cmd != nil {
-		t.Fatal("second install enter should prompt for full-backup decision before install mutation")
+		t.Fatal("confirmed install should prompt for full-backup decision before mutation")
 	}
 	if calls != 0 {
 		t.Fatalf("install calls = %d, want 0 before deciding how to handle existing ~/.pi", calls)
@@ -347,6 +469,8 @@ func TestInstallBackupDecisionDeclineContinuesWithoutFullBackup(t *testing.T) {
 	m = moveSelectionToInstall(t, m)
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(model)
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(model)
@@ -383,6 +507,8 @@ func TestInstallBackupDecisionAcceptContinuesInstall(t *testing.T) {
 	m = moveSelectionToInstall(t, m)
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(model)
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(model)
@@ -431,6 +557,11 @@ func TestInstallBackupDecisionUsesSharedPlanExecutePath(t *testing.T) {
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(model)
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	if cmd != nil || !m.installConfirmationPending {
+		t.Fatal("shared plan should show install confirmation before execution")
+	}
+	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(model)
 	if cmd != nil {
 		t.Fatal("shared plan with existing ~/.pi should prompt before execution")
@@ -521,16 +652,16 @@ func TestLogoutSelectionRendersIdempotentLocalOnlyResult(t *testing.T) {
 	if got := m.statusTitle; got != "Logout complete" {
 		t.Fatalf("statusTitle = %q, want Logout complete", got)
 	}
-	if !strings.Contains(m.View(), "removed local config") || !strings.Contains(m.View(), "no server-side token revocation") {
-		t.Fatalf("view = %q, want first logout result", m.View())
+	if !strings.Contains(m.statusBody, "removed local config") || !strings.Contains(m.statusBody, "no server-side token revocation") {
+		t.Fatalf("statusBody = %q, want first logout result", m.statusBody)
 	}
 
 	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(model)
 	updated, _ = m.Update(cmd())
 	m = updated.(model)
-	if !strings.Contains(m.View(), "no local config remained") {
-		t.Fatalf("view = %q, want idempotent repeat result", m.View())
+	if !strings.Contains(m.statusBody, "no local config remained") {
+		t.Fatalf("statusBody = %q, want idempotent repeat result", m.statusBody)
 	}
 	if calls != 2 {
 		t.Fatalf("logout calls = %d, want 2", calls)
@@ -652,6 +783,75 @@ func TestUpdateSelectionPromptsThenRunsBinaryOnlyApply(t *testing.T) {
 	}
 	if got := m.statusTone; got != toneSuccess {
 		t.Fatalf("statusTone = %q, want success", got)
+	}
+}
+
+func TestUpdateConfirmationAcceptsEnter(t *testing.T) {
+	calls := 0
+	m := newModel(cli.InteractiveActions{Update: func(context.Context) cli.ActionReport {
+		calls++
+		return cli.ActionReport{Title: "Lore update", ExitCode: 0}
+	}})
+	updated, _ := m.Update(updateCheckMsg{availability: cli.UpdateAvailability{Checked: true, Available: true, CurrentVersion: "v1.0.0", LatestVersion: "v1.1.0"}})
+	m = updated.(model)
+	m = moveSelectionToUpdate(t, m)
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	if cmd != nil || !m.updateConfirmationPending {
+		t.Fatal("selecting update should open confirmation before apply")
+	}
+	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	if cmd == nil || !m.loading {
+		t.Fatal("enter should confirm update and start async apply")
+	}
+	updated, _ = m.Update(cmd())
+	m = updated.(model)
+	if calls != 1 {
+		t.Fatalf("update calls = %d, want 1", calls)
+	}
+}
+
+func TestInstallBackupDecisionAcceptsEnter(t *testing.T) {
+	plan := install.PiInstallPlan{
+		Layout:     install.ResolvePiLayout(t.TempDir()),
+		ExistingPi: install.ExistingPiState{Exists: true, Path: "/tmp/test-home/.pi", Kind: "directory"},
+		FullBackup: &install.FullPiBackupPlan{BackupPath: "/tmp/test-backup", ManifestPath: "/tmp/test-backup/lore-pi-backup.json"},
+	}
+	execCalls := 0
+	var executedPlan install.PiInstallPlan
+	m := newModel(cli.InteractiveActions{
+		PlanPiInstall: func(context.Context) (install.PiInstallPlan, cli.ActionReport, bool) {
+			return plan, cli.ActionReport{Title: "Lore install"}, true
+		},
+		ExecutePiInstall: func(_ context.Context, got install.PiInstallPlan) cli.ActionReport {
+			execCalls++
+			executedPlan = got
+			return cli.ActionReport{Title: "Lore install", ExitCode: 0}
+		},
+	})
+	m = moveSelectionToInstall(t, m)
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	if cmd != nil || !m.installBackupDecisionPending {
+		t.Fatal("enter from install confirmation should open full backup decision")
+	}
+	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	if cmd == nil || !m.loading {
+		t.Fatal("enter should accept full backup decision and start install")
+	}
+	updated, _ = m.Update(cmd())
+	m = updated.(model)
+	if execCalls != 1 {
+		t.Fatalf("exec calls = %d, want 1", execCalls)
+	}
+	if executedPlan.FullBackup == nil {
+		t.Fatal("enter should preserve scheduled full backup")
 	}
 }
 
@@ -860,6 +1060,167 @@ func TestLoginSuccessAndFailureStates(t *testing.T) {
 			t.Fatalf("statusBody = %q, want compatibility guidance", m.statusBody)
 		}
 	})
+}
+
+func TestDetailBodyScrollKeysClampAndJump(t *testing.T) {
+	m := newModel(cli.InteractiveActions{})
+	m.width = 80
+	m.height = 12
+	m.focus = focusDetail
+	m.statusTitle = "Long report"
+	m.statusBody = strings.Join([]string{"line 01", "line 02", "line 03", "line 04", "line 05", "line 06", "line 07", "line 08", "line 09", "line 10", "line 11", "line 12"}, "\n")
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = updated.(model)
+	if got := m.bodyScroll.Offset; got != 1 {
+		t.Fatalf("down offset = %d, want 1", got)
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	m = updated.(model)
+	if got := m.bodyScroll.Offset; got != 0 {
+		t.Fatalf("k offset = %d, want 0", got)
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyPgDown})
+	m = updated.(model)
+	if m.bodyScroll.Offset <= 0 {
+		t.Fatalf("pgdown offset = %d, want advanced", m.bodyScroll.Offset)
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
+	m = updated.(model)
+	bottom := m.currentBodyViewport().maxOffset()
+	if got := m.bodyScroll.Offset; got != bottom {
+		t.Fatalf("G offset = %d, want bottom %d", got, bottom)
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	m = updated.(model)
+	if got := m.bodyScroll.Offset; got != 0 {
+		t.Fatalf("g offset = %d, want top", got)
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	m = updated.(model)
+	if got := m.bodyScroll.Offset; got != 0 {
+		t.Fatalf("up at top offset = %d, want clamped top", got)
+	}
+}
+
+func TestPickerKeysDoNotScrollUntilInstallDetailsVisible(t *testing.T) {
+	m := moveSelectionToInstall(t, newModel(cli.InteractiveActions{}))
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	startTarget := m.installTargetIndex
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = updated.(model)
+	if m.installTargetIndex == startTarget {
+		t.Fatalf("down should move install picker selection while details hidden")
+	}
+	if got := m.bodyScroll.Offset; got != 0 {
+		t.Fatalf("picker offset = %d, want 0", got)
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	m = updated.(model)
+	detailTarget := m.installTargetIndex
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = updated.(model)
+	if got := m.installTargetIndex; got != detailTarget {
+		t.Fatalf("down in details changed target to %d, want %d", got, detailTarget)
+	}
+	if m.bodyScroll.Offset == 0 && m.currentBodyViewport().maxOffset() > 0 {
+		t.Fatalf("down in details should scroll when details are longer than viewport")
+	}
+}
+
+func TestBodyScrollResetsOnContentTargetAndScreenChanges(t *testing.T) {
+	m := newModel(cli.InteractiveActions{})
+	m.width = 80
+	m.height = 12
+	m.focus = focusDetail
+	m.statusTitle = "Long report"
+	m.statusBody = strings.Repeat("long report line\n", 20)
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyPgDown})
+	m = updated.(model)
+	if m.bodyScroll.Offset == 0 {
+		t.Fatal("expected setup scroll offset")
+	}
+	updated, _ = m.Update(actionMsg{kind: actionStatus, title: "New report", body: "short report"})
+	m = updated.(model)
+	if got := m.bodyScroll.Offset; got != 0 {
+		t.Fatalf("actionMsg reset offset = %d, want 0", got)
+	}
+
+	m = moveSelectionToInstall(t, newModel(cli.InteractiveActions{}))
+	m.width = 80
+	m.height = 12
+	m.focus = focusDetail
+	m.statusBody = strings.Repeat("old content\n", 20)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyPgDown})
+	m = updated.(model)
+	if m.bodyScroll.Offset == 0 {
+		t.Fatal("expected setup scroll offset before install selection")
+	}
+	m.focus = focusMenu
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	if got := m.bodyScroll.Offset; got != 0 {
+		t.Fatalf("install selection reset offset = %d, want 0", got)
+	}
+
+	m = moveSelectionToUpdate(t, newModel(cli.InteractiveActions{Update: func(context.Context) cli.ActionReport { return cli.ActionReport{Title: "Lore update"} }}))
+	m.width = 80
+	m.height = 12
+	m.updateChecked = true
+	m.updateAvailable = true
+	m.focus = focusDetail
+	m.statusBody = strings.Repeat("old content\n", 20)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyPgDown})
+	m = updated.(model)
+	if m.bodyScroll.Offset == 0 {
+		t.Fatal("expected setup scroll offset before update confirmation")
+	}
+	m.focus = focusMenu
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	if got := m.bodyScroll.Offset; got != 0 {
+		t.Fatalf("update confirmation reset offset = %d, want 0", got)
+	}
+
+	m = moveSelectionToInstall(t, newModel(cli.InteractiveActions{}))
+	m.width = 80
+	m.height = 12
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	m = updated.(model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyPgDown})
+	m = updated.(model)
+	if m.bodyScroll.Offset == 0 && m.currentBodyViewport().maxOffset() > 0 {
+		t.Fatal("expected details scroll offset")
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	m = updated.(model)
+	if got := m.bodyScroll.Offset; got != 0 {
+		t.Fatalf("hide details reset offset = %d, want 0", got)
+	}
+}
+
+func TestWindowResizeClampsBodyScroll(t *testing.T) {
+	m := newModel(cli.InteractiveActions{})
+	m.width = 80
+	m.height = 10
+	m.focus = focusDetail
+	m.statusTitle = "Long report"
+	m.statusBody = strings.Repeat("long report line\n", 30)
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
+	m = updated.(model)
+	if m.bodyScroll.Offset == 0 {
+		t.Fatal("expected bottom offset before resize")
+	}
+	updated, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 40})
+	m = updated.(model)
+	maxOffset := m.currentBodyViewport().maxOffset()
+	if m.bodyScroll.Offset > maxOffset {
+		t.Fatalf("resize offset = %d, want <= %d", m.bodyScroll.Offset, maxOffset)
+	}
 }
 
 func moveSelectionToInstall(t *testing.T, m model) model {

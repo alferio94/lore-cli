@@ -112,6 +112,8 @@ type InteractiveActions struct {
 	InstallTarget    func(ctx context.Context, target install.TargetID) ActionReport
 	PlanPiInstall    func(ctx context.Context) (install.PiInstallPlan, ActionReport, bool)
 	ExecutePiInstall func(ctx context.Context, plan install.PiInstallPlan) ActionReport
+	InstallWorkflow  install.Workflow
+	LegacyAdapter    install.LegacyAdapter
 	CheckForUpdate   func(ctx context.Context) UpdateAvailability
 	Update           func(ctx context.Context) ActionReport
 }
@@ -132,6 +134,8 @@ func (a *App) InteractiveActions() InteractiveActions {
 			return a.planPiInstallAction(ctx, installCommandOptions{})
 		},
 		ExecutePiInstall: a.executePiInstallAction,
+		InstallWorkflow:  a.InstallWorkflow,
+		LegacyAdapter:    a.LegacyAdapter,
 		CheckForUpdate:   a.checkForUpdateAction,
 		Update:           a.updateApplyAction,
 	}
@@ -411,6 +415,118 @@ func (a *App) installAction(ctx context.Context) ActionReport {
 	return a.installActionWithOptions(ctx, installCommandOptions{})
 }
 
+func defaultInstallWorkflow() install.Workflow {
+	gates := make(map[install.TargetID]install.Gate, len(install.SupportedTargets()))
+	for _, target := range install.SupportedTargets() {
+		gates[target] = install.GateOff
+	}
+	policy, _ := install.NewRoutePolicy(gates)
+	return install.NewCanonicalWorkflow(policy, install.TransactionInput{})
+}
+
+func (a *App) installExplainAction(ctx context.Context, request install.Request) install.Result {
+	workflow := a.installWorkflow()
+	_, result := workflow.Prepare(ctx, request)
+	return result
+}
+
+func (a *App) installDryRunAction(ctx context.Context, request install.Request) install.Result {
+	workflow := a.installWorkflow()
+	prepared, result := workflow.Prepare(ctx, request)
+	if result.Error != nil || !result.Admitted {
+		return result
+	}
+	return workflow.Execute(ctx, prepared, nil)
+}
+
+func (a *App) installApplyAction(ctx context.Context, request install.Request, observer install.Observer) install.Result {
+	workflow := a.installWorkflow()
+	prepared, result := workflow.Prepare(ctx, request)
+	if result.Error != nil || !result.Admitted {
+		return result
+	}
+	return a.confirmAndExecuteInstall(ctx, request, result, func() install.Result {
+		return workflow.Execute(ctx, prepared, observer)
+	})
+}
+
+func (a *App) installLegacyAction(ctx context.Context, request install.Request, observer install.Observer) install.Result {
+	if a.LegacyAdapter == nil {
+		return install.CompleteExplicitLegacy(request, false)
+	}
+	prepared, result := a.LegacyAdapter.PrepareLegacy(ctx, request)
+	if result.Error != nil || !result.Admitted {
+		return result
+	}
+	execute := func() install.Result { return a.LegacyAdapter.ExecuteLegacy(ctx, prepared, observer) }
+	if request.Mode == install.ModeLegacyDryRun {
+		return execute()
+	}
+	return a.confirmAndExecuteInstall(ctx, request, result, execute)
+}
+
+func (a *App) confirmAndExecuteInstall(ctx context.Context, request install.Request, result install.Result, execute func() install.Result) install.Result {
+	if request.AssumeYes {
+		return execute()
+	}
+	confirmed, interactive := false, false
+	if a.InstallConfirm != nil {
+		var err error
+		confirmed, err = a.InstallConfirm()
+		interactive = err == nil
+	} else if stdin, inOK := a.Stdin.(*os.File); inOK {
+		if stdout, outOK := a.Stdout.(*os.File); outOK && term.IsTerminal(stdin.Fd()) && term.IsTerminal(stdout.Fd()) {
+			interactive = true
+			fmt.Fprintf(a.Stderr, "Apply this %s install plan? [y/N] ", result.Route)
+			answer := make(chan bool, 1)
+			go func() {
+				line, err := bufio.NewReader(stdin).ReadString('\n')
+				answer <- err == nil && strings.EqualFold(strings.TrimSpace(line), "y")
+			}()
+			select {
+			case confirmed = <-answer:
+			case <-ctx.Done():
+				result.Status, result.Interrupted = install.StatusCancelled, true
+				return result
+			}
+		}
+	}
+	if !interactive {
+		return install.ConfirmationRequiredResult(request)
+	}
+	if !confirmed {
+		result.Status, result.ChangedState = install.StatusCancelled, false
+		return result
+	}
+	return execute()
+}
+
+// appLegacyAdapter is the sole bridge to the pre-W4 target Plan/Execute paths.
+type appLegacyAdapter struct{ app *App }
+
+func (a *appLegacyAdapter) PrepareLegacy(_ context.Context, request install.Request) (install.Prepared, install.Result) {
+	return install.PrepareExplicitLegacy(request)
+}
+
+func (a *appLegacyAdapter) ExecuteLegacy(ctx context.Context, prepared install.Prepared, _ install.Observer) install.Result {
+	request, ok := install.ConsumeExplicitLegacy(prepared)
+	if !ok {
+		return install.CompleteExplicitLegacy(request, false)
+	}
+	report := a.app.installActionWithOptions(ctx, installCommandOptions{
+		DryRun: request.Mode == install.ModeLegacyDryRun, Yes: true,
+		Target: request.Target, Components: request.Components,
+	})
+	return install.CompleteExplicitLegacy(request, report.ExitCode == 0)
+}
+
+func (a *App) installWorkflow() install.Workflow {
+	if a.InstallWorkflow != nil {
+		return a.InstallWorkflow
+	}
+	return defaultInstallWorkflow()
+}
+
 func (a *App) checkForUpdateAction(ctx context.Context) UpdateAvailability {
 	current := a.BuildInfo.Normalized()
 	execPath, err := a.resolveExecutablePath()
@@ -646,8 +762,8 @@ func (a *App) installAntigravityActionWithOptions(ctx context.Context, opts inst
 		output.Check{Name: "install", Status: status, Detail: formatSharedInstallSummary(result)},
 	)
 	if antigravityMCPInstalled(result.Manifest.Components) {
-		detail := fmt.Sprintf("managed MCP config path=%s server_url=%s auth_header=plaintext-bearer-token", result.Layout.Paths["mcp_config"], preflight.ServerURL)
-		report.Checks = append(report.Checks, output.Check{Name: "mcp-config", Status: output.StatusWarn, Detail: detail, Action: "Rerun lore install after lore login if the saved session changes or if the Lore server URL changes."})
+		detail := fmt.Sprintf("managed MCP config path=%s lore_server_url=%s context7_server_url=%s auth_header=plaintext-bearer-token", result.Layout.Paths["mcp_config"], preflight.ServerURL, install.Context7MCPRemoteURL)
+		report.Checks = append(report.Checks, output.Check{Name: "mcp-config", Status: output.StatusWarn, Detail: detail, Action: "Rerun lore install after lore login if the saved Lore session changes or if the Lore server URL changes; Context7 uses the public no-auth remote URL."})
 	}
 	report.Checks = append(report.Checks,
 		output.Check{Name: "manifest", Status: output.StatusOK, Detail: fmt.Sprintf("verified %s auth_mode=%s managed_files=%d managed_overlays=%d", result.Layout.ManifestPath, result.Manifest.AuthMode, len(result.Manifest.ManagedFiles), len(result.Manifest.ManagedAgentOverlays))},
@@ -721,7 +837,7 @@ func (a *App) installCodexActionWithOptions(ctx context.Context, opts installCom
 		output.Check{Name: "manifest", Status: output.StatusOK, Detail: fmt.Sprintf("verified %s auth_mode=%s managed_files=%d", result.Layout.ManifestPath, result.Manifest.AuthMode, len(result.Manifest.ManagedFiles))},
 	)
 	report.Checks = append(report.Checks,
-		output.Check{Name: "codex-config", Status: output.StatusWarn, Detail: fmt.Sprintf("managed MCP config path=%s server_url=%s auth_header=plaintext-bearer-token; Lore also manages ~/.codex/AGENTS.md and ~/.codex/skills/.", result.Layout.Paths["config_toml"], preflight.ServerURL), Action: "Rerun lore install after lore login if the saved session changes or if the Lore server URL changes."},
+		output.Check{Name: "codex-config", Status: output.StatusWarn, Detail: fmt.Sprintf("managed MCP config path=%s lore_server_url=%s context7_server_url=%s auth_header=plaintext-bearer-token; Lore also manages ~/.codex/AGENTS.md and ~/.codex/skills/.", result.Layout.Paths["config_toml"], preflight.ServerURL, install.Context7MCPRemoteURL), Action: "Rerun lore install after lore login if the saved Lore session changes or if the Lore server URL changes; Context7 uses the public no-auth remote URL."},
 	)
 	return report
 }
@@ -798,8 +914,8 @@ func (a *App) installOpenCodeActionWithOptions(ctx context.Context, opts install
 		output.Check{Name: "manifest", Status: output.StatusOK, Detail: fmt.Sprintf("verified %s auth_mode=%s managed_files=%d", result.Layout.ManifestPath, result.Manifest.AuthMode, len(result.Manifest.ManagedFiles))},
 	)
 	if openCodeMCPInstalled(result.Manifest.Components) {
-		detail := fmt.Sprintf("managed opencode.json path=%s server_url=%s auth_header=plaintext-bearer-token (saved token written under mcp.lore.headers.Authorization; the install summary never embeds the saved token)", result.Layout.Paths["opencode_json"], preflight.ServerURL)
-		report.Checks = append(report.Checks, output.Check{Name: "opencode-config", Status: output.StatusWarn, Detail: detail, Action: "Rerun lore install after lore login if the saved session changes or if the Lore server URL changes."})
+		detail := fmt.Sprintf("managed opencode.json path=%s lore_server_url=%s context7_server_url=%s auth_header=plaintext-bearer-token (saved token written under mcp.lore.headers.Authorization; Context7 has no headers; the install summary never embeds the saved token)", result.Layout.Paths["opencode_json"], preflight.ServerURL, install.Context7MCPRemoteURL)
+		report.Checks = append(report.Checks, output.Check{Name: "opencode-config", Status: output.StatusWarn, Detail: detail, Action: "Rerun lore install after lore login if the saved Lore session changes or if the Lore server URL changes; Context7 uses the public no-auth remote URL."})
 	}
 	return report
 }
@@ -1095,7 +1211,7 @@ func formatCodexInstallSummary(result install.InstallResult) string {
 	parts = append(parts, formatManagedFileSummaryParts(result.Summary.Created, "create")...)
 	parts = append(parts, formatManagedFileSummaryParts(result.Summary.Updated, "update")...)
 	parts = append(parts, formatManagedFileSummaryParts(result.Summary.Unchanged, "unchanged")...)
-	parts = append(parts, "mcp=remote", "runner=none", "bootstrap=none")
+	parts = append(parts, "mcp=remote", "mcp_providers=lore,context7", "context7_auth=none", "context7_tool_approvals=none", "runner=none", "bootstrap=none")
 	if len(result.Summary.Failed) > 0 {
 		parts = append(parts, fmt.Sprintf("findings=%s", strings.Join(result.Summary.Failed, "; ")))
 	}
@@ -1109,6 +1225,7 @@ func formatAntigravityInstallSummary(result install.InstallResult) string {
 		len(result.Summary.Created), len(result.Summary.Updated), len(result.Summary.Unchanged),
 		len(result.Summary.BackedUp), len(result.Summary.Failed))
 	parts := []string{summary}
+	parts = append(parts, "mcp_providers=lore,context7", "context7_auth=none", "context7_ownership=fail-closed-on-foreign")
 	parts = append(parts, formatManagedFileSummaryParts(result.Summary.Created, "create")...)
 	parts = append(parts, formatManagedFileSummaryParts(result.Summary.Updated, "update")...)
 	parts = append(parts, formatManagedFileSummaryParts(result.Summary.Unchanged, "unchanged")...)
@@ -1142,7 +1259,10 @@ func formatOpenCodeInstallSummary(result install.InstallResult) string {
 	parts = append(parts, formatManagedFileSummaryParts(result.Summary.Conflicted, "conflicted")...)
 	parts = append(parts,
 		"mcp=remote",
+		"mcp_providers=lore,context7",
+		"context7_auth=none",
 		"mcp_lore_ownership=fail-closed-on-foreign",
+		"mcp_context7_ownership=fail-closed-on-foreign",
 		"runner=none",
 		"bootstrap=none",
 		"opencode_background_subagents_env=OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true",
@@ -1178,7 +1298,10 @@ func formatOpenCodeInstallPlanSummary(plan install.InstallPlan, dryRun bool) str
 		fmt.Sprintf("target=%s", plan.Layout.RootDir),
 		fmt.Sprintf("manifest=%s", plan.Layout.ManifestPath),
 		"mcp=remote",
+		"mcp_providers=lore,context7",
+		"context7_auth=none",
 		"mcp_lore_ownership=fail-closed-on-foreign",
+		"mcp_context7_ownership=fail-closed-on-foreign",
 		"runner=none",
 		"bootstrap=none",
 		"opencode_background_subagents_env=OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true",
@@ -1209,6 +1332,9 @@ func formatCodexInstallPlanSummary(plan install.InstallPlan, dryRun bool) string
 		fmt.Sprintf("target=%s", plan.Layout.RootDir),
 		fmt.Sprintf("manifest=%s", plan.Layout.ManifestPath),
 		"mcp=remote",
+		"mcp_providers=lore,context7",
+		"context7_auth=none",
+		"context7_tool_approvals=none",
 		"runner=none",
 		"bootstrap=none",
 	}
@@ -1234,7 +1360,7 @@ func formatAntigravityInstallPlanSummary(plan install.InstallPlan, dryRun bool) 
 	if promptPath, ok := plan.Layout.Paths["shared_prompt"]; ok && promptPath != "" {
 		parts = append(parts, fmt.Sprintf("prompt=%s", promptPath))
 	}
-	parts = append(parts, "mcp_optional=true")
+	parts = append(parts, "mcp_providers=lore,context7", "context7_auth=none", "context7_ownership=fail-closed-on-foreign")
 	if dryRun {
 		parts = append(parts, "mode=dry-run")
 	}

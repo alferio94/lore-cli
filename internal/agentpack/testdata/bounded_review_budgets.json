@@ -1,0 +1,26 @@
+{
+  "version": "1",
+  "note": "Reviewed ceilings and minimum benefits are exact values derived from the corrected fallback role baselines and the measured rendered candidate bodies; they are not percentage targets. A candidate regression requires an explicit fixture review.",
+  "roles": [
+    {
+      "role": "judge",
+      "max_candidate_bytes": 1021,
+      "max_candidate_chars": 1021,
+      "max_candidate_lines": 6,
+      "max_candidate_tokens": 256,
+      "min_reduction_bytes": 408,
+      "min_reduction_chars": 404,
+      "required_fixture_versions": "invariants/v1, semantics/v2"
+    },
+    {
+      "role": "fix",
+      "max_candidate_bytes": 977,
+      "max_candidate_chars": 977,
+      "max_candidate_lines": 6,
+      "max_candidate_tokens": 245,
+      "min_reduction_bytes": 7,
+      "min_reduction_chars": 3,
+      "required_fixture_versions": "invariants/v1, semantics/v2"
+    }
+  ]
+}

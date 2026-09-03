@@ -5,6 +5,10 @@
       "headers": {
         "Authorization": "Bearer {{LORE_API_TOKEN}}"
       }
+    },
+    "context7": {
+      "url": "https://mcp.context7.com/mcp",
+      "lifecycle": "keep-alive"
     }
   }
 }

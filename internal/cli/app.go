@@ -8,7 +8,9 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/alferio94/lore-cli/internal/agentconfig"
 	"github.com/alferio94/lore-cli/internal/auth"
@@ -59,6 +61,9 @@ type App struct {
 	ExecutablePath       func() (string, error)
 	TUIRunner            func(context.Context, InteractiveActions) error
 	UpdateServiceFactory func() (cliupdate.Service, error)
+	InstallWorkflow      install.Workflow
+	LegacyAdapter        install.LegacyAdapter
+	InstallConfirm       func() (bool, error)
 	BuildInfo            version.Info
 	// AgentConfigStore is the optional agent-config store for read-only diagnostics
 	// in status/doctor and install summaries. When nil, agent-config checks are skipped.
@@ -77,12 +82,14 @@ func New(configDir string, stdout, stderr io.Writer, buildInfo version.Info) *Ap
 		ClientFactory: func(baseURL string) (httpclient.Client, error) {
 			return httpclient.New(baseURL, 0)
 		},
-		LookPath:       exec.LookPath,
-		UserHomeDir:    os.UserHomeDir,
-		ExecutablePath: os.Executable,
-		BuildInfo:      buildInfo.Normalized(),
+		LookPath:        exec.LookPath,
+		UserHomeDir:     os.UserHomeDir,
+		ExecutablePath:  os.Executable,
+		InstallWorkflow: defaultInstallWorkflow(),
+		BuildInfo:       buildInfo.Normalized(),
 	}
 	app.AgentConfigStore = agentconfig.NewStore(configDir)
+	app.LegacyAdapter = &appLegacyAdapter{app: app}
 	return app
 }
 
@@ -134,7 +141,7 @@ func (a *App) Run(args []string) int {
 		}
 		if err := a.TUIRunner(context.Background(), a.InteractiveActions()); err != nil {
 			fmt.Fprintf(a.Stderr, "failed to start interactive UI: %v\n", err)
-			return 1
+			return tuiErrorExit(err)
 		}
 		return 0
 	}
@@ -153,7 +160,7 @@ func (a *App) Run(args []string) int {
 		}
 		if err := a.TUIRunner(context.Background(), actions); err != nil {
 			fmt.Fprintf(a.Stderr, "failed to start interactive UI: %v\n", err)
-			return 1
+			return tuiErrorExit(err)
 		}
 		return 0
 	case "login":
@@ -179,6 +186,13 @@ func (a *App) Run(args []string) int {
 		a.printRootHelpTo(a.Stderr)
 		return 1
 	}
+}
+
+func tuiErrorExit(err error) int {
+	if usage, ok := err.(interface{ Usage() bool }); ok && usage.Usage() {
+		return 2
+	}
+	return 1
 }
 
 func (a *App) runLogin(actions InteractiveActions, args []string) int {
@@ -311,36 +325,92 @@ func (a *App) runDoctor(actions InteractiveActions, args []string) int {
 
 func (a *App) runInstall(_ InteractiveActions, args []string) int {
 	fs := newFlagSet("install", a.Stderr)
+	explain := fs.Bool("explain", false, "Explain the canonical sealed install plan without effects")
 	dryRun := fs.Bool("dry-run", false, "Show the selected install plan without mutating managed runtime files")
+	legacy := fs.Bool("legacy", false, "Select the explicit legacy compatibility route")
 	yes := fs.Bool("yes", false, "Accept the safe default full-backup behavior without prompting")
+	format := fs.String("format", "human", "Output format for canonical explain or dry-run (human or json)")
 	target := fs.String("target", string(install.DefaultInstallTarget()), "Install target (Pi stays the default recommended target; OpenCode, Codex, and Antigravity are supported managed targets)")
 	var components componentFlag
-	fs.Var(&components, "component", "Optional component override; repeat or use a comma-separated list (Pi, OpenCode, Codex, and Antigravity support core-pack; Pi/Codex/Antigravity/OpenCode also support lore-server-mcp; OpenCode also supports opencode-plugins)")
+	fs.Var(&components, "component", "Optional component override; repeat or use a comma-separated list (Pi, OpenCode, Codex, and Antigravity support core-pack; Pi/Codex/Antigravity/OpenCode also support lore-server-mcp and context7-mcp; OpenCode also supports opencode-plugins)")
 	fs.Usage = func() {
 		fmt.Fprintln(a.Stderr, "Usage: lore install [--dry-run] [--yes] [--target pi|opencode|codex|antigravity] [--component <id>]")
+		fmt.Fprintln(a.Stderr, "       lore install --explain [--format human|json] [--target <target>] [--component <id>]")
 		fmt.Fprintln(a.Stderr, "Install the Pi-first managed runtime using saved Lore login state.")
-		fmt.Fprintln(a.Stderr, "Pi is the default and installs the portable Lore agent pack, hosted Lore MCP via pi-mcp-adapter, and an extended-skills bundle (skill-creator, skill-registry, judgment-day).")
+		fmt.Fprintln(a.Stderr, "Pi is the default and installs the portable Lore agent pack, hosted Lore MCP via pi-mcp-adapter, default Context7 MCP, and an extended-skills bundle (skill-creator, skill-registry, judgment-day).")
 		fmt.Fprintln(a.Stderr, "Antigravity is a Full projection target with the portable pack, lore-server-mcp, and extended-skills bundle.")
-		fmt.Fprintln(a.Stderr, "Codex writes managed AGENTS.md, config.toml remote MCP config, skills/*.md, and manifest into ~/.codex. No codex exec runner or bootstrap behavior is installed.")
+		fmt.Fprintln(a.Stderr, "Codex writes managed AGENTS.md, config.toml remote MCP config, sdd-strong/mid/cheap profiles, skills/*.md, and manifest into ~/.codex; it enforces features.multi_agent=true with backup evidence.")
+		fmt.Fprintln(a.Stderr, "Codex grants only explicit Lore MCP per-tool approvals for lore_me, lore_project_*, and lore_memory_* in the managed Lore MCP block; Context7 MCP is configured with no auth headers and no tool auto-approvals; hooks.json and MCP handshake/transport changes are out of scope.")
+		fmt.Fprintln(a.Stderr, "No codex exec runner, Codex bootstrap, live MCP connectivity guarantee, or hook automation is installed.")
 		fmt.Fprintln(a.Stderr, "Use --component to override defaults. Without flags, a complete target-specific default install is selected. Rerun lore install to refresh the extended-skills bundle; lore update does not touch skill files or managed runtime content.")
 		fmt.Fprintln(a.Stderr, "Healthy saved OS keychain-backed login metadata is reused automatically; Claude Code remains Coming soon.")
-		fmt.Fprintln(a.Stderr, "Pi uses hosted Lore MCP via pi-mcp-adapter by default; the deprecated lore-memory.ts extension has been removed and is not available. The optional pi-extensions bundle (lore-footer.ts only) is available via --component pi-extensions but is not installed by default.")
-		fmt.Fprintln(a.Stderr, "Antigravity install writes ~/.gemini/config/agents/lore.json for the managed Lore profile and, when MCP is selected, writes ~/.gemini/config/mcp_config.json with the Lore /v1/mcp server URL plus a plaintext Authorization bearer token.")
-		fmt.Fprintln(a.Stderr, "Codex install writes ~/.codex/config.toml with a managed Lore remote MCP entry pointing at /v1/mcp and a plaintext Authorization bearer token under [mcp_servers.lore.http_headers].")
-		fmt.Fprintln(a.Stderr, "OpenCode install writes ~/.config/opencode/AGENTS.md, prompts/<agent>.md, prompts/sdd/<phase>.md, skills/<phase>/SKILL.md, opencode.json, lore-install.json, the native-safe opencode-plugins bundle (tui.json with no Lore-managed plugin registrations), and a default mcp.lore remote MCP entry. The opencode-plugins and lore-server-mcp components are on by default for OpenCode; explicit exclusions (sdd-engram, logo) are never bundled or registered, and legacy runtime/statusline plugins (background-agents.ts, lore-models.ts, model-variants.ts, opencode-subagent-statusline.ts) are absent/cleaned only when prior Lore ownership is proven. The saved token is persisted in plaintext under mcp.lore.headers.Authorization and the install summary surfaces a plaintext-token warning that never embeds the saved token. OpenCode also gets default_agent=lore plus a `mode: \"primary\"` orchestrator, a `lore-worker` repository worker subagent, `mode: \"subagent\"` on every non-lore Lore-managed agent, and native prompt refs under ./prompts. Background subagent execution is OpenCode-owned; start OpenCode with OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true when background behavior is expected. User-chosen `model` and `variant` values on any Lore-managed agent are preserved across reinstall. The installer never grants a `permission: \"allow\"` (or any other) bypass on `agent.lore`. Ownership contract: opencode.json mcp.lore blocks are only overwritten when recognizably Lore-owned (legacy managed_by marker, or the same remote /v1/mcp URL with Authorization); a non-Lore-owned mcp.lore block fails closed with a typed conflict error, managed backup-path guidance, and a resolution message that names the conflicting block. Migration from older managed OpenCode installs is backup-first: restore any changed or deleted managed file from ~/.config/opencode/backups/<timestamp>/, then rerun lore install --target opencode to reconverge to native agents and prompt files. The tui.json file is always Lore-owned.")
+		fmt.Fprintln(a.Stderr, "Pi uses hosted Lore MCP via pi-mcp-adapter and default Context7 MCP by default; the deprecated lore-memory.ts extension has been removed and is not available. The optional pi-extensions bundle (lore-footer.ts only) is available via --component pi-extensions but is not installed by default.")
+		fmt.Fprintln(a.Stderr, "Antigravity install writes ~/.gemini/config/agents/lore.json for the managed Lore profile and, when MCP is selected, writes ~/.gemini/config/mcp_config.json with the Lore /v1/mcp server URL plus a plaintext Authorization bearer token and Context7 at https://mcp.context7.com/mcp with no auth headers.")
+		fmt.Fprintln(a.Stderr, "Codex install writes ~/.codex/config.toml with enforced [features].multi_agent=true, managed Lore and Context7 remote MCP entries, a plaintext Authorization bearer token under [mcp_servers.lore.http_headers], and explicit Lore MCP per-tool approvals only; Context7 has no auto-approvals. SDD lane profiles are rendered separately.")
+		fmt.Fprintln(a.Stderr, "OpenCode install writes ~/.config/opencode/AGENTS.md, prompts/<agent>.md, prompts/sdd/<phase>.md, skills/<phase>/SKILL.md, opencode.json, lore-install.json, the native-safe opencode-plugins bundle (tui.json with no Lore-managed plugin registrations), and default mcp.lore plus mcp.context7 remote MCP entries. The opencode-plugins, lore-server-mcp, and context7-mcp components are on by default for OpenCode; explicit exclusions (sdd-engram, logo) are never bundled or registered, and legacy runtime/statusline plugins (background-agents.ts, lore-models.ts, model-variants.ts, opencode-subagent-statusline.ts) are absent/cleaned only when prior Lore ownership is proven. The saved token is persisted in plaintext under mcp.lore.headers.Authorization; Context7 uses https://mcp.context7.com/mcp with no auth headers; the install summary surfaces a plaintext-token warning that never embeds the saved token. OpenCode also gets default_agent=lore plus a `mode: \"primary\"` orchestrator, a `lore-worker` repository worker subagent, `mode: \"subagent\"` on every non-lore Lore-managed agent, and native prompt refs under ./prompts. Background subagent execution is OpenCode-owned; start OpenCode with OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true when background behavior is expected. User-chosen `model` and `variant` values on any Lore-managed agent are preserved across reinstall. The installer never grants a `permission: \"allow\"` (or any other) bypass on `agent.lore`. Ownership contract: opencode.json mcp.lore blocks are only overwritten when recognizably Lore-owned (legacy managed_by marker, or the same remote /v1/mcp URL with Authorization), and mcp.context7 blocks are only overwritten when they already point at the managed no-auth Context7 remote; a non-Lore-owned mcp.lore block or conflicting mcp.context7 block fails closed with a typed conflict error, managed backup-path guidance, and a resolution message that names the conflicting block. Opt-in/out for Context7 is out of scope for this change. Migration from older managed OpenCode installs is backup-first: restore any changed or deleted managed file from ~/.config/opencode/backups/<timestamp>/, then rerun lore install --target opencode to reconverge to native agents and prompt files. The tui.json file is always Lore-owned.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
-		return 1
+		if err == flag.ErrHelp {
+			return 1
+		}
+		return 2
 	}
 	if fs.NArg() != 0 {
 		fs.Usage()
-		return 1
+		return 2
 	}
 
-	report := a.installActionWithOptions(context.Background(), installCommandOptions{DryRun: *dryRun, Yes: *yes, Target: install.TargetID(strings.TrimSpace(*target)), Components: components.ComponentIDs()})
-	fmt.Fprint(a.Stdout, output.RenderChecks(report.Title, report.Checks))
-	return report.ExitCode
+	selectedFormat, ok := parseInstallFormat(*format)
+	if !ok {
+		fmt.Fprintln(a.Stderr, "install format must be human or json")
+		fs.Usage()
+		return 2
+	}
+	if *explain && (*dryRun || *legacy || *yes) {
+		fmt.Fprintln(a.Stderr, "--explain cannot be combined with --dry-run, --legacy, or --yes")
+		fs.Usage()
+		return 2
+	}
+	if *yes && *dryRun {
+		fmt.Fprintln(a.Stderr, "--yes is valid only for apply")
+		fs.Usage()
+		return 2
+	}
+	request := install.Request{Target: install.TargetID(strings.TrimSpace(*target)), Components: components.ComponentIDs(), AssumeYes: *yes}
+	if _, err := install.ResolveInstallTarget(request.Target); err != nil {
+		fmt.Fprintln(a.Stdout, err)
+		fmt.Fprintln(a.Stdout, install.FormatTargetSelection(install.DefaultTargets()))
+		return 1
+	}
+	if *explain {
+		request.Mode = install.ModeExplain
+		return a.presentInstallResult(selectedFormat, a.installExplainAction(context.Background(), request))
+	}
+	if *dryRun {
+		request.Mode = install.ModeDryRun
+		if *legacy {
+			request.Mode = install.ModeLegacyDryRun
+			return a.presentInstallResult(selectedFormat, a.installLegacyAction(context.Background(), request, nil))
+		}
+		return a.presentInstallResult(selectedFormat, a.installDryRunAction(context.Background(), request))
+	}
+	request.Mode = install.ModeApply
+	if *legacy {
+		request.Mode = install.ModeLegacyApply
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	var observer install.Observer
+	if selectedFormat == installFormatHuman {
+		observer = install.ObserverFunc(func(event install.Event) {
+			fmt.Fprintf(a.Stderr, "progress phase=%s kind=%s completed=%d total=%d\n", event.Phase, event.Kind, event.Progress.Completed, event.Progress.Total)
+		})
+	}
+	if *legacy {
+		return a.presentInstallResult(selectedFormat, a.installLegacyAction(ctx, request, observer))
+	}
+	return a.presentInstallResult(selectedFormat, a.installApplyAction(ctx, request, observer))
 }
 
 func (a *App) runUpdate(args []string) int {

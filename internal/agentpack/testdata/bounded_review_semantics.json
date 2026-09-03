@@ -1,0 +1,147 @@
+{
+  "version": 2,
+  "scope": "literal markers plus authority-shaped JSON acceptance vectors; prose markers do not replace runtime-equivalent result validation",
+  "privacy": {
+    "static_only": true,
+    "forbidden_text": [
+      "{{",
+      "}}",
+      "/Users/",
+      "C:\\",
+      "<target>",
+      "<diff>",
+      "<findings>",
+      "<standards>"
+    ]
+  },
+  "judge": {
+    "role": "judge",
+    "required_markers": [
+      "Bounded Review Judge",
+      "Blind and read-only",
+      "return JSON findings only",
+      "No extra fields",
+      "schema_version",
+      "capability",
+      "review_id",
+      "scope_digest",
+      "Finding keys are unique",
+      "WARNING with warning_kind real|theoretical",
+      "warning_kind is forbidden",
+      "repo-relative",
+      "location/evidence are structured",
+      "\"findings\"",
+      "\"finding_key\"",
+      "\"location\"",
+      "\"evidence\"",
+      "\"fix_intent\""
+    ],
+    "forbidden_text": [
+      "Judge A",
+      "Judge B",
+      "\"applied\"",
+      "\"unapplied\"",
+      "approve write",
+      "may modify code"
+    ],
+    "semantic_rules": [
+      "authority-shaped closed Judge result is accepted by the pinned runtime-equivalent vector validator",
+      "blindness with no sibling leakage",
+      "read-only authority",
+      "WARNING warning_kind required and CRITICAL/SUGGESTION warning_kind forbidden",
+      "no extra result fields"
+    ]
+  },
+  "fix": {
+    "role": "fix",
+    "required_markers": [
+      "Bounded Review Fix",
+      "Approved allowlist",
+      "confirmed CRITICAL/real WARNING",
+      "SUGGESTION, theoretical WARNING, suspects, and contradictions never authorize writes",
+      "No unrelated refactors",
+      "fresh blind Judge pair",
+      "\"applied\"",
+      "\"unapplied\"",
+      "\"files\"",
+      "\"locations\"",
+      "\"summary\"",
+      "\"reason\""
+    ],
+    "forbidden_text": [
+      "Judge A",
+      "Judge B",
+      "approve yourself",
+      "write from suspects",
+      "write from theoretical"
+    ],
+    "semantic_rules": [
+      "authority-shaped closed Fix result is accepted by the pinned runtime-equivalent vector validator",
+      "only explicit approval and confirmed CRITICAL or real WARNING authorize writes",
+      "SUGGESTION and theoretical WARNING never authorize writes",
+      "applied/unapplied keys are unique and disjoint",
+      "every code-changing fix requires fresh blind rejudgment"
+    ]
+  },
+  "rejected_mutations": [
+    {
+      "name": "judge_semantic_marker_omission",
+      "role": "judge",
+      "remove_marker": "Blind and read-only",
+      "expected": "rejected"
+    },
+    {
+      "name": "judge_result_field_omission",
+      "role": "judge",
+      "remove_marker": "\"fix_intent\"",
+      "expected": "rejected"
+    },
+    {
+      "name": "fix_approval_marker_omission",
+      "role": "fix",
+      "remove_marker": "Approved allowlist",
+      "expected": "rejected"
+    },
+    {
+      "name": "fix_suggestion_nonwrite_omission",
+      "role": "fix",
+      "remove_marker": "SUGGESTION, theoretical WARNING, suspects, and contradictions never authorize writes",
+      "expected": "rejected"
+    },
+    {
+      "name": "fix_rejudgment_marker_omission",
+      "role": "fix",
+      "remove_marker": "fresh blind Judge pair",
+      "expected": "rejected"
+    },
+    {
+      "name": "judge_sibling_leakage",
+      "role": "judge",
+      "append_text": "Judge A",
+      "expected": "rejected"
+    },
+    {
+      "name": "fix_dynamic_target",
+      "role": "fix",
+      "append_text": "{{target}}",
+      "expected": "rejected"
+    }
+  ],
+  "deterministic_order": {
+    "roles": [
+      "judge",
+      "fix"
+    ],
+    "severity_vocabulary": [
+      "CRITICAL",
+      "WARNING (real)",
+      "WARNING (theoretical)",
+      "SUGGESTION"
+    ],
+    "manifest_roles": [
+      "judge",
+      "fix"
+    ]
+  },
+  "runtime_result_vectors": "bounded_review_result_vectors.json mirrors judgment-review-envelopes.ts; acceptance is required in addition to prose markers."
+}

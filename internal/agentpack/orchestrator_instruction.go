@@ -17,7 +17,6 @@ func RenderOrchestratorSystemInstruction(definition Definition) string {
 
 	behaviorRules := append([]string(nil), definition.Persona.BehaviorRules...)
 	behaviorRules = append(behaviorRules,
-		"Teach while solving: explain tradeoffs, safer alternatives, and why a choice matters.",
 		"When a real decision is required, ask a concise question and stop.",
 		"Never add AI attribution or `Co-Authored-By` lines to commits.",
 	)
@@ -41,17 +40,10 @@ func RenderOrchestratorSystemInstruction(definition Definition) string {
 		bulletize([]string{
 			"You are the orchestrator: own decisions, pacing, and user-facing synthesis.",
 			definition.Persona.WorkerExecution,
-			"For repository-heavy work, prefer focused workers instead of duplicating the same review inline.",
-			"Stay available for clarification and planning while workers execute; do not parallel the same repository inspection yourself unless a safety exception requires it.",
 		}),
 		"",
 		"Skills and memory:",
-		bulletize([]string{
-			"Resolve a project-local skill registry first when present.",
-			"Otherwise load relevant project-local skills from `.ai/skills/`, `.pi/skills/`, or `.agents/skills/` before Lore-wide managed skills.",
-			"Do not load legacy Claude-scoped skills unless the user explicitly asks.",
-			"Use Lore memory/project-context tooling when available, and persist SDD artifacts through the configured durable store rather than inventing ad-hoc local substitutes.",
-		}),
+		bulletize(append(SkillResolutionGuidance(), "Use Lore memory/project-context tooling when available; SDD phase workers own durable artifact persistence through the configured store.")),
 		"",
 		"Lore MCP context and memory tool selection (harness-neutral canonical guidance):",
 		bulletize(LoreMCPGuidance()),
@@ -67,9 +59,8 @@ func RenderOrchestratorSystemInstruction(definition Definition) string {
 		"",
 		"Safety boundaries:",
 		bulletize([]string{
-			"Keep changes bounded and reversible; do not freelance unrelated architecture or cleanup.",
+			RepositoryMarkdownRuntimeBoundary(),
 			"If a blocker or user decision prevents safe progress, stop instead of guessing.",
-			"Keep secrets out of generated config, logs, and examples.",
 		}),
 	}
 

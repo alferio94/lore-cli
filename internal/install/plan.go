@@ -51,6 +51,7 @@ type PiInstallPlan struct {
 	ManagedAgentConflicts []string
 	FullBackup            *FullPiBackupPlan
 	Snapshot              string
+	BoundedReviewPaths    []string
 }
 
 func (p PiInstallPlan) InstallPlan() InstallPlan {
@@ -152,6 +153,13 @@ func (s Service) PlanPiInstall(req PiInstallRequest) (PiInstallPlan, error) {
 		actions = append(actions, *deprecatedMemoryAction)
 	}
 	plan.ManagedFileActions = actions
+	if containsComponent(components, ComponentBoundedReviewProjection) {
+		release, err := RenderBoundedReviewProjection(layout)
+		if err != nil {
+			return PiInstallPlan{}, err
+		}
+		plan.BoundedReviewPaths = []string{filepath.ToSlash(filepath.Join(boundedReviewReleaseRootRelativePath, "releases", release.name, "judge.md")), filepath.ToSlash(filepath.Join(boundedReviewReleaseRootRelativePath, "releases", release.name, "fix.md")), filepath.ToSlash(filepath.Join(boundedReviewReleaseRootRelativePath, "releases", release.name, "manifest.json")), filepath.ToSlash(filepath.Join(boundedReviewReleaseRootRelativePath, "current.json"))}
+	}
 
 	snapshot, err := snapshotTree(layout.PiDir)
 	if err != nil {

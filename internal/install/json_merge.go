@@ -37,15 +37,20 @@ func mergeAntigravityMCPConfig(existing, desired []byte) ([]byte, error) {
 	if err := json.Unmarshal(desired, &overlay); err != nil {
 		return nil, fmt.Errorf("decode rendered mcp_config.json: %w", err)
 	}
+	if err := validateAntigravityContext7Ownership(base, overlay); err != nil {
+		return nil, err
+	}
 	merged := mergeMaps(base, overlay)
 	if desiredServers, ok := overlay["mcpServers"].(map[string]any); ok {
-		if desiredLore, present := desiredServers["lore"]; present {
-			servers, ok := merged["mcpServers"].(map[string]any)
-			if !ok {
-				servers = map[string]any{}
-				merged["mcpServers"] = servers
+		servers, ok := merged["mcpServers"].(map[string]any)
+		if !ok {
+			servers = map[string]any{}
+			merged["mcpServers"] = servers
+		}
+		for _, name := range []string{"lore", Context7MCPServerName} {
+			if desiredServer, present := desiredServers[name]; present {
+				servers[name] = desiredServer
 			}
-			servers["lore"] = desiredLore
 		}
 	}
 	data, err := json.MarshalIndent(merged, "", "  ")
@@ -53,6 +58,45 @@ func mergeAntigravityMCPConfig(existing, desired []byte) ([]byte, error) {
 		return nil, fmt.Errorf("encode merged mcp_config.json: %w", err)
 	}
 	return append(data, '\n'), nil
+}
+
+func validateAntigravityContext7Ownership(existing, desired map[string]any) error {
+	desiredServers, ok := desired["mcpServers"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	desiredContext7, present := desiredServers[Context7MCPServerName]
+	if !present {
+		return nil
+	}
+	existingServers, ok := existing["mcpServers"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	existingContext7, present := existingServers[Context7MCPServerName]
+	if !present || antigravityContext7ServerMatches(existingContext7, desiredContext7) {
+		return nil
+	}
+	return fmt.Errorf("refusing to overwrite user-owned mcpServers.%s block in mcp_config.json: remove or update the existing Context7 MCP entry before rerunning `lore install --target antigravity`", Context7MCPServerName)
+}
+
+func antigravityContext7ServerMatches(existing, desired any) bool {
+	existingObject, ok := existing.(map[string]any)
+	if !ok {
+		return false
+	}
+	desiredObject, ok := desired.(map[string]any)
+	if !ok {
+		return false
+	}
+	existingURL, _ := existingObject["serverUrl"].(string)
+	desiredURL, _ := desiredObject["serverUrl"].(string)
+	if strings.TrimRight(strings.TrimSpace(existingURL), "/") != strings.TrimRight(strings.TrimSpace(desiredURL), "/") {
+		return false
+	}
+	_, existingHeaders := existingObject["headers"]
+	_, desiredHeaders := desiredObject["headers"]
+	return existingHeaders == desiredHeaders
 }
 
 // OpenCodeMCPConfigOwnershipError is the typed error returned by
@@ -80,6 +124,7 @@ func mergeAntigravityMCPConfig(existing, desired []byte) ([]byte, error) {
 // the saved token.
 type OpenCodeMCPConfigOwnershipError struct {
 	Path              string
+	ServerName        string
 	ExistingManagedBy string
 	ExistingType      string
 	ExistingURL       string
@@ -99,17 +144,33 @@ func (e *OpenCodeMCPConfigOwnershipError) Error() string {
 	if existingURL == "" {
 		existingURL = "<unknown>"
 	}
+	serverName := strings.TrimSpace(e.ServerName)
+	if serverName == "" {
+		serverName = opencodeMCPLoreKey
+	}
+	mcpPath := "mcp." + serverName
 	backup := strings.TrimSpace(e.BackupPath)
 	backupClause := ""
 	if backup != "" {
 		backupClause = " The managed backup path for an apply-time backup is " + backup + "."
 	}
+	if serverName == Context7MCPServerName {
+		return fmt.Sprintf(
+			"refusing to overwrite user-owned `%s` block in %s: existing managed_by=%q type=%q url=%q."+
+				" The installer only overwrites the mcp.context7 subtree when it already points at the managed Context7 remote endpoint without auth headers."+
+				" Resolution: edit %s and either point mcp.context7 at %s with type=remote and no headers"+
+				" or remove the mcp.context7 subtree, then rerun `lore install --target opencode`.%s",
+			mcpPath, e.Path, owner, existingType, existingURL,
+			e.Path, Context7MCPRemoteURL,
+			backupClause,
+		)
+	}
 	return fmt.Sprintf(
-		"refusing to overwrite non-Lore-owned `mcp.lore` block in %s: existing managed_by=%q type=%q url=%q."+
+		"refusing to overwrite non-Lore-owned `%s` block in %s: existing managed_by=%q type=%q url=%q."+
 			" The installer only overwrites the mcp.lore subtree when it is already recognizably Lore-owned (legacy managed_by=lore-cli, or remote /v1/mcp with Authorization)."+
 			" Resolution: edit %s and either point mcp.lore at your Lore /v1/mcp endpoint with an Authorization header"+
 			" or remove the mcp.lore subtree, then rerun `lore install --target opencode`.%s",
-		e.Path, owner, existingType, existingURL,
+		mcpPath, e.Path, owner, existingType, existingURL,
 		e.Path,
 		backupClause,
 	)
@@ -200,14 +261,37 @@ func inspectOpenCodeMCPConfigOwnership(existing []byte, relativePath string, des
 	if !ok {
 		return true, nil, nil
 	}
-	raw, present := mcp["lore"]
-	if !present {
-		return true, nil, nil
+	if raw, present := mcp["lore"]; present {
+		if !opencodeMCPLoreOwnership(raw, desiredLoreMCPURL) {
+			return false, openCodeMCPConflict(relativePath, opencodeMCPLoreKey, raw), nil
+		}
 	}
-	if opencodeMCPLoreOwnership(raw, desiredLoreMCPURL) {
-		return true, nil, nil
+	if raw, present := mcp[Context7MCPServerName]; present {
+		if !opencodeMCPContext7Ownership(raw) {
+			return false, openCodeMCPConflict(relativePath, Context7MCPServerName, raw), nil
+		}
 	}
-	// Foreign mcp.lore block: extract the redacted conflict details.
+	return true, nil, nil
+}
+
+func opencodeMCPContext7Ownership(block any) bool {
+	object, ok := block.(map[string]any)
+	if !ok {
+		return false
+	}
+	blockType, _ := object["type"].(string)
+	if strings.TrimSpace(blockType) != "remote" {
+		return false
+	}
+	url, _ := object["url"].(string)
+	if strings.TrimRight(strings.TrimSpace(url), "/") != strings.TrimRight(Context7MCPRemoteURL, "/") {
+		return false
+	}
+	_, hasHeaders := object["headers"]
+	return !hasHeaders
+}
+
+func openCodeMCPConflict(relativePath, serverName string, raw any) *OpenCodeMCPConfigOwnershipError {
 	object, _ := raw.(map[string]any)
 	managedBy := ""
 	if value, ok := object["managed_by"].(string); ok {
@@ -221,12 +305,13 @@ func inspectOpenCodeMCPConfigOwnership(existing []byte, relativePath string, des
 	if value, ok := object["url"].(string); ok {
 		existingURL = value
 	}
-	return false, &OpenCodeMCPConfigOwnershipError{
+	return &OpenCodeMCPConfigOwnershipError{
 		Path:              relativePath,
+		ServerName:        serverName,
 		ExistingManagedBy: managedBy,
 		ExistingType:      existingType,
 		ExistingURL:       existingURL,
-	}, nil
+	}
 }
 
 // migrateOpenCodeLegacyStaleShape returns a copy of the parsed

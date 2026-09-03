@@ -25,7 +25,7 @@ type piAdapter struct {
 
 func defaultPiAdapter() HarnessAdapter {
 	return piAdapter{
-		target: TargetPi,
+		target: TargetID(agentpack.HarnessPi),
 		title:  "Pi",
 		capabilities: map[CapabilityID]Capability{
 			CapabilityAgentPack: {
@@ -40,11 +40,21 @@ func defaultPiAdapter() HarnessAdapter {
 				Description:      "Hosted Lore MCP via pi-mcp-adapter — the default Pi backend.",
 				EnabledByDefault: true,
 			},
+			CapabilityContext7MCP: {
+				ID:               CapabilityContext7MCP,
+				Component:        ComponentContext7MCP,
+				Description:      "Managed Context7 remote MCP config using the public no-auth remote endpoint.",
+				EnabledByDefault: true,
+			},
 			CapabilityPiExtensions: {
 				ID:          CapabilityPiExtensions,
 				Component:   ComponentPiExtensions,
 				Description: "Optional Pi-native Lore extension bundle (lore-footer UI status only). The deprecated lore-memory extension has been removed and is not available.",
 				Optional:    true,
+			},
+			CapabilityBoundedReviewProjection: {
+				ID: CapabilityBoundedReviewProjection, Component: ComponentBoundedReviewProjection,
+				Description: "Install disabled, staged Pi-only bounded-review Judge/Fix metadata.", EnabledByDefault: true,
 			},
 			CapabilityExtendedSkills: {
 				ID:               CapabilityExtendedSkills,
@@ -236,8 +246,8 @@ func renderManagedAgentMarkdown(agent agentpack.ManagedAgent, packID string, con
 	if strings.TrimSpace(agent.Role) != "" {
 		builder.WriteString(fmt.Sprintf("role: %s\n", agent.Role))
 	}
-	if agent.Phase != "" {
-		builder.WriteString(fmt.Sprintf("phase: %s\n", renderManagedAgentPhase(agent.Phase)))
+	if phaseName := agentpack.PhaseEnvelopeName(agent.Phase); phaseName != "" {
+		builder.WriteString(fmt.Sprintf("phase: %s\n", phaseName))
 	}
 	if strings.TrimSpace(agent.RequiredEnvelope) != "" {
 		builder.WriteString(fmt.Sprintf("requiredEnvelope: %s\n", agent.RequiredEnvelope))
@@ -264,13 +274,6 @@ func renderManagedAgentMarkdown(agent agentpack.ManagedAgent, packID string, con
 		builder.WriteByte('\n')
 	}
 	return builder.String()
-}
-
-func renderManagedAgentPhase(phase agentpack.PhaseID) string {
-	if phase == agentpack.PhaseProposal {
-		return "propose"
-	}
-	return string(phase)
 }
 
 func piTemplateReplacements(definition agentpack.Definition, components []ComponentID) (map[string]string, error) {

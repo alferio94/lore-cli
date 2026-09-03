@@ -124,6 +124,9 @@ func (s Service) ExecuteCodexInstall(plan InstallPlan, opts InstallCommandOption
 			return result, fmt.Errorf("apply Codex %s: %w", relativePath, err)
 		}
 		appendInstallSummaryAction(&result.Summary, action.RelativePath, action.Action)
+		if action.BackupPath != "" {
+			result.Summary.BackedUp = append(result.Summary.BackedUp, action.RelativePath)
+		}
 		if relativePath == "AGENTS.md" {
 			canonicalPromptApplied = true
 		}
@@ -239,7 +242,7 @@ func planCodexRenderedFileAction(layout HarnessLayout, file RenderedFile, backup
 		return nil, PlanFileAction{}, fmt.Errorf("read existing file: %w", err)
 	}
 	if filepath.ToSlash(file.RelativePath) == codexConfigTomlRelativePath {
-		desired, err = mergeCodexMCPConfig(existing, desired, isCodexConfigTomlManaged(layout, absolutePath, existing))
+		desired, _, err = mergeCodexConfigToml(existing, desired, isCodexConfigTomlManaged(layout, absolutePath, existing))
 		if err != nil {
 			return nil, PlanFileAction{}, err
 		}
@@ -463,6 +466,133 @@ func codexBackupRelativePath(relativePath string) string {
 	}
 }
 
+type codexConfigMergeSummary struct {
+	MultiAgentOverridden bool
+}
+
+func mergeCodexConfigToml(existing, managed []byte, existingLoreOwned bool) ([]byte, codexConfigMergeSummary, error) {
+	merged, err := mergeCodexMCPConfig(existing, managed, existingLoreOwned)
+	if err != nil {
+		return nil, codexConfigMergeSummary{}, err
+	}
+	withFeatures, summary, err := mergeCodexRuntimeTable(withTrailingNewline(merged), "features", map[string]string{"multi_agent": "true"}, true)
+	if err != nil {
+		return nil, codexConfigMergeSummary{}, err
+	}
+	withAgents, _, err := mergeCodexRuntimeTable(withFeatures, "agents", map[string]string{"max_threads": "4", "max_depth": "2"}, false)
+	if err != nil {
+		return nil, codexConfigMergeSummary{}, err
+	}
+	return withAgents, summary, nil
+}
+
+func withTrailingNewline(data []byte) []byte {
+	if len(data) == 0 || data[len(data)-1] == '\n' {
+		return data
+	}
+	return append(append([]byte(nil), data...), '\n')
+}
+
+func mergeCodexRuntimeTable(existing []byte, table string, desired map[string]string, force bool) ([]byte, codexConfigMergeSummary, error) {
+	text := strings.ReplaceAll(string(existing), "\r\n", "\n")
+	lines := strings.Split(text, "\n")
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+
+	tableStart := -1
+	for i, line := range lines {
+		if path, ok := parseTOMLTableHeaderPath(line); ok {
+			if len(path) == 1 && path[0] == table {
+				tableStart = i
+			}
+			continue
+		}
+		path, ok := parseTOMLAssignmentKeyPath(line)
+		if ok && len(path) == 1 && path[0] == table {
+			return nil, codexConfigMergeSummary{}, fmt.Errorf("refusing to merge Codex config because %q is not a TOML table", table)
+		}
+	}
+
+	orderedKeys := codexRuntimeTableKeys(table)
+	if tableStart < 0 {
+		if len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) != "" {
+			lines = append(lines, "")
+		}
+		lines = append(lines, fmt.Sprintf("[%s]", table))
+		for _, key := range orderedKeys {
+			lines = append(lines, fmt.Sprintf("%s = %s", key, desired[key]))
+		}
+		return []byte(strings.Join(lines, "\n") + "\n"), codexConfigMergeSummary{}, nil
+	}
+
+	tableEnd := len(lines)
+	for i := tableStart + 1; i < len(lines); i++ {
+		if isTOMLTableHeader(lines[i]) {
+			tableEnd = i
+			break
+		}
+	}
+
+	seen := map[string]bool{}
+	summary := codexConfigMergeSummary{}
+	for i := tableStart + 1; i < tableEnd; i++ {
+		path, ok := parseTOMLAssignmentKeyPath(lines[i])
+		if !ok || len(path) != 1 {
+			continue
+		}
+		key := path[0]
+		want, managed := desired[key]
+		if !managed {
+			continue
+		}
+		seen[key] = true
+		if force {
+			if table == "features" && key == "multi_agent" && assignmentValueIsFalse(lines[i]) {
+				summary.MultiAgentOverridden = true
+			}
+			lines[i] = fmt.Sprintf("%s = %s", key, want)
+		}
+	}
+	missing := make([]string, 0, len(desired))
+	for _, key := range orderedKeys {
+		if !seen[key] {
+			missing = append(missing, fmt.Sprintf("%s = %s", key, desired[key]))
+		}
+	}
+	if len(missing) > 0 {
+		updated := make([]string, 0, len(lines)+len(missing))
+		updated = append(updated, lines[:tableEnd]...)
+		updated = append(updated, missing...)
+		updated = append(updated, lines[tableEnd:]...)
+		lines = updated
+	}
+	return []byte(strings.Join(lines, "\n") + "\n"), summary, nil
+}
+
+func codexRuntimeTableKeys(table string) []string {
+	switch table {
+	case "features":
+		return []string{"multi_agent"}
+	case "agents":
+		return []string{"max_threads", "max_depth"}
+	default:
+		return nil
+	}
+}
+
+func assignmentValueIsFalse(line string) bool {
+	equalsAt := findTOMLAssignmentEquals(strings.TrimSpace(line))
+	if equalsAt < 0 {
+		return false
+	}
+	value := strings.TrimSpace(strings.TrimSpace(line)[equalsAt+1:])
+	if commentAt := strings.Index(value, "#"); commentAt >= 0 {
+		value = strings.TrimSpace(value[:commentAt])
+	}
+	return value == "false"
+}
+
 func mergeCodexMCPConfig(existing, managed []byte, existingLoreOwned bool) ([]byte, error) {
 	managedText := strings.TrimSpace(string(managed))
 	if managedText == "" {
@@ -481,6 +611,15 @@ func mergeCodexMCPConfig(existing, managed []byte, existingLoreOwned bool) ([]by
 		end += len(codexMCPBlockEndMarker)
 		prefix := strings.TrimRight(existingText[:start], "\n")
 		suffix := strings.TrimLeft(existingText[end:], "\n")
+		var err error
+		prefix, err = stripObsoleteCodexLoreMCPEnvTables(prefix)
+		if err != nil {
+			return nil, err
+		}
+		suffix, err = stripObsoleteCodexLoreMCPEnvTables(suffix)
+		if err != nil {
+			return nil, err
+		}
 		parts := make([]string, 0, 3)
 		if strings.TrimSpace(prefix) != "" {
 			parts = append(parts, prefix)
@@ -498,6 +637,11 @@ func mergeCodexMCPConfig(existing, managed []byte, existingLoreOwned bool) ([]by
 	stripped := existingText
 	if existingLoreOwned {
 		stripped = stripLegacyCodexLoreMCPBlock(existingText)
+	}
+	var err error
+	stripped, err = stripObsoleteCodexLoreMCPEnvTables(stripped)
+	if err != nil {
+		return nil, err
 	}
 	stripped = strings.TrimRight(stripped, "\n")
 	if strings.TrimSpace(stripped) == "" {
@@ -530,6 +674,48 @@ func stripLegacyCodexLoreMCPBlock(existing string) string {
 	return strings.Join(kept, "\n")
 }
 
+func stripObsoleteCodexLoreMCPEnvTables(existing string) (string, error) {
+	lines := strings.Split(existing, "\n")
+	kept := make([]string, 0, len(lines))
+	for i := 0; i < len(lines); {
+		if !isCodexLoreEnvTableHeader(lines[i]) {
+			kept = append(kept, lines[i])
+			i++
+			continue
+		}
+
+		end := i + 1
+		for end < len(lines) && !isTOMLTableHeader(lines[end]) {
+			end++
+		}
+		if !isObsoleteCodexLoreMCPEnvTable(lines[i:end]) {
+			return "", fmt.Errorf("refusing to overwrite unowned [mcp_servers.lore.env] block in ~/.codex/config.toml; remove it or rerun after removing unsupported Lore MCP env keys")
+		}
+		i = end
+	}
+	return strings.Join(kept, "\n"), nil
+}
+
+func isObsoleteCodexLoreMCPEnvTable(lines []string) bool {
+	staleKeySeen := false
+	for _, line := range lines[1:] {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		path, ok := parseTOMLAssignmentKeyPath(line)
+		if !ok || len(path) != 1 || !isObsoleteCodexLoreMCPEnvKey(path[0]) {
+			return false
+		}
+		staleKeySeen = true
+	}
+	return staleKeySeen
+}
+
+func isObsoleteCodexLoreMCPEnvKey(key string) bool {
+	return key == "LORE_MCP_URL" || key == "LORE_MCP_AUTHORIZATION"
+}
+
 func codexConfigHasLoreMCPBlock(existing string) bool {
 	for _, line := range strings.Split(existing, "\n") {
 		if isCodexLoreTableHeader(line) {
@@ -547,7 +733,15 @@ func isCodexLoreTableHeader(line string) bool {
 	if len(path) == 2 {
 		return true
 	}
-	return len(path) == 3 && (path[2] == "headers" || path[2] == "http_headers")
+	if len(path) == 3 && (path[2] == "headers" || path[2] == "http_headers") {
+		return true
+	}
+	return len(path) >= 3 && path[2] == "tools"
+}
+
+func isCodexLoreEnvTableHeader(line string) bool {
+	path, ok := parseTOMLTableHeaderPath(line)
+	return ok && len(path) == 3 && path[0] == "mcp_servers" && path[1] == "lore" && path[2] == "env"
 }
 
 func isTOMLTableHeader(line string) bool {
@@ -576,6 +770,51 @@ func parseTOMLTableHeaderPath(line string) ([]string, bool) {
 		return nil, false
 	}
 	return parseTOMLDottedKeyPath(trimmed[openLen:closeAt])
+}
+
+func parseTOMLAssignmentKeyPath(line string) ([]string, bool) {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+		return nil, false
+	}
+	equalsAt := findTOMLAssignmentEquals(trimmed)
+	if equalsAt < 0 {
+		return nil, false
+	}
+	return parseTOMLDottedKeyPath(strings.TrimSpace(trimmed[:equalsAt]))
+}
+
+func findTOMLAssignmentEquals(line string) int {
+	quote := byte(0)
+	escaped := false
+	for i := 0; i < len(line); i++ {
+		ch := line[i]
+		if quote != 0 {
+			if quote == '"' && escaped {
+				escaped = false
+				continue
+			}
+			if quote == '"' && ch == '\\' {
+				escaped = true
+				continue
+			}
+			if ch == quote {
+				quote = 0
+			}
+			continue
+		}
+		if ch == '\'' || ch == '"' {
+			quote = ch
+			continue
+		}
+		if ch == '#' {
+			return -1
+		}
+		if ch == '=' {
+			return i
+		}
+	}
+	return -1
 }
 
 func findTOMLHeaderClose(line string, start int, closeToken string) int {

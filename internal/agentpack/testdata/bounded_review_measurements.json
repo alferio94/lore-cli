@@ -1,0 +1,91 @@
+{
+  "version": 1,
+  "measurement_kind": "actual lore-cli static rendered role asset cost",
+  "measurement_boundary": "Static role material delivered by the planned Pi runtime injection: the rendered judge.md or fix.md body only. The release manifest, current pointer, handshake metadata, target, standards, findings, and dynamic prompt are not role prompt context. The required replacement result schema is inline in each measured body.",
+  "observed_dynamic_runtime_cost": "unavailable",
+  "runtime_synthetic_proxy": "not counted; handoff-only synthetic proxy",
+  "roles": [
+    {
+      "role": "judge",
+      "baseline": {
+        "bytes": 1429,
+        "chars": 1425,
+        "lines": 34,
+        "estimated_tokens": 357
+      },
+      "candidate": {
+        "bytes": 1021,
+        "chars": 1021,
+        "lines": 6,
+        "estimated_tokens": 256
+      },
+      "required_result_schema": {
+        "bytes": 450,
+        "chars": 450,
+        "lines": 1,
+        "estimated_tokens": 113
+      },
+      "candidate_includes_required_result_schema": true,
+      "candidate_minus_baseline": {
+        "bytes": -408,
+        "chars": -404,
+        "lines": -28,
+        "estimated_tokens": -101
+      },
+      "absolute_delta": {
+        "bytes": 408,
+        "chars": 404,
+        "lines": 28,
+        "estimated_tokens": 101
+      },
+      "reduction_percent": 28.350877192982455,
+      "static_contract_version": "judgment-day-static/v1",
+      "static_contract_digest": "cc888a92b03cc2f4bed8abd0a5efe1bd010d94d1ff6a56cfbeda82c65ed57283",
+      "projection_id": "lore.judgment-day.bounded-review",
+      "invariant_fixture_version": 1,
+      "semantic_fixture_version": 2,
+      "handshake_compatibility": "compatible"
+    },
+    {
+      "role": "fix",
+      "baseline": {
+        "bytes": 984,
+        "chars": 980,
+        "lines": 25,
+        "estimated_tokens": 245
+      },
+      "candidate": {
+        "bytes": 977,
+        "chars": 977,
+        "lines": 6,
+        "estimated_tokens": 245
+      },
+      "required_result_schema": {
+        "bytes": 439,
+        "chars": 439,
+        "lines": 1,
+        "estimated_tokens": 110
+      },
+      "candidate_includes_required_result_schema": true,
+      "candidate_minus_baseline": {
+        "bytes": -7,
+        "chars": -3,
+        "lines": -19,
+        "estimated_tokens": 0
+      },
+      "absolute_delta": {
+        "bytes": 7,
+        "chars": 3,
+        "lines": 19,
+        "estimated_tokens": 0
+      },
+      "reduction_percent": 0.30612244897959184,
+      "static_contract_version": "judgment-day-static/v1",
+      "static_contract_digest": "cc888a92b03cc2f4bed8abd0a5efe1bd010d94d1ff6a56cfbeda82c65ed57283",
+      "projection_id": "lore.judgment-day.bounded-review",
+      "invariant_fixture_version": 1,
+      "semantic_fixture_version": 2,
+      "handshake_compatibility": "compatible"
+    }
+  ]
+}

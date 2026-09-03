@@ -9,9 +9,15 @@ type ComponentID string
 const (
 	ComponentCorePack         ComponentID = "core-pack"
 	ComponentLoreServerMCP    ComponentID = "lore-server-mcp"
+	ComponentContext7MCP      ComponentID = "context7-mcp"
 	ComponentPiExtensions     ComponentID = "pi-extensions"
 	ComponentExtendedSkills   ComponentID = "extended-skills"
 	ComponentCodexAgentConfig ComponentID = "codex-agent-config"
+	// ComponentBoundedReviewProjection installs disabled Pi-only Judge/Fix release data.
+	ComponentBoundedReviewProjection ComponentID = "bounded-review-projection"
+
+	Context7MCPServerName = "context7"
+	Context7MCPRemoteURL  = "https://mcp.context7.com/mcp"
 	// ComponentOpenCodePlugins is the bounded OpenCode TUI settings bundle.
 	// Native-agent installs copy no Lore-managed plugin .ts files and render
 	// tui.json with an empty native plugin list. Legacy Lore-owned runtime
@@ -73,6 +79,18 @@ func ComponentCatalog() map[ComponentID]Component {
 				TargetOpenCode:    true,
 			},
 		},
+		ComponentContext7MCP: {
+			ID:          ComponentContext7MCP,
+			Title:       "Context7 MCP",
+			Description: "Managed Context7 remote MCP configuration for supported targets.",
+			Optional:    false,
+			DefaultForTarget: map[TargetID]bool{
+				TargetPi:          true,
+				TargetAntigravity: true,
+				TargetCodex:       true,
+				TargetOpenCode:    true,
+			},
+		},
 		ComponentPiExtensions: {
 			ID:               ComponentPiExtensions,
 			Title:            "Pi Extensions",
@@ -89,6 +107,12 @@ func ComponentCatalog() map[ComponentID]Component {
 				TargetAntigravity: true,
 				TargetCodex:       true,
 			},
+		},
+		ComponentBoundedReviewProjection: {
+			ID:               ComponentBoundedReviewProjection,
+			Title:            "Bounded Review Projection",
+			Description:      "Disabled Pi-only bounded Judge/Fix release metadata; it never enables runtime mode.",
+			DefaultForTarget: map[TargetID]bool{TargetPi: true},
 		},
 		ComponentCodexAgentConfig: {
 			ID:          ComponentCodexAgentConfig,
@@ -113,7 +137,7 @@ func ComponentCatalog() map[ComponentID]Component {
 
 func DefaultComponentSelection(target TargetID) []ComponentID {
 	catalog := ComponentCatalog()
-	ordered := []ComponentID{ComponentCorePack, ComponentPiExtensions, ComponentLoreServerMCP, ComponentExtendedSkills, ComponentOpenCodePlugins}
+	ordered := []ComponentID{ComponentCorePack, ComponentPiExtensions, ComponentLoreServerMCP, ComponentContext7MCP, ComponentExtendedSkills, ComponentBoundedReviewProjection, ComponentOpenCodePlugins}
 	supported := supportedComponentsForTarget(target)
 	selection := make([]ComponentID, 0, len(ordered))
 	for _, id := range ordered {

@@ -175,6 +175,39 @@ func TestCodexAdapterRenderWithExtendedSkills(t *testing.T) {
 	if !hasSkillFiles {
 		t.Fatal("Render should produce skill files")
 	}
+	filesByPath := make(map[string]RenderedFile, len(files))
+	for _, file := range files {
+		filesByPath[filepath.ToSlash(file.RelativePath)] = file
+	}
+	proposePath := "skills/sdd-propose/SKILL.md"
+	propose, ok := filesByPath[proposePath]
+	if !ok {
+		t.Fatalf("Render paths = %v, want %s", sortedRenderedPaths(files), proposePath)
+	}
+	if strings.Contains(string(propose.Content), "name: sdd-proposal") {
+		t.Fatalf("%s uses a non-canonical proposal agent name", proposePath)
+	}
+	if _, ok := filesByPath["skills/sdd-proposal/SKILL.md"]; ok {
+		t.Fatalf("Render produced non-canonical proposal path: %v", sortedRenderedPaths(files))
+	}
+	for path, required := range map[string][]string{
+		"skills/lore-worker/SKILL.md": {"You are the canonical Lore repository worker.", "`status`, `summary`, `artifacts`, `files`, `validations`, `risks`, `next_step`, `continuation`, `question`, `options`, `skill_resolution`"},
+		"skills/sdd-apply/SKILL.md":   {"You execute the SDD apply phase.", "set `phase` to `apply`", "`status`, `phase`, `summary`, `artifacts`, `files`, `validations`, `risks`, `next_step`, `continuation`, `question`, `options`, `skill_resolution`"},
+	} {
+		file, ok := filesByPath[path]
+		if !ok {
+			t.Fatalf("Render paths = %v, want %s", sortedRenderedPaths(files), path)
+		}
+		content := string(file.Content)
+		if !containsAll(content, required...) {
+			t.Fatalf("%s omitted canonical role/envelope semantics: %s", path, content)
+		}
+		for _, forbidden := range []string{"lore-pi-runtime", "Pi Lore delegation adapter contract", "runtime injects a response contract"} {
+			if strings.Contains(content, forbidden) {
+				t.Fatalf("%s leaked Pi-only runtime contract %q: %s", path, forbidden, content)
+			}
+		}
+	}
 }
 
 func TestCodexAdapterRenderWithManagedRemoteMCP(t *testing.T) {
@@ -208,6 +241,145 @@ func TestCodexAdapterRenderWithManagedRemoteMCP(t *testing.T) {
 	if !foundConfig {
 		t.Fatal("Render should produce config.toml when lore-server-mcp is selected")
 	}
+}
+
+func TestCodexAssets(t *testing.T) {
+	cfg := agentconfig.Config{SDDAgents: map[string]agentconfig.Agent{"sdd-apply": {Model: "gpt-test"}}}
+
+	section := renderCodexSDDSection(cfg)
+	if !containsAll(section,
+		"## Codex-native SDD orchestration",
+		"spawn_agent",
+		"wait_agent",
+		"close_agent",
+		"sdd-apply",
+		"model `gpt-test`",
+		"reasoning effort `high`",
+		"inline/sequentially",
+	) {
+		t.Fatalf("Codex SDD section missing routing/fallback details:\n%s", section)
+	}
+	if strings.Contains(section, "gentle-ai") {
+		t.Fatalf("Codex SDD section should be Lore-owned, got gentle-ai reference:\n%s", section)
+	}
+
+	approvalFragment := renderCodexLoreMCPApprovalFragment()
+	if !containsAll(approvalFragment,
+		"[mcp_servers.lore.tools.lore_me]",
+		"[mcp_servers.lore.tools.lore_project_list]",
+		"[mcp_servers.lore.tools.lore_memory_get]",
+		`approval_mode = "approve"`,
+	) {
+		t.Fatalf("approval fragment missing expected Lore MCP tool approvals:\n%s", approvalFragment)
+	}
+	if strings.Contains(approvalFragment, "lore_skill_") || strings.Contains(approvalFragment, "default_tools_approval_mode") {
+		t.Fatalf("approval fragment should stay narrow, got:\n%s", approvalFragment)
+	}
+}
+
+func TestRenderCodexProfiles(t *testing.T) {
+	cfg := agentconfig.Config{SDDAgents: map[string]agentconfig.Agent{"sdd-apply": {Model: "gpt-custom"}}}
+	files := renderCodexSDDProfiles(cfg)
+
+	want := map[string]string{
+		codexStrongProfileRelativePath: `model_reasoning_effort = "high"`,
+		codexMidProfileRelativePath:    `model_reasoning_effort = "medium"`,
+		codexCheapProfileRelativePath:  `model_reasoning_effort = "low"`,
+	}
+	if len(files) != len(want) {
+		t.Fatalf("renderCodexSDDProfiles returned %d files, want %d", len(files), len(want))
+	}
+	for _, file := range files {
+		relativePath := filepath.ToSlash(file.RelativePath)
+		wantEffort, ok := want[relativePath]
+		if !ok {
+			t.Fatalf("unexpected profile path %q", relativePath)
+		}
+		content := string(file.Content)
+		if file.Component != ComponentCorePack || file.MergeMode != MergeModeReplace {
+			t.Fatalf("profile %q component/mode = %q/%q, want %q/%q", relativePath, file.Component, file.MergeMode, ComponentCorePack, MergeModeReplace)
+		}
+		if !containsAll(content, `model = "gpt-custom"`, wantEffort) {
+			t.Fatalf("profile %q content = %q, want model and effort", relativePath, content)
+		}
+		delete(want, relativePath)
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing profile paths: %v", want)
+	}
+}
+
+func TestCodexRenderProfilesAndHooksAbsent(t *testing.T) {
+	req := RenderRequest{
+		Target:     TargetCodex,
+		Assets:     agentpack.DefaultOperationalAssets(),
+		Components: []ComponentID{ComponentCorePack},
+		AgentConfig: agentconfig.Config{SDDAgents: map[string]agentconfig.Agent{
+			"sdd-apply": {Model: "gpt-custom"},
+		}},
+	}
+
+	adapter := defaultCodexAdapter()
+	files, err := adapter.Render(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Render error: %v", err)
+	}
+
+	seen := map[string]bool{}
+	for _, file := range files {
+		relativePath := filepath.ToSlash(file.RelativePath)
+		seen[relativePath] = true
+		if relativePath == "AGENTS.md" {
+			content := string(file.Content)
+			if !containsAll(content, "Codex-native SDD orchestration", "spawn_agent", "sdd-strong.config.toml", "inline/sequentially") {
+				t.Fatalf("AGENTS.md missing Codex-native routing guidance:\n%s", content)
+			}
+		}
+		if relativePath == "hooks.json" {
+			t.Fatal("Codex render plan must not include hooks.json in this change")
+		}
+	}
+	for _, required := range []string{"AGENTS.md", codexStrongProfileRelativePath, codexMidProfileRelativePath, codexCheapProfileRelativePath} {
+		if !seen[required] {
+			t.Fatalf("rendered files missing %q; got %v", required, seen)
+		}
+	}
+}
+
+func TestCodexRenderMCPApprovalFragments(t *testing.T) {
+	req := RenderRequest{
+		Target:     TargetCodex,
+		Assets:     agentpack.DefaultOperationalAssets(),
+		Components: []ComponentID{ComponentLoreServerMCP},
+		ServerURL:  "https://example.test",
+		SavedToken: "secret-token",
+	}
+
+	adapter := defaultCodexAdapter()
+	files, err := adapter.Render(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Render error: %v", err)
+	}
+
+	for _, file := range files {
+		if filepath.ToSlash(file.RelativePath) != codexConfigTomlRelativePath {
+			continue
+		}
+		content := string(file.Content)
+		if !containsAll(content,
+			"[mcp_servers.lore.tools.lore_me]",
+			"[mcp_servers.lore.tools.lore_project_activity]",
+			"[mcp_servers.lore.tools.lore_memory_search]",
+			`approval_mode = "approve"`,
+		) {
+			t.Fatalf("config.toml missing Lore MCP approval fragments:\n%s", content)
+		}
+		if strings.Contains(content, "lore_skill_") || strings.Contains(content, "[mcp_servers.filesystem") || strings.Contains(content, "[mcp_servers.shell") {
+			t.Fatalf("config.toml approval fragments are overbroad:\n%s", content)
+		}
+		return
+	}
+	t.Fatal("Render should produce config.toml when lore-server-mcp is selected")
 }
 
 func TestCodexSkillPathResolver(t *testing.T) {
@@ -657,6 +829,329 @@ func TestExecuteCodexInstallWritesConfigToml(t *testing.T) {
 	}
 }
 
+func TestCodexLoreMCPApprovals(t *testing.T) {
+	content, err := renderCodexMCPConfig("https://lore.test", "secret-token")
+	if err != nil {
+		t.Fatalf("renderCodexMCPConfig error: %v", err)
+	}
+	text := string(content)
+	for _, tool := range codexLoreMCPApprovedTools {
+		want := "[mcp_servers.lore.tools." + tool + "]\napproval_mode = \"approve\""
+		if !strings.Contains(text, want) {
+			t.Fatalf("config.toml missing approval for %s:\n%s", tool, text)
+		}
+	}
+	for _, forbidden := range []string{
+		"default_tools_approval_mode",
+		"lore_*",
+		"lore_skill_",
+		"lore_skill_approve",
+		"lore_skill_publish",
+		"lore_skill_reject",
+		"lore_skill_review_list",
+	} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("config.toml contains forbidden approval surface %q:\n%s", forbidden, text)
+		}
+	}
+}
+
+func TestCodexApprovalMerge(t *testing.T) {
+	managed := []byte(strings.Join([]string{
+		codexMCPBlockStartMarker,
+		"[mcp_servers.lore]",
+		`url = "https://lore.test/v1/mcp"`,
+		"",
+		"[mcp_servers.lore.http_headers]",
+		`Authorization = "Bearer new-token"`,
+		"",
+		renderCodexLoreMCPApprovalFragment(),
+		codexMCPBlockEndMarker,
+		"",
+	}, "\n"))
+	existing := strings.Join([]string{
+		`model = "gpt-5"`,
+		"",
+		"[mcp_servers.other.tools.safe_tool]",
+		`approval_mode = "approve"`,
+		"",
+		codexMCPBlockStartMarker,
+		"[mcp_servers.lore]",
+		`url = "https://old.example/v1/mcp"`,
+		"",
+		"[mcp_servers.lore.tools.lore_skill_publish]",
+		`approval_mode = "approve"`,
+		"",
+		"[mcp_servers.lore.tools.lore_*]",
+		`approval_mode = "approve"`,
+		codexMCPBlockEndMarker,
+		"",
+		"[mcp_servers.another.tools.other_tool]",
+		`approval_mode = "approve"`,
+		"",
+	}, "\n")
+
+	merged, _, err := mergeCodexConfigToml([]byte(existing), managed, true)
+	if err != nil {
+		t.Fatalf("mergeCodexConfigToml error: %v", err)
+	}
+	text := string(merged)
+	if !containsAll(text,
+		`model = "gpt-5"`,
+		"[mcp_servers.other.tools.safe_tool]",
+		"[mcp_servers.another.tools.other_tool]",
+		"[mcp_servers.lore.tools.lore_me]",
+		"[mcp_servers.lore.tools.lore_project_list]",
+		"[mcp_servers.lore.tools.lore_memory_search]",
+		`approval_mode = "approve"`,
+	) {
+		t.Fatalf("merged config.toml missing preserved config or allowlist approvals:\n%s", text)
+	}
+	for _, forbidden := range []string{
+		"old.example",
+		"[mcp_servers.lore.tools.lore_skill_publish]",
+		"[mcp_servers.lore.tools.lore_*]",
+		"default_tools_approval_mode",
+	} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("merged config.toml contains forbidden/stale Lore approval %q:\n%s", forbidden, text)
+		}
+	}
+}
+
+func TestMergeCodexConfigTomlEnforcesMultiAgentAndAgentsDefaults(t *testing.T) {
+	managed := strings.Join([]string{
+		codexMCPBlockStartMarker,
+		"[mcp_servers.lore]",
+		`url = "https://lore.test/v1/mcp"`,
+		codexMCPBlockEndMarker,
+		"",
+	}, "\n")
+	existing := strings.Join([]string{
+		`model = "gpt-5"`,
+		"",
+		"[features]",
+		"multi_agent = false",
+		"",
+		"[agents]",
+		"max_threads = 8",
+		"",
+		"[profiles.default]",
+		`approval_policy = "on-request"`,
+		"",
+	}, "\n")
+
+	merged, summary, err := mergeCodexConfigToml([]byte(existing), []byte(managed), false)
+	if err != nil {
+		t.Fatalf("mergeCodexConfigToml error: %v", err)
+	}
+	text := string(merged)
+	if !summary.MultiAgentOverridden {
+		t.Fatal("merge summary should record multi_agent false-to-true override")
+	}
+	if !containsAll(text, `model = "gpt-5"`, "[features]", "multi_agent = true", "[agents]", "max_threads = 8", "max_depth = 2", "[profiles.default]", `approval_policy = "on-request"`, codexMCPBlockStartMarker) {
+		t.Fatalf("merged config.toml = %q, want preserved config, enforced multi_agent, and agent defaults", text)
+	}
+	if strings.Contains(text, "multi_agent = false") {
+		t.Fatalf("merged config.toml = %q, want multi_agent false overridden", text)
+	}
+}
+
+func TestMergeCodexConfigTomlFailsClosedOnUnsafeRuntimeTables(t *testing.T) {
+	managed := []byte(codexMCPBlockStartMarker + "\n[mcp_servers.lore]\nurl = \"https://lore.test/v1/mcp\"\n" + codexMCPBlockEndMarker + "\n")
+	for _, existing := range []string{
+		"features = false\n",
+		"agents = 4\n",
+	} {
+		if _, _, err := mergeCodexConfigToml([]byte(existing), managed, false); err == nil {
+			t.Fatalf("mergeCodexConfigToml(%q) error = nil, want unsafe TOML shape failure", existing)
+		}
+	}
+}
+
+func TestCodexRegressionFalseToTrueOverride(t *testing.T) {
+	managed := []byte(strings.Join([]string{
+		codexMCPBlockStartMarker,
+		"[mcp_servers.lore]",
+		`url = "https://lore.test/v1/mcp"`,
+		codexMCPBlockEndMarker,
+		"",
+	}, "\n"))
+	existing := []byte(strings.Join([]string{
+		`model = "gpt-5"`,
+		"",
+		"[features]",
+		"multi_agent = false # user disabled before Lore Codex projection",
+		"",
+	}, "\n"))
+
+	merged, summary, err := mergeCodexConfigToml(existing, managed, false)
+	if err != nil {
+		t.Fatalf("mergeCodexConfigToml error: %v", err)
+	}
+	text := string(merged)
+	if !summary.MultiAgentOverridden {
+		t.Fatal("merge summary should record explicit false-to-true multi_agent override")
+	}
+	if !containsAll(text, "[features]", "multi_agent = true", "[agents]", "max_threads = 4", "max_depth = 2") {
+		t.Fatalf("merged config.toml = %q, want enforced multi_agent and agent defaults", text)
+	}
+	if strings.Contains(text, "multi_agent = false") {
+		t.Fatalf("merged config.toml = %q, want previous false value removed", text)
+	}
+}
+
+func TestCodexRegressionFailsClosedBeforeMutationOnUnsafeConfig(t *testing.T) {
+	svc := Service{}
+	tmpDir := t.TempDir()
+	configTomlPath := filepath.Join(tmpDir, ".codex", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(configTomlPath), 0o755); err != nil {
+		t.Fatalf("mkdir codex dir: %v", err)
+	}
+	existing := strings.Join([]string{
+		`model = "gpt-5"`,
+		"features = false",
+		"",
+	}, "\n")
+	if err := os.WriteFile(configTomlPath, []byte(existing), 0o600); err != nil {
+		t.Fatalf("write existing config.toml: %v", err)
+	}
+
+	_, err := svc.PlanCodexInstall(InstallRequest{
+		HomeDir:        tmpDir,
+		ServerURL:      "https://lore.test",
+		SavedToken:     "secret-token",
+		LoreBinaryPath: "/usr/local/bin/lore",
+		Target:         TargetCodex,
+		Components:     []ComponentID{ComponentCorePack, ComponentLoreServerMCP},
+	})
+	if err == nil || !strings.Contains(err.Error(), `"features" is not a TOML table`) {
+		t.Fatalf("PlanCodexInstall error = %v, want unsafe features table conflict", err)
+	}
+	got, readErr := os.ReadFile(configTomlPath)
+	if readErr != nil || string(got) != existing {
+		t.Fatalf("config.toml content=%q err=%v, want original preserved", string(got), readErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(tmpDir, ".codex", "lore-install.json")); !os.IsNotExist(statErr) {
+		t.Fatalf("manifest stat err = %v, want no manifest written during failed plan", statErr)
+	}
+}
+
+func TestCodexRegressionNoHooksPathPlanned(t *testing.T) {
+	svc := Service{}
+	tmpDir := t.TempDir()
+	plan, err := svc.PlanCodexInstall(InstallRequest{
+		HomeDir:        tmpDir,
+		ServerURL:      "https://lore.test",
+		SavedToken:     "secret-token",
+		LoreBinaryPath: "/usr/local/bin/lore",
+		Target:         TargetCodex,
+		Components:     []ComponentID{ComponentCorePack, ComponentLoreServerMCP},
+	})
+	if err != nil {
+		t.Fatalf("PlanCodexInstall error: %v", err)
+	}
+	for _, action := range plan.Files {
+		if strings.Contains(filepath.ToSlash(action.RelativePath), "hooks") || strings.Contains(filepath.ToSlash(action.AbsolutePath), "hooks") {
+			t.Fatalf("Codex plan must not include hooks in this change: %+v", action)
+		}
+	}
+}
+
+func TestCodexRegressionAllowlistOnlyApprovals(t *testing.T) {
+	content, err := renderCodexMCPConfig("https://lore.test", "secret-token")
+	if err != nil {
+		t.Fatalf("renderCodexMCPConfig error: %v", err)
+	}
+	text := string(content)
+	allowed := map[string]bool{}
+	for _, tool := range codexLoreMCPApprovedTools {
+		allowed[tool] = true
+	}
+	seen := map[string]bool{}
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "[mcp_servers.lore.tools.") || !strings.HasSuffix(line, "]") {
+			continue
+		}
+		tool := strings.TrimSuffix(strings.TrimPrefix(line, "[mcp_servers.lore.tools."), "]")
+		if !allowed[tool] {
+			t.Fatalf("approval table %q is outside the approved Lore MCP allowlist:\n%s", tool, text)
+		}
+		seen[tool] = true
+	}
+	for _, tool := range codexLoreMCPApprovedTools {
+		if !seen[tool] {
+			t.Fatalf("approval table for %q missing from config:\n%s", tool, text)
+		}
+	}
+	for _, forbidden := range []string{"default_tools_approval_mode", "lore_*", "approval_policy", "[mcp_servers.shell", "[mcp_servers.filesystem"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("config.toml contains forbidden broad approval surface %q:\n%s", forbidden, text)
+		}
+	}
+}
+
+func TestCodexMultiAgentOverrideCreatesBackupEvidence(t *testing.T) {
+	svc := Service{}
+	tmpDir := t.TempDir()
+	codexDir := filepath.Join(tmpDir, ".codex")
+	if err := os.MkdirAll(codexDir, 0o755); err != nil {
+		t.Fatalf("mkdir codex dir: %v", err)
+	}
+	configTomlPath := filepath.Join(codexDir, "config.toml")
+	existing := strings.Join([]string{
+		`model = "gpt-5"`,
+		"",
+		"[features]",
+		"multi_agent = false",
+		"",
+	}, "\n")
+	if err := os.WriteFile(configTomlPath, []byte(existing), 0o600); err != nil {
+		t.Fatalf("write existing config.toml: %v", err)
+	}
+
+	plan, err := svc.PlanCodexInstall(InstallRequest{
+		HomeDir:        tmpDir,
+		ServerURL:      "https://lore.test",
+		SavedToken:     "secret-token",
+		LoreBinaryPath: "/usr/local/bin/lore",
+		Target:         TargetCodex,
+		Components:     []ComponentID{ComponentCorePack, ComponentLoreServerMCP},
+		Now:            time.Date(2026, 7, 2, 7, 40, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("PlanCodexInstall error: %v", err)
+	}
+	var configAction PlanFileAction
+	for _, action := range plan.Files {
+		if action.RelativePath == "config.toml" {
+			configAction = action
+		}
+	}
+	if configAction.Action != "update" || configAction.BackupPath == "" {
+		t.Fatalf("config.toml action = %+v, want update with backup evidence", configAction)
+	}
+
+	result, err := svc.ExecuteCodexInstall(plan, InstallCommandOptions{})
+	if err != nil {
+		t.Fatalf("ExecuteCodexInstall error: %v", err)
+	}
+	merged, err := os.ReadFile(configTomlPath)
+	if err != nil {
+		t.Fatalf("read config.toml: %v", err)
+	}
+	if !containsAll(string(merged), "[features]", "multi_agent = true", "[agents]", "max_threads = 4", "max_depth = 2") {
+		t.Fatalf("config.toml = %q, want enforced multi-agent and agents defaults", string(merged))
+	}
+	if got, err := os.ReadFile(configAction.BackupPath); err != nil || string(got) != existing {
+		t.Fatalf("backup content=%q err=%v, want original config", string(got), err)
+	}
+	if !containsSummaryEntry(result.Summary.BackedUp, "config.toml") {
+		t.Fatalf("BackedUp = %v, want config.toml backup summary evidence", result.Summary.BackedUp)
+	}
+}
+
 func TestExecuteCodexInstallMergesConfigToml(t *testing.T) {
 	svc := Service{}
 	tmpDir := t.TempDir()
@@ -735,6 +1230,119 @@ func TestExecuteCodexInstallMergesConfigToml(t *testing.T) {
 
 // TestCodexInstallUsesCustomAgentConfigModels verifies that persisted
 // agent-config.json custom model values drive Codex AGENTS.md projection.
+func TestExecuteCodexInstallMigratesObsoleteCodexLoreEnvTable(t *testing.T) {
+	svc := Service{}
+	tmpDir := t.TempDir()
+	codexDir := filepath.Join(tmpDir, ".codex")
+	if err := os.MkdirAll(codexDir, 0o755); err != nil {
+		t.Fatalf("mkdir codex dir: %v", err)
+	}
+	configTomlPath := filepath.Join(codexDir, "config.toml")
+	existing := strings.Join([]string{
+		"model = \"gpt-5\"",
+		"",
+		"[mcp_servers.other.env]",
+		"KEEP_ME = \"yes\"",
+		"",
+		"[mcp_servers.lore.env]",
+		"LORE_MCP_URL = \"https://old.example/v1/mcp\"",
+		"LORE_MCP_AUTHORIZATION = \"Bearer old-test-token\"",
+		"",
+		"[profiles.default]",
+		"approval_policy = \"on-request\"",
+		"",
+	}, "\n")
+	if err := os.WriteFile(configTomlPath, []byte(existing), 0o600); err != nil {
+		t.Fatalf("write existing config.toml: %v", err)
+	}
+
+	plan, err := svc.PlanCodexInstall(InstallRequest{
+		HomeDir:        tmpDir,
+		ServerURL:      "https://lore.test",
+		SavedToken:     "new-test-token",
+		LoreBinaryPath: "/usr/local/bin/lore",
+		Target:         TargetCodex,
+		Components:     []ComponentID{ComponentCorePack, ComponentLoreServerMCP},
+	})
+	if err != nil {
+		t.Fatalf("PlanCodexInstall error: %v", err)
+	}
+	if _, err := svc.ExecuteCodexInstall(plan, InstallCommandOptions{DryRun: false}); err != nil {
+		t.Fatalf("ExecuteCodexInstall error: %v", err)
+	}
+
+	merged, err := os.ReadFile(configTomlPath)
+	if err != nil {
+		t.Fatalf("ReadFile(config.toml) error: %v", err)
+	}
+	text := string(merged)
+	if !containsAll(text, `model = "gpt-5"`, `[mcp_servers.other.env]`, `KEEP_ME = "yes"`, `[profiles.default]`, `approval_policy = "on-request"`, codexMCPBlockStartMarker, `[mcp_servers.lore]`, `url = "https://lore.test/v1/mcp"`, `[mcp_servers.lore.http_headers]`, `Authorization = "Bearer new-test-token"`) {
+		t.Fatal("merged config.toml should preserve unrelated config and add the managed Lore MCP block")
+	}
+	if strings.Contains(text, `[mcp_servers.lore.env]`) || strings.Contains(text, `LORE_MCP_URL`) || strings.Contains(text, `LORE_MCP_AUTHORIZATION`) || strings.Contains(text, `old.example`) || strings.Contains(text, `old-test-token`) {
+		t.Fatal("merged config.toml should remove the obsolete Lore MCP env table")
+	}
+}
+
+func TestExecuteCodexInstallReplacesManagedBlockAndRemovesObsoleteEnvTable(t *testing.T) {
+	svc := Service{}
+	tmpDir := t.TempDir()
+	codexDir := filepath.Join(tmpDir, ".codex")
+	if err := os.MkdirAll(codexDir, 0o755); err != nil {
+		t.Fatalf("mkdir codex dir: %v", err)
+	}
+	configTomlPath := filepath.Join(codexDir, "config.toml")
+	existing := strings.Join([]string{
+		"model = \"gpt-5\"",
+		"",
+		"[mcp_servers.lore.env]",
+		"LORE_MCP_URL = \"https://old.example/v1/mcp\"",
+		"LORE_MCP_AUTHORIZATION = \"Bearer old-test-token\"",
+		"",
+		codexMCPBlockStartMarker,
+		"[mcp_servers.lore]",
+		"url = \"https://old.example/v1/mcp\"",
+		"",
+		"[mcp_servers.lore.http_headers]",
+		"Authorization = \"Bearer old-test-token\"",
+		codexMCPBlockEndMarker,
+		"",
+		"[mcp_servers.other.env]",
+		"KEEP_ME = \"yes\"",
+		"",
+	}, "\n")
+	if err := os.WriteFile(configTomlPath, []byte(existing), 0o600); err != nil {
+		t.Fatalf("write existing config.toml: %v", err)
+	}
+
+	plan, err := svc.PlanCodexInstall(InstallRequest{
+		HomeDir:        tmpDir,
+		ServerURL:      "https://lore.test",
+		SavedToken:     "new-test-token",
+		LoreBinaryPath: "/usr/local/bin/lore",
+		Target:         TargetCodex,
+		Components:     []ComponentID{ComponentCorePack, ComponentLoreServerMCP},
+	})
+	if err != nil {
+		t.Fatalf("PlanCodexInstall error: %v", err)
+	}
+	if _, err := svc.ExecuteCodexInstall(plan, InstallCommandOptions{DryRun: false}); err != nil {
+		t.Fatalf("ExecuteCodexInstall error: %v", err)
+	}
+
+	merged, err := os.ReadFile(configTomlPath)
+	if err != nil {
+		t.Fatalf("ReadFile(config.toml) error: %v", err)
+	}
+	text := string(merged)
+	if !containsAll(text, `model = "gpt-5"`, `[mcp_servers.other.env]`, `KEEP_ME = "yes"`, codexMCPBlockStartMarker, `[mcp_servers.lore]`, `url = "https://lore.test/v1/mcp"`, `[mcp_servers.lore.http_headers]`, `Authorization = "Bearer new-test-token"`) {
+		t.Fatal("merged config.toml should replace the managed block, preserve unrelated env, and use the new remote MCP config")
+	}
+	if strings.Contains(text, `[mcp_servers.lore.env]`) || strings.Contains(text, `LORE_MCP_URL`) || strings.Contains(text, `LORE_MCP_AUTHORIZATION`) || strings.Contains(text, `old.example`) || strings.Contains(text, `old-test-token`) {
+		t.Fatal("merged config.toml should remove obsolete Lore MCP env state and stale managed values")
+	}
+}
+
 func TestPlanCodexInstallFailsClosedOnUnmarkedUserLoreMCPBlock(t *testing.T) {
 	svc := Service{}
 	for _, tt := range []struct {
@@ -1133,19 +1741,54 @@ func TestCodexGoldenMCPConfigAndPaths(t *testing.T) {
 	if string(mcp) != string(wantMCP) {
 		t.Fatalf("Codex MCP golden drift\ngot:\n%s\nwant:\n%s", string(mcp), string(wantMCP))
 	}
+
+	agents, err := renderCodexAgentsMD(RenderRequest{Target: TargetCodex, Assets: agentpack.DefaultOperationalAssets()})
+	if err != nil {
+		t.Fatalf("renderCodexAgentsMD error: %v", err)
+	}
+	wantAgents, err := os.ReadFile(filepath.Join("testdata", "codex", "agents.sdd.golden"))
+	if err != nil {
+		t.Fatalf("read codex AGENTS golden: %v", err)
+	}
+	if !strings.Contains(string(agents), string(wantAgents)) {
+		t.Fatalf("Codex AGENTS SDD golden drift\ngot AGENTS.md without expected section:\n%s\nwant section:\n%s", string(agents), string(wantAgents))
+	}
+
+	for _, profile := range renderCodexSDDProfiles(agentconfig.Config{}) {
+		goldenPath := filepath.Join("testdata", "codex", filepath.ToSlash(profile.RelativePath)+".golden")
+		wantProfile, err := os.ReadFile(goldenPath)
+		if err != nil {
+			t.Fatalf("read codex profile golden %q: %v", goldenPath, err)
+		}
+		if string(profile.Content) != string(wantProfile) {
+			t.Fatalf("Codex profile golden drift for %q\ngot:\n%s\nwant:\n%s", profile.RelativePath, string(profile.Content), string(wantProfile))
+		}
+	}
+
 	wantPaths, err := os.ReadFile(filepath.Join("testdata", "codex", "paths.golden"))
 	if err != nil {
 		t.Fatalf("read codex paths golden: %v", err)
 	}
+	allowed := map[string]bool{
+		"AGENTS.md":                          true,
+		"config.toml":                        true,
+		codexStrongProfileRelativePath:       true,
+		codexMidProfileRelativePath:          true,
+		codexCheapProfileRelativePath:        true,
+		"skills/sdd-apply/SKILL.md":          true,
+		"skills/_shared/sdd-phase-common.md": true,
+		"lore-install.json":                  true,
+	}
+	seen := map[string]bool{}
 	for _, want := range strings.Split(strings.TrimSpace(string(wantPaths)), "\n") {
-		if want == "lore-install.json" {
-			continue
-		}
-		if want == "skills/sdd-apply/SKILL.md" || want == "skills/_shared/sdd-phase-common.md" {
-			continue
-		}
-		if want != "AGENTS.md" && want != "config.toml" {
+		if !allowed[want] {
 			t.Fatalf("unexpected codex paths golden entry %q", want)
+		}
+		seen[want] = true
+	}
+	for required := range allowed {
+		if !seen[required] {
+			t.Fatalf("codex paths golden missing required entry %q: %s", required, string(wantPaths))
 		}
 	}
 }

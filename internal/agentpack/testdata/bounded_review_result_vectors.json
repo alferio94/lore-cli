@@ -1,0 +1,2159 @@
+{
+  "version": 1,
+  "runtime_source": "lore-pi-runtime/src/runtime/judgment-review-envelopes.ts@c48d306f66f125903aca93f5969747ff6e6e5605",
+  "expected_identity": {
+    "review_id": "review-1",
+    "round": 1,
+    "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  },
+  "note": "Acceptance mirrors the pinned runtime validator. write_authorized is lore-cli canonical policy, not a runtime validator claim.",
+  "cases": [
+    {
+      "name": "judge_valid_critical",
+      "role": "judge",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "judge",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "findings": [
+          {
+            "finding_key": "finding-1",
+            "severity": "CRITICAL",
+            "location": {
+              "path": "internal/file.go",
+              "anchor": "line 1"
+            },
+            "evidence": {
+              "source": "diff",
+              "detail": "shown code"
+            },
+            "description": "A concrete defect.",
+            "fix_intent": "Correct the defect."
+          }
+        ]
+      },
+      "accepted": true
+    },
+    {
+      "name": "judge_valid_warning_real",
+      "role": "judge",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "judge",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "findings": [
+          {
+            "finding_key": "finding-warning",
+            "severity": "WARNING",
+            "location": {
+              "path": "internal/file.go",
+              "anchor": "line 1"
+            },
+            "evidence": {
+              "source": "diff",
+              "detail": "shown code"
+            },
+            "description": "A concrete defect.",
+            "fix_intent": "Correct the defect.",
+            "warning_kind": "real"
+          }
+        ]
+      },
+      "accepted": true
+    },
+    {
+      "name": "judge_valid_warning_theoretical",
+      "role": "judge",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "judge",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "findings": [
+          {
+            "finding_key": "finding-warning",
+            "severity": "WARNING",
+            "location": {
+              "path": "internal/file.go",
+              "anchor": "line 1"
+            },
+            "evidence": {
+              "source": "diff",
+              "detail": "shown code"
+            },
+            "description": "A concrete defect.",
+            "fix_intent": "Correct the defect.",
+            "warning_kind": "theoretical"
+          }
+        ]
+      },
+      "accepted": true
+    },
+    {
+      "name": "judge_valid_suggestion",
+      "role": "judge",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "judge",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "findings": [
+          {
+            "finding_key": "finding-suggestion",
+            "severity": "SUGGESTION",
+            "location": {
+              "path": "internal/file.go",
+              "anchor": "line 1"
+            },
+            "evidence": {
+              "source": "diff",
+              "detail": "shown code"
+            },
+            "description": "A concrete defect.",
+            "fix_intent": "Correct the defect."
+          }
+        ]
+      },
+      "accepted": true,
+      "write_authorized": false,
+      "policy": "lore-cli canonical policy"
+    },
+    {
+      "name": "judge_valid_empty_findings",
+      "role": "judge",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "judge",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "findings": []
+      },
+      "accepted": true
+    },
+    {
+      "name": "judge_missing_schema_version",
+      "role": "judge",
+      "payload": {
+        "capability": "native-session-v1",
+        "role": "judge",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "findings": [
+          {
+            "finding_key": "finding-1",
+            "severity": "CRITICAL",
+            "location": {
+              "path": "internal/file.go",
+              "anchor": "line 1"
+            },
+            "evidence": {
+              "source": "diff",
+              "detail": "shown code"
+            },
+            "description": "A concrete defect.",
+            "fix_intent": "Correct the defect."
+          }
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "name": "judge_missing_capability",
+      "role": "judge",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "role": "judge",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "findings": [
+          {
+            "finding_key": "finding-1",
+            "severity": "CRITICAL",
+            "location": {
+              "path": "internal/file.go",
+              "anchor": "line 1"
+            },
+            "evidence": {
+              "source": "diff",
+              "detail": "shown code"
+            },
+            "description": "A concrete defect.",
+            "fix_intent": "Correct the defect."
+          }
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "name": "judge_missing_role",
+      "role": "judge",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "findings": [
+          {
+            "finding_key": "finding-1",
+            "severity": "CRITICAL",
+            "location": {
+              "path": "internal/file.go",
+              "anchor": "line 1"
+            },
+            "evidence": {
+              "source": "diff",
+              "detail": "shown code"
+            },
+            "description": "A concrete defect.",
+            "fix_intent": "Correct the defect."
+          }
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "name": "judge_missing_review_id",
+      "role": "judge",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "judge",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "findings": [
+          {
+            "finding_key": "finding-1",
+            "severity": "CRITICAL",
+            "location": {
+              "path": "internal/file.go",
+              "anchor": "line 1"
+            },
+            "evidence": {
+              "source": "diff",
+              "detail": "shown code"
+            },
+            "description": "A concrete defect.",
+            "fix_intent": "Correct the defect."
+          }
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "name": "judge_missing_round",
+      "role": "judge",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "judge",
+        "review_id": "review-1",
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "findings": [
+          {
+            "finding_key": "finding-1",
+            "severity": "CRITICAL",
+            "location": {
+              "path": "internal/file.go",
+              "anchor": "line 1"
+            },
+            "evidence": {
+              "source": "diff",
+              "detail": "shown code"
+            },
+            "description": "A concrete defect.",
+            "fix_intent": "Correct the defect."
+          }
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "name": "judge_missing_scope_digest",
+      "role": "judge",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "judge",
+        "review_id": "review-1",
+        "round": 1,
+        "findings": [
+          {
+            "finding_key": "finding-1",
+            "severity": "CRITICAL",
+            "location": {
+              "path": "internal/file.go",
+              "anchor": "line 1"
+            },
+            "evidence": {
+              "source": "diff",
+              "detail": "shown code"
+            },
+            "description": "A concrete defect.",
+            "fix_intent": "Correct the defect."
+          }
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "name": "judge_wrong_schema_version",
+      "role": "judge",
+      "payload": {
+        "schema_version": "wrong",
+        "capability": "native-session-v1",
+        "role": "judge",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "findings": [
+          {
+            "finding_key": "finding-1",
+            "severity": "CRITICAL",
+            "location": {
+              "path": "internal/file.go",
+              "anchor": "line 1"
+            },
+            "evidence": {
+              "source": "diff",
+              "detail": "shown code"
+            },
+            "description": "A concrete defect.",
+            "fix_intent": "Correct the defect."
+          }
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "name": "judge_wrong_capability",
+      "role": "judge",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "wrong",
+        "role": "judge",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "findings": [
+          {
+            "finding_key": "finding-1",
+            "severity": "CRITICAL",
+            "location": {
+              "path": "internal/file.go",
+              "anchor": "line 1"
+            },
+            "evidence": {
+              "source": "diff",
+              "detail": "shown code"
+            },
+            "description": "A concrete defect.",
+            "fix_intent": "Correct the defect."
+          }
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "name": "judge_wrong_role",
+      "role": "judge",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "fix",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "findings": [
+          {
+            "finding_key": "finding-1",
+            "severity": "CRITICAL",
+            "location": {
+              "path": "internal/file.go",
+              "anchor": "line 1"
+            },
+            "evidence": {
+              "source": "diff",
+              "detail": "shown code"
+            },
+            "description": "A concrete defect.",
+            "fix_intent": "Correct the defect."
+          }
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "name": "judge_wrong_review_id",
+      "role": "judge",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "judge",
+        "review_id": " review-1",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "findings": [
+          {
+            "finding_key": "finding-1",
+            "severity": "CRITICAL",
+            "location": {
+              "path": "internal/file.go",
+              "anchor": "line 1"
+            },
+            "evidence": {
+              "source": "diff",
+              "detail": "shown code"
+            },
+            "description": "A concrete defect.",
+            "fix_intent": "Correct the defect."
+          }
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "name": "judge_wrong_round",
+      "role": "judge",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "judge",
+        "review_id": "review-1",
+        "round": 0,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "findings": [
+          {
+            "finding_key": "finding-1",
+            "severity": "CRITICAL",
+            "location": {
+              "path": "internal/file.go",
+              "anchor": "line 1"
+            },
+            "evidence": {
+              "source": "diff",
+              "detail": "shown code"
+            },
+            "description": "A concrete defect.",
+            "fix_intent": "Correct the defect."
+          }
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "name": "judge_wrong_scope_digest",
+      "role": "judge",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "judge",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "findings": [
+          {
+            "finding_key": "finding-1",
+            "severity": "CRITICAL",
+            "location": {
+              "path": "internal/file.go",
+              "anchor": "line 1"
+            },
+            "evidence": {
+              "source": "diff",
+              "detail": "shown code"
+            },
+            "description": "A concrete defect.",
+            "fix_intent": "Correct the defect."
+          }
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "name": "judge_round_fraction",
+      "role": "judge",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "judge",
+        "review_id": "review-1",
+        "round": 1.5,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "findings": [
+          {
+            "finding_key": "finding-1",
+            "severity": "CRITICAL",
+            "location": {
+              "path": "internal/file.go",
+              "anchor": "line 1"
+            },
+            "evidence": {
+              "source": "diff",
+              "detail": "shown code"
+            },
+            "description": "A concrete defect.",
+            "fix_intent": "Correct the defect."
+          }
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "name": "judge_digest_short",
+      "role": "judge",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "judge",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "findings": [
+          {
+            "finding_key": "finding-1",
+            "severity": "CRITICAL",
+            "location": {
+              "path": "internal/file.go",
+              "anchor": "line 1"
+            },
+            "evidence": {
+              "source": "diff",
+              "detail": "shown code"
+            },
+            "description": "A concrete defect.",
+            "fix_intent": "Correct the defect."
+          }
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "name": "judge_unknown_lifecycle",
+      "role": "judge",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "judge",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "findings": [
+          {
+            "finding_key": "finding-1",
+            "severity": "CRITICAL",
+            "location": {
+              "path": "internal/file.go",
+              "anchor": "line 1"
+            },
+            "evidence": {
+              "source": "diff",
+              "detail": "shown code"
+            },
+            "description": "A concrete defect.",
+            "fix_intent": "Correct the defect."
+          }
+        ],
+        "lifecycle": "done"
+      },
+      "accepted": false
+    },
+    {
+      "name": "judge_missing_findings",
+      "role": "judge",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "judge",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "accepted": false
+    },
+    {
+      "name": "judge_bad_key",
+      "role": "judge",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "judge",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "findings": [
+          {
+            "finding_key": "Bad Key",
+            "severity": "CRITICAL",
+            "location": {
+              "path": "internal/file.go",
+              "anchor": "line 1"
+            },
+            "evidence": {
+              "source": "diff",
+              "detail": "shown code"
+            },
+            "description": "A concrete defect.",
+            "fix_intent": "Correct the defect."
+          }
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "name": "judge_duplicate_key",
+      "role": "judge",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "judge",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "findings": [
+          {
+            "finding_key": "finding-1",
+            "severity": "CRITICAL",
+            "location": {
+              "path": "internal/file.go",
+              "anchor": "line 1"
+            },
+            "evidence": {
+              "source": "diff",
+              "detail": "shown code"
+            },
+            "description": "A concrete defect.",
+            "fix_intent": "Correct the defect."
+          },
+          {
+            "finding_key": "finding-1",
+            "severity": "CRITICAL",
+            "location": {
+              "path": "internal/file.go",
+              "anchor": "line 1"
+            },
+            "evidence": {
+              "source": "diff",
+              "detail": "shown code"
+            },
+            "description": "A concrete defect.",
+            "fix_intent": "Correct the defect."
+          }
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "name": "judge_bad_severity",
+      "role": "judge",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "judge",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "findings": [
+          {
+            "finding_key": "finding-1",
+            "severity": "INFO",
+            "location": {
+              "path": "internal/file.go",
+              "anchor": "line 1"
+            },
+            "evidence": {
+              "source": "diff",
+              "detail": "shown code"
+            },
+            "description": "A concrete defect.",
+            "fix_intent": "Correct the defect."
+          }
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "name": "judge_warning_missing_kind",
+      "role": "judge",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "judge",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "findings": [
+          {
+            "finding_key": "finding-1",
+            "severity": "WARNING",
+            "location": {
+              "path": "internal/file.go",
+              "anchor": "line 1"
+            },
+            "evidence": {
+              "source": "diff",
+              "detail": "shown code"
+            },
+            "description": "A concrete defect.",
+            "fix_intent": "Correct the defect."
+          }
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "name": "judge_warning_bad_kind",
+      "role": "judge",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "judge",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "findings": [
+          {
+            "finding_key": "finding-1",
+            "severity": "WARNING",
+            "location": {
+              "path": "internal/file.go",
+              "anchor": "line 1"
+            },
+            "evidence": {
+              "source": "diff",
+              "detail": "shown code"
+            },
+            "description": "A concrete defect.",
+            "fix_intent": "Correct the defect.",
+            "warning_kind": "maybe"
+          }
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "name": "judge_critical_forbidden_kind",
+      "role": "judge",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "judge",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "findings": [
+          {
+            "finding_key": "finding-1",
+            "severity": "CRITICAL",
+            "location": {
+              "path": "internal/file.go",
+              "anchor": "line 1"
+            },
+            "evidence": {
+              "source": "diff",
+              "detail": "shown code"
+            },
+            "description": "A concrete defect.",
+            "fix_intent": "Correct the defect.",
+            "warning_kind": "real"
+          }
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "name": "judge_location_extra",
+      "role": "judge",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "judge",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "findings": [
+          {
+            "finding_key": "finding-1",
+            "severity": "CRITICAL",
+            "location": {
+              "path": "internal/file.go",
+              "anchor": "line 1",
+              "line": 1
+            },
+            "evidence": {
+              "source": "diff",
+              "detail": "shown code"
+            },
+            "description": "A concrete defect.",
+            "fix_intent": "Correct the defect."
+          }
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "name": "judge_location_absolute",
+      "role": "judge",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "judge",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "findings": [
+          {
+            "finding_key": "finding-1",
+            "severity": "CRITICAL",
+            "location": {
+              "path": "/tmp/x",
+              "anchor": "line 1"
+            },
+            "evidence": {
+              "source": "diff",
+              "detail": "shown code"
+            },
+            "description": "A concrete defect.",
+            "fix_intent": "Correct the defect."
+          }
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "name": "judge_location_parent",
+      "role": "judge",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "judge",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "findings": [
+          {
+            "finding_key": "finding-1",
+            "severity": "CRITICAL",
+            "location": {
+              "path": "../x",
+              "anchor": "line 1"
+            },
+            "evidence": {
+              "source": "diff",
+              "detail": "shown code"
+            },
+            "description": "A concrete defect.",
+            "fix_intent": "Correct the defect."
+          }
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "name": "judge_location_empty_anchor",
+      "role": "judge",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "judge",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "findings": [
+          {
+            "finding_key": "finding-1",
+            "severity": "CRITICAL",
+            "location": {
+              "path": "internal/file.go",
+              "anchor": ""
+            },
+            "evidence": {
+              "source": "diff",
+              "detail": "shown code"
+            },
+            "description": "A concrete defect.",
+            "fix_intent": "Correct the defect."
+          }
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "name": "judge_evidence_missing_source",
+      "role": "judge",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "judge",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "findings": [
+          {
+            "finding_key": "finding-1",
+            "severity": "CRITICAL",
+            "location": {
+              "path": "internal/file.go",
+              "anchor": "line 1"
+            },
+            "evidence": {
+              "detail": "shown code"
+            },
+            "description": "A concrete defect.",
+            "fix_intent": "Correct the defect."
+          }
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "name": "judge_evidence_extra",
+      "role": "judge",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "judge",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "findings": [
+          {
+            "finding_key": "finding-1",
+            "severity": "CRITICAL",
+            "location": {
+              "path": "internal/file.go",
+              "anchor": "line 1"
+            },
+            "evidence": {
+              "source": "diff",
+              "detail": "shown code",
+              "extra": "x"
+            },
+            "description": "A concrete defect.",
+            "fix_intent": "Correct the defect."
+          }
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "name": "judge_description_whitespace",
+      "role": "judge",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "judge",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "findings": [
+          {
+            "finding_key": "finding-1",
+            "severity": "CRITICAL",
+            "location": {
+              "path": "internal/file.go",
+              "anchor": "line 1"
+            },
+            "evidence": {
+              "source": "diff",
+              "detail": "shown code"
+            },
+            "description": " bad",
+            "fix_intent": "Correct the defect."
+          }
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "name": "judge_fix_intent_control",
+      "role": "judge",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "judge",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "findings": [
+          {
+            "finding_key": "finding-1",
+            "severity": "CRITICAL",
+            "location": {
+              "path": "internal/file.go",
+              "anchor": "line 1"
+            },
+            "evidence": {
+              "source": "diff",
+              "detail": "shown code"
+            },
+            "description": "A concrete defect.",
+            "fix_intent": "bad\n"
+          }
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "name": "fix_valid_applied_and_unapplied",
+      "role": "fix",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "fix",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "applied": [
+          {
+            "finding_key": "finding-1",
+            "files": [
+              "internal/file.go"
+            ],
+            "locations": [
+              {
+                "path": "internal/file.go",
+                "anchor": "line 1"
+              }
+            ],
+            "summary": "Corrected the defect."
+          }
+        ],
+        "unapplied": [
+          {
+            "finding_key": "finding-2",
+            "reason": "Needs approval."
+          }
+        ]
+      },
+      "accepted": true
+    },
+    {
+      "name": "fix_valid_empty_arrays",
+      "role": "fix",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "fix",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "applied": [],
+        "unapplied": []
+      },
+      "accepted": true
+    },
+    {
+      "name": "fix_valid_theoretical_warning_not_written",
+      "role": "fix",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "fix",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "applied": [],
+        "unapplied": [
+          {
+            "finding_key": "finding-warning",
+            "reason": "Needs approval."
+          }
+        ]
+      },
+      "accepted": true,
+      "write_authorized": false,
+      "policy": "lore-cli canonical policy"
+    },
+    {
+      "name": "fix_missing_schema_version",
+      "role": "fix",
+      "payload": {
+        "capability": "native-session-v1",
+        "role": "fix",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "applied": [
+          {
+            "finding_key": "finding-1",
+            "files": [
+              "internal/file.go"
+            ],
+            "locations": [
+              {
+                "path": "internal/file.go",
+                "anchor": "line 1"
+              }
+            ],
+            "summary": "Corrected the defect."
+          }
+        ],
+        "unapplied": [
+          {
+            "finding_key": "finding-2",
+            "reason": "Needs approval."
+          }
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "name": "fix_missing_capability",
+      "role": "fix",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "role": "fix",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "applied": [
+          {
+            "finding_key": "finding-1",
+            "files": [
+              "internal/file.go"
+            ],
+            "locations": [
+              {
+                "path": "internal/file.go",
+                "anchor": "line 1"
+              }
+            ],
+            "summary": "Corrected the defect."
+          }
+        ],
+        "unapplied": [
+          {
+            "finding_key": "finding-2",
+            "reason": "Needs approval."
+          }
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "name": "fix_missing_role",
+      "role": "fix",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "applied": [
+          {
+            "finding_key": "finding-1",
+            "files": [
+              "internal/file.go"
+            ],
+            "locations": [
+              {
+                "path": "internal/file.go",
+                "anchor": "line 1"
+              }
+            ],
+            "summary": "Corrected the defect."
+          }
+        ],
+        "unapplied": [
+          {
+            "finding_key": "finding-2",
+            "reason": "Needs approval."
+          }
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "name": "fix_missing_review_id",
+      "role": "fix",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "fix",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "applied": [
+          {
+            "finding_key": "finding-1",
+            "files": [
+              "internal/file.go"
+            ],
+            "locations": [
+              {
+                "path": "internal/file.go",
+                "anchor": "line 1"
+              }
+            ],
+            "summary": "Corrected the defect."
+          }
+        ],
+        "unapplied": [
+          {
+            "finding_key": "finding-2",
+            "reason": "Needs approval."
+          }
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "name": "fix_missing_round",
+      "role": "fix",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "fix",
+        "review_id": "review-1",
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "applied": [
+          {
+            "finding_key": "finding-1",
+            "files": [
+              "internal/file.go"
+            ],
+            "locations": [
+              {
+                "path": "internal/file.go",
+                "anchor": "line 1"
+              }
+            ],
+            "summary": "Corrected the defect."
+          }
+        ],
+        "unapplied": [
+          {
+            "finding_key": "finding-2",
+            "reason": "Needs approval."
+          }
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "name": "fix_missing_scope_digest",
+      "role": "fix",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "fix",
+        "review_id": "review-1",
+        "round": 1,
+        "applied": [
+          {
+            "finding_key": "finding-1",
+            "files": [
+              "internal/file.go"
+            ],
+            "locations": [
+              {
+                "path": "internal/file.go",
+                "anchor": "line 1"
+              }
+            ],
+            "summary": "Corrected the defect."
+          }
+        ],
+        "unapplied": [
+          {
+            "finding_key": "finding-2",
+            "reason": "Needs approval."
+          }
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "name": "fix_missing_applied",
+      "role": "fix",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "fix",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "unapplied": [
+          {
+            "finding_key": "finding-2",
+            "reason": "Needs approval."
+          }
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "name": "fix_missing_unapplied",
+      "role": "fix",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "fix",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "applied": [
+          {
+            "finding_key": "finding-1",
+            "files": [
+              "internal/file.go"
+            ],
+            "locations": [
+              {
+                "path": "internal/file.go",
+                "anchor": "line 1"
+              }
+            ],
+            "summary": "Corrected the defect."
+          }
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "name": "fix_wrong_schema_version",
+      "role": "fix",
+      "payload": {
+        "schema_version": "wrong",
+        "capability": "native-session-v1",
+        "role": "fix",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "applied": [
+          {
+            "finding_key": "finding-1",
+            "files": [
+              "internal/file.go"
+            ],
+            "locations": [
+              {
+                "path": "internal/file.go",
+                "anchor": "line 1"
+              }
+            ],
+            "summary": "Corrected the defect."
+          }
+        ],
+        "unapplied": [
+          {
+            "finding_key": "finding-2",
+            "reason": "Needs approval."
+          }
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "name": "fix_wrong_capability",
+      "role": "fix",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "wrong",
+        "role": "fix",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "applied": [
+          {
+            "finding_key": "finding-1",
+            "files": [
+              "internal/file.go"
+            ],
+            "locations": [
+              {
+                "path": "internal/file.go",
+                "anchor": "line 1"
+              }
+            ],
+            "summary": "Corrected the defect."
+          }
+        ],
+        "unapplied": [
+          {
+            "finding_key": "finding-2",
+            "reason": "Needs approval."
+          }
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "name": "fix_wrong_role",
+      "role": "fix",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "judge",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "applied": [
+          {
+            "finding_key": "finding-1",
+            "files": [
+              "internal/file.go"
+            ],
+            "locations": [
+              {
+                "path": "internal/file.go",
+                "anchor": "line 1"
+              }
+            ],
+            "summary": "Corrected the defect."
+          }
+        ],
+        "unapplied": [
+          {
+            "finding_key": "finding-2",
+            "reason": "Needs approval."
+          }
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "name": "fix_wrong_review_id",
+      "role": "fix",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "fix",
+        "review_id": "",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "applied": [
+          {
+            "finding_key": "finding-1",
+            "files": [
+              "internal/file.go"
+            ],
+            "locations": [
+              {
+                "path": "internal/file.go",
+                "anchor": "line 1"
+              }
+            ],
+            "summary": "Corrected the defect."
+          }
+        ],
+        "unapplied": [
+          {
+            "finding_key": "finding-2",
+            "reason": "Needs approval."
+          }
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "name": "fix_wrong_round",
+      "role": "fix",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "fix",
+        "review_id": "review-1",
+        "round": 0,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "applied": [
+          {
+            "finding_key": "finding-1",
+            "files": [
+              "internal/file.go"
+            ],
+            "locations": [
+              {
+                "path": "internal/file.go",
+                "anchor": "line 1"
+              }
+            ],
+            "summary": "Corrected the defect."
+          }
+        ],
+        "unapplied": [
+          {
+            "finding_key": "finding-2",
+            "reason": "Needs approval."
+          }
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "name": "fix_wrong_scope_digest",
+      "role": "fix",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "fix",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "applied": [
+          {
+            "finding_key": "finding-1",
+            "files": [
+              "internal/file.go"
+            ],
+            "locations": [
+              {
+                "path": "internal/file.go",
+                "anchor": "line 1"
+              }
+            ],
+            "summary": "Corrected the defect."
+          }
+        ],
+        "unapplied": [
+          {
+            "finding_key": "finding-2",
+            "reason": "Needs approval."
+          }
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "name": "fix_unknown_terminal",
+      "role": "fix",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "fix",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "applied": [
+          {
+            "finding_key": "finding-1",
+            "files": [
+              "internal/file.go"
+            ],
+            "locations": [
+              {
+                "path": "internal/file.go",
+                "anchor": "line 1"
+              }
+            ],
+            "summary": "Corrected the defect."
+          }
+        ],
+        "unapplied": [
+          {
+            "finding_key": "finding-2",
+            "reason": "Needs approval."
+          }
+        ],
+        "terminal": "done"
+      },
+      "accepted": false
+    },
+    {
+      "name": "fix_applied_extra",
+      "role": "fix",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "fix",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "applied": [
+          {
+            "finding_key": "finding-1",
+            "files": [
+              "internal/file.go"
+            ],
+            "locations": [
+              {
+                "path": "internal/file.go",
+                "anchor": "line 1"
+              }
+            ],
+            "summary": "Corrected the defect.",
+            "extra": "x"
+          }
+        ],
+        "unapplied": [
+          {
+            "finding_key": "finding-2",
+            "reason": "Needs approval."
+          }
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "name": "fix_applied_missing_files",
+      "role": "fix",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "fix",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "applied": [
+          {
+            "finding_key": "finding-1",
+            "locations": [
+              {
+                "path": "internal/file.go",
+                "anchor": "line 1"
+              }
+            ],
+            "summary": "Corrected the defect."
+          }
+        ],
+        "unapplied": [
+          {
+            "finding_key": "finding-2",
+            "reason": "Needs approval."
+          }
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "name": "fix_files_empty",
+      "role": "fix",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "fix",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "applied": [
+          {
+            "finding_key": "finding-1",
+            "files": [],
+            "locations": [
+              {
+                "path": "internal/file.go",
+                "anchor": "line 1"
+              }
+            ],
+            "summary": "Corrected the defect."
+          }
+        ],
+        "unapplied": [
+          {
+            "finding_key": "finding-2",
+            "reason": "Needs approval."
+          }
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "name": "fix_files_duplicate",
+      "role": "fix",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "fix",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "applied": [
+          {
+            "finding_key": "finding-1",
+            "files": [
+              "internal/file.go",
+              "internal/file.go"
+            ],
+            "locations": [
+              {
+                "path": "internal/file.go",
+                "anchor": "line 1"
+              }
+            ],
+            "summary": "Corrected the defect."
+          }
+        ],
+        "unapplied": [
+          {
+            "finding_key": "finding-2",
+            "reason": "Needs approval."
+          }
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "name": "fix_files_absolute",
+      "role": "fix",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "fix",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "applied": [
+          {
+            "finding_key": "finding-1",
+            "files": [
+              "/tmp/x"
+            ],
+            "locations": [
+              {
+                "path": "internal/file.go",
+                "anchor": "line 1"
+              }
+            ],
+            "summary": "Corrected the defect."
+          }
+        ],
+        "unapplied": [
+          {
+            "finding_key": "finding-2",
+            "reason": "Needs approval."
+          }
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "name": "fix_files_backslash",
+      "role": "fix",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "fix",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "applied": [
+          {
+            "finding_key": "finding-1",
+            "files": [
+              "internal\\file.go"
+            ],
+            "locations": [
+              {
+                "path": "internal/file.go",
+                "anchor": "line 1"
+              }
+            ],
+            "summary": "Corrected the defect."
+          }
+        ],
+        "unapplied": [
+          {
+            "finding_key": "finding-2",
+            "reason": "Needs approval."
+          }
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "name": "fix_files_dot",
+      "role": "fix",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "fix",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "applied": [
+          {
+            "finding_key": "finding-1",
+            "files": [
+              "./file.go"
+            ],
+            "locations": [
+              {
+                "path": "internal/file.go",
+                "anchor": "line 1"
+              }
+            ],
+            "summary": "Corrected the defect."
+          }
+        ],
+        "unapplied": [
+          {
+            "finding_key": "finding-2",
+            "reason": "Needs approval."
+          }
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "name": "fix_locations_empty",
+      "role": "fix",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "fix",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "applied": [
+          {
+            "finding_key": "finding-1",
+            "files": [
+              "internal/file.go"
+            ],
+            "locations": [],
+            "summary": "Corrected the defect."
+          }
+        ],
+        "unapplied": [
+          {
+            "finding_key": "finding-2",
+            "reason": "Needs approval."
+          }
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "name": "fix_location_extra",
+      "role": "fix",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "fix",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "applied": [
+          {
+            "finding_key": "finding-1",
+            "files": [
+              "internal/file.go"
+            ],
+            "locations": [
+              {
+                "path": "internal/file.go",
+                "anchor": "line 1",
+                "line": 1
+              }
+            ],
+            "summary": "Corrected the defect."
+          }
+        ],
+        "unapplied": [
+          {
+            "finding_key": "finding-2",
+            "reason": "Needs approval."
+          }
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "name": "fix_summary_empty",
+      "role": "fix",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "fix",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "applied": [
+          {
+            "finding_key": "finding-1",
+            "files": [
+              "internal/file.go"
+            ],
+            "locations": [
+              {
+                "path": "internal/file.go",
+                "anchor": "line 1"
+              }
+            ],
+            "summary": ""
+          }
+        ],
+        "unapplied": [
+          {
+            "finding_key": "finding-2",
+            "reason": "Needs approval."
+          }
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "name": "fix_unapplied_extra",
+      "role": "fix",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "fix",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "applied": [
+          {
+            "finding_key": "finding-1",
+            "files": [
+              "internal/file.go"
+            ],
+            "locations": [
+              {
+                "path": "internal/file.go",
+                "anchor": "line 1"
+              }
+            ],
+            "summary": "Corrected the defect."
+          }
+        ],
+        "unapplied": [
+          {
+            "finding_key": "finding-2",
+            "reason": "Needs approval.",
+            "extra": "x"
+          }
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "name": "fix_unapplied_reason_empty",
+      "role": "fix",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "fix",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "applied": [
+          {
+            "finding_key": "finding-1",
+            "files": [
+              "internal/file.go"
+            ],
+            "locations": [
+              {
+                "path": "internal/file.go",
+                "anchor": "line 1"
+              }
+            ],
+            "summary": "Corrected the defect."
+          }
+        ],
+        "unapplied": [
+          {
+            "finding_key": "finding-2",
+            "reason": ""
+          }
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "name": "fix_duplicate_applied",
+      "role": "fix",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "fix",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "applied": [
+          {
+            "finding_key": "finding-1",
+            "files": [
+              "internal/file.go"
+            ],
+            "locations": [
+              {
+                "path": "internal/file.go",
+                "anchor": "line 1"
+              }
+            ],
+            "summary": "Corrected the defect."
+          },
+          {
+            "finding_key": "finding-1",
+            "files": [
+              "internal/file.go"
+            ],
+            "locations": [
+              {
+                "path": "internal/file.go",
+                "anchor": "line 1"
+              }
+            ],
+            "summary": "Corrected the defect."
+          }
+        ],
+        "unapplied": [
+          {
+            "finding_key": "finding-2",
+            "reason": "Needs approval."
+          }
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "name": "fix_duplicate_unapplied",
+      "role": "fix",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "fix",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "applied": [
+          {
+            "finding_key": "finding-1",
+            "files": [
+              "internal/file.go"
+            ],
+            "locations": [
+              {
+                "path": "internal/file.go",
+                "anchor": "line 1"
+              }
+            ],
+            "summary": "Corrected the defect."
+          }
+        ],
+        "unapplied": [
+          {
+            "finding_key": "finding-2",
+            "reason": "Needs approval."
+          },
+          {
+            "finding_key": "finding-2",
+            "reason": "Needs approval."
+          }
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "name": "fix_overlapping_keys",
+      "role": "fix",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "fix",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "applied": [
+          {
+            "finding_key": "finding-1",
+            "files": [
+              "internal/file.go"
+            ],
+            "locations": [
+              {
+                "path": "internal/file.go",
+                "anchor": "line 1"
+              }
+            ],
+            "summary": "Corrected the defect."
+          }
+        ],
+        "unapplied": [
+          {
+            "finding_key": "finding-1",
+            "reason": "Needs approval."
+          }
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "name": "judge_too_many_findings",
+      "role": "judge",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "judge",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "findings": [
+          {
+            "finding_key": "f0",
+            "severity": "CRITICAL",
+            "location": {
+              "path": "internal/file.go",
+              "anchor": "line 1"
+            },
+            "evidence": {
+              "source": "diff",
+              "detail": "shown code"
+            },
+            "description": "A concrete defect.",
+            "fix_intent": "Correct the defect."
+          }
+        ]
+      },
+      "accepted": false,
+      "repeat_array": {
+        "path": "findings",
+        "count": 201
+      }
+    },
+    {
+      "name": "fix_too_many_applied",
+      "role": "fix",
+      "payload": {
+        "schema_version": "judgment-review-result/v1",
+        "capability": "native-session-v1",
+        "role": "fix",
+        "review_id": "review-1",
+        "round": 1,
+        "scope_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "applied": [
+          {
+            "finding_key": "f0",
+            "files": [
+              "internal/file.go"
+            ],
+            "locations": [
+              {
+                "path": "internal/file.go",
+                "anchor": "line 1"
+              }
+            ],
+            "summary": "Corrected the defect."
+          }
+        ],
+        "unapplied": [
+          {
+            "finding_key": "finding-2",
+            "reason": "Needs approval."
+          }
+        ]
+      },
+      "accepted": false,
+      "repeat_array": {
+        "path": "applied",
+        "count": 201
+      }
+    }
+  ]
+}

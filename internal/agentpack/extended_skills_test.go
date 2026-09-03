@@ -127,17 +127,28 @@ func TestJudgmentDayPortableHasAllCriticalPatterns(t *testing.T) {
 
 func TestExtendedSkillsProjectedForTargetResolvers(t *testing.T) {
 	assets := OperationalAssets{}
-	piSkills := assets.ExtendedSkills(PiSkillPathResolver())
-	antiSkills := assets.ExtendedSkills(AntigravitySkillPathResolver())
-
-	if len(piSkills) != 3 || len(antiSkills) != 3 {
-		t.Fatalf("ExtendedSkills() returned wrong count: Pi=%d, Antigravity=%d, want 3 each", len(piSkills), len(antiSkills))
+	projections := map[string][]ManagedSkill{
+		"pi":          assets.ExtendedSkills(PiSkillPathResolver()),
+		"opencode":    assets.ExtendedSkills(openCodePromptSkillPathResolver{}),
+		"codex":       assets.ExtendedSkills(skillPathResolverFunc(func(SkillRef) string { return "codex" })),
+		"antigravity": assets.ExtendedSkills(AntigravitySkillPathResolver()),
+	}
+	canonical := projections["pi"]
+	if len(canonical) != 3 {
+		t.Fatalf("Pi ExtendedSkills() returned %d skills, want 3", len(canonical))
 	}
 
-	// Content should be identical regardless of resolver (no path substitution in body)
-	for i := range piSkills {
-		if piSkills[i].Body != antiSkills[i].Body {
-			t.Errorf("ExtendedSkills body differs for skill %q between targets", piSkills[i].Name)
+	// The portable body is intentionally self-contained and unchanged by every
+	// target resolver; native lifecycle behavior belongs only to separately scoped assets.
+	for target, skills := range projections {
+		if len(skills) != len(canonical) {
+			t.Errorf("%s ExtendedSkills() returned %d skills, want %d", target, len(skills), len(canonical))
+			continue
+		}
+		for i := range canonical {
+			if skills[i].Name != canonical[i].Name || skills[i].Body != canonical[i].Body {
+				t.Errorf("ExtendedSkills body differs for skill %q in %s projection", canonical[i].Name, target)
+			}
 		}
 	}
 }

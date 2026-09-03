@@ -154,7 +154,7 @@ type opencodeAdapter struct {
 
 func defaultOpenCodeAdapter() HarnessAdapter {
 	return opencodeAdapter{
-		target: TargetOpenCode,
+		target: TargetID(agentpack.HarnessOpenCode),
 		title:  "OpenCode",
 		capabilities: map[CapabilityID]Capability{
 			CapabilityAgentPack: {
@@ -168,6 +168,12 @@ func defaultOpenCodeAdapter() HarnessAdapter {
 				Component:   ComponentLoreServerMCP,
 				Description: "Optional Lore MCP configuration support for OpenCode (shaped like Pi/Antigravity remote MCP).",
 				Optional:    true,
+			},
+			CapabilityContext7MCP: {
+				ID:               CapabilityContext7MCP,
+				Component:        ComponentContext7MCP,
+				Description:      "Managed Context7 remote MCP config for OpenCode using the public no-auth remote endpoint.",
+				EnabledByDefault: true,
 			},
 			CapabilityExtendedSkills: {
 				ID:          CapabilityExtendedSkills,
@@ -398,10 +404,12 @@ func renderOpenCodeManagedSkills(req RenderRequest) []RenderedFile {
 	managedAgents := req.effectiveManagedAgents(OpenCodeSkillPathResolver())
 	rendered := make([]RenderedFile, 0, len(managedAgents))
 	for _, agent := range managedAgents {
-		// Use the canonical phase name (e.g., "sdd-propose" rather than
-		// "sdd-proposal") for skill paths and frontmatter so OpenCode
-		// references align with the canonical SDD phase naming.
-		skillDirName := canonicalOpenCodePhaseName(agentpack.PhaseID(agent.Name))
+		// Derive managed SDD names from agentpack's reverse lookup so the
+		// native skill path stays aligned with the canonical phase identity.
+		skillDirName := agent.Name
+		if phase, ok := agentpack.PhaseForAgentName(agent.Name); ok {
+			skillDirName = agentpack.PhaseAgentName(phase)
+		}
 		content := strings.Join([]string{
 			"---",
 			"name: " + skillDirName,
@@ -436,19 +444,10 @@ func renderOpenCodeManagedSkillBody(agent agentpack.ManagedAgent) string {
 }
 
 func openCodePhaseForManagedAgent(agent agentpack.ManagedAgent) (agentpack.PhaseID, bool) {
-	if agent.Phase != "" {
-		for _, phase := range agentpack.OrderedPhaseIDs() {
-			if agent.Phase == phase {
-				return phase, true
-			}
-		}
+	if agent.Phase != "" && agentpack.PhaseEnvelopeName(agent.Phase) != "" {
+		return agent.Phase, true
 	}
-	for _, phase := range agentpack.OrderedPhaseIDs() {
-		if agent.Name == agentpack.PhaseAgentName(phase) {
-			return phase, true
-		}
-	}
-	return "", false
+	return agentpack.PhaseForAgentName(agent.Name)
 }
 
 func renderOpenCodeExtendedSkills(req RenderRequest) []RenderedFile {
@@ -532,18 +531,6 @@ func normalizeOpenCodeModelIdentifier(model string) (string, bool) {
 		return "google/" + trimmed, true
 	default:
 		return "", false
-	}
-}
-
-// canonicalOpenCodePhaseName returns the approved canonical phase name
-// used in OpenCode skill paths and frontmatter. PhaseProposal maps to
-// "propose"; all other phases use their raw name.
-func canonicalOpenCodePhaseName(phase agentpack.PhaseID) string {
-	switch phase {
-	case agentpack.PhaseProposal:
-		return "propose"
-	default:
-		return string(phase)
 	}
 }
 
@@ -1059,13 +1046,18 @@ func renderOpenCodeMCPConfigWithExisting(definition agentpack.Definition, cfg ag
 		return nil, fmt.Errorf("saved token is required for OpenCode MCP config")
 	}
 
-	mcpPayload := map[string]any{
+	loreMCPPayload := map[string]any{
 		"type":    "remote",
 		"url":     normalizedServerURL + "/v1/mcp",
 		"enabled": true,
 		"headers": map[string]any{
 			"Authorization": "Bearer " + trimmedToken,
 		},
+	}
+	context7MCPPayload := map[string]any{
+		"type":    "remote",
+		"url":     Context7MCPRemoteURL,
+		"enabled": true,
 	}
 
 	payload := map[string]any{
@@ -1074,7 +1066,10 @@ func renderOpenCodeMCPConfigWithExisting(definition agentpack.Definition, cfg ag
 		opencodeDefaultAgentKey: opencodePrimaryAgentName,
 		opencodeAgentsKey:       opencodeAgentOverlay(definition, cfg, existingAgent),
 		opencodeSkillsDirKey:    opencodeSkillsBlock(),
-		opencodeMCPBlockKey:     map[string]any{opencodeMCPLoreKey: mcpPayload},
+		opencodeMCPBlockKey: map[string]any{
+			opencodeMCPLoreKey:    loreMCPPayload,
+			Context7MCPServerName: context7MCPPayload,
+		},
 	}
 
 	data, err := json.MarshalIndent(payload, "", "  ")

@@ -33,6 +33,16 @@ var orderedPhaseIDs = []PhaseID{
 	PhaseArchive,
 }
 
+// HarnessPrompt is the canonical identifier for a harness-specific prompt projection.
+type HarnessPrompt string
+
+const (
+	HarnessOpenCode    HarnessPrompt = "opencode"
+	HarnessPi          HarnessPrompt = "pi"
+	HarnessCodex       HarnessPrompt = "codex"
+	HarnessAntigravity HarnessPrompt = "antigravity"
+)
+
 const (
 	RoleOrchestrator = "orchestrator"
 	RoleLoreWorker   = "lore-worker"
@@ -149,38 +159,80 @@ func OrderedPhaseIDs() []PhaseID {
 	return append([]PhaseID(nil), orderedPhaseIDs...)
 }
 
-func PhaseAgentName(id PhaseID) string {
-	if id == PhaseProposal {
-		return "sdd-propose"
+// NormalizeHarnessPrompt resolves a supported target alias to its canonical
+// renderer target. Empty and unknown aliases are rejected deterministically.
+func NormalizeHarnessPrompt(alias string) (HarnessPrompt, bool) {
+	switch strings.ToLower(strings.TrimSpace(alias)) {
+	case string(HarnessPi):
+		return HarnessPi, true
+	case string(HarnessOpenCode), "open-code":
+		return HarnessOpenCode, true
+	case string(HarnessCodex):
+		return HarnessCodex, true
+	case string(HarnessAntigravity), "anti-gravity":
+		return HarnessAntigravity, true
+	default:
+		return "", false
 	}
-	return "sdd-" + string(id)
+}
+
+// PhaseAgentName returns the canonical managed-agent name for a known phase.
+// Proposal deliberately uses the historical agent name sdd-propose.
+func PhaseAgentName(id PhaseID) string {
+	if !isKnownPhase(id) {
+		return ""
+	}
+	return "sdd-" + PhaseEnvelopeName(id)
+}
+
+// PhaseEnvelopeName returns the canonical phase value used by rendered
+// envelopes and prompt paths. Proposal maps to propose; all other known phases
+// preserve their canonical PhaseID value.
+func PhaseEnvelopeName(id PhaseID) string {
+	if !isKnownPhase(id) {
+		return ""
+	}
+	if id == PhaseProposal {
+		return "propose"
+	}
+	return string(id)
+}
+
+// PhaseForAgentName resolves a canonical managed SDD agent name. Empty,
+// unknown, and non-agent aliases are rejected deterministically.
+func PhaseForAgentName(name string) (PhaseID, bool) {
+	for _, phase := range orderedPhaseIDs {
+		if name == PhaseAgentName(phase) {
+			return phase, true
+		}
+	}
+	return "", false
+}
+
+func isKnownPhase(id PhaseID) bool {
+	for _, phase := range orderedPhaseIDs {
+		if id == phase {
+			return true
+		}
+	}
+	return false
 }
 
 // SDDPhaseAgentNames returns the canonical SDD phase agent names in execution order.
 // These are the names declared in agent-config.json.
 func SDDPhaseAgentNames() []string {
-	return []string{
-		"sdd-init",
-		"sdd-explore",
-		"sdd-propose",
-		"sdd-spec",
-		"sdd-design",
-		"sdd-tasks",
-		"sdd-apply",
-		"sdd-verify",
-		"sdd-archive",
+	names := make([]string, 0, len(orderedPhaseIDs))
+	for _, phase := range orderedPhaseIDs {
+		names = append(names, PhaseAgentName(phase))
 	}
+	return names
 }
 
 // IsKnownSDDAgent returns true if the name is a known canonical SDD phase agent.
 // It is exported so agentconfig can validate unknown agents without duplicating the list.
 func IsKnownSDDAgent(name string) bool {
-	for _, known := range SDDPhaseAgentNames() {
-		if name == known {
-			return true
-		}
-	}
-	return false
+	_, ok := PhaseForAgentName(name)
+	return ok
 }
 
 func (d Definition) Validate() error {

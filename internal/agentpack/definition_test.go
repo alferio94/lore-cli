@@ -274,12 +274,56 @@ func TestDefinitionSelectProfileAndRoleModel(t *testing.T) {
 	}
 }
 
-func TestPhaseAgentNameMapsProposalToSddPropose(t *testing.T) {
+func TestCanonicalPhaseNamesAndHarnessAliases(t *testing.T) {
+	for _, phase := range OrderedPhaseIDs() {
+		agentName := PhaseAgentName(phase)
+		if agentName == "" {
+			t.Fatalf("PhaseAgentName(%q) = empty", phase)
+		}
+		resolved, ok := PhaseForAgentName(agentName)
+		if !ok || resolved != phase {
+			t.Fatalf("PhaseForAgentName(%q) = %q, %t; want %q, true", agentName, resolved, ok, phase)
+		}
+	}
 	if got := PhaseAgentName(PhaseProposal); got != "sdd-propose" {
 		t.Fatalf("PhaseAgentName(proposal) = %q, want sdd-propose", got)
 	}
-	if got := PhaseAgentName(PhaseApply); got != "sdd-apply" {
-		t.Fatalf("PhaseAgentName(apply) = %q, want sdd-apply", got)
+	if got := PhaseEnvelopeName(PhaseProposal); got != "propose" {
+		t.Fatalf("PhaseEnvelopeName(proposal) = %q, want propose", got)
+	}
+	for _, unknown := range []PhaseID{"", "propose", "sdd-propose", "unknown"} {
+		if got := PhaseAgentName(unknown); got != "" {
+			t.Fatalf("PhaseAgentName(%q) = %q, want empty", unknown, got)
+		}
+		if got := PhaseEnvelopeName(unknown); got != "" {
+			t.Fatalf("PhaseEnvelopeName(%q) = %q, want empty", unknown, got)
+		}
+	}
+	for _, unknown := range []string{"", "proposal", "propose", "sdd-proposal", "sdd-unknown"} {
+		if phase, ok := PhaseForAgentName(unknown); ok || phase != "" {
+			t.Fatalf("PhaseForAgentName(%q) = %q, %t; want empty, false", unknown, phase, ok)
+		}
+	}
+
+	for _, tc := range []struct {
+		alias string
+		want  HarnessPrompt
+	}{
+		{alias: " pi ", want: HarnessPi},
+		{alias: "OpenCode", want: HarnessOpenCode},
+		{alias: "open-code", want: HarnessOpenCode},
+		{alias: "codex", want: HarnessCodex},
+		{alias: "Anti-Gravity", want: HarnessAntigravity},
+	} {
+		got, ok := NormalizeHarnessPrompt(tc.alias)
+		if !ok || got != tc.want {
+			t.Fatalf("NormalizeHarnessPrompt(%q) = %q, %t; want %q, true", tc.alias, got, ok, tc.want)
+		}
+	}
+	for _, unknown := range []string{"", "claude-code", "unknown"} {
+		if target, ok := NormalizeHarnessPrompt(unknown); ok || target != "" {
+			t.Fatalf("NormalizeHarnessPrompt(%q) = %q, %t; want empty, false", unknown, target, ok)
+		}
 	}
 }
 

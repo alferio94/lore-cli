@@ -1,0 +1,37 @@
+{
+  "version": 2,
+  "measurement_kind": "utf-8 static portable/global fallback full-skill and role-template segments",
+  "source": "internal/agentpack/extended_skills.go:JudgmentDayPortable",
+  "asset": "judgment-day",
+  "note": "Captured corrected lore-cli rendered static fallback full-skill and role-template costs; not observed dynamic runtime prompt cost or compact-candidate savings.",
+  "full_skill": {
+    "bytes": 8776,
+    "chars": 8742,
+    "lines": 192,
+    "estimated_tokens": 2186
+  },
+  "roles": [
+    {
+      "role": "judge",
+      "segment": "judge_prompt_template",
+      "source": "internal/agentpack/extended_skills.go:JudgmentDayPortable",
+      "measurement": {
+        "bytes": 1429,
+        "chars": 1425,
+        "lines": 34,
+        "estimated_tokens": 357
+      }
+    },
+    {
+      "role": "fix",
+      "segment": "fix_agent_prompt_template",
+      "source": "internal/agentpack/extended_skills.go:JudgmentDayPortable",
+      "measurement": {
+        "bytes": 984,
+        "chars": 980,
+        "lines": 25,
+        "estimated_tokens": 245
+      }
+    }
+  ]
+}

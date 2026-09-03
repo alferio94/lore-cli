@@ -13,12 +13,14 @@ type CapabilityID string
 type MergeMode string
 
 const (
-	CapabilityAgentPack      CapabilityID = "agent-pack"
-	CapabilityPiExtensions   CapabilityID = "pi-extensions"
-	CapabilityPrompt         CapabilityID = "prompt"
-	CapabilitySkills         CapabilityID = "skills"
-	CapabilityLoreServerMCP  CapabilityID = "lore-server-mcp"
-	CapabilityExtendedSkills CapabilityID = "extended-skills"
+	CapabilityAgentPack               CapabilityID = "agent-pack"
+	CapabilityPiExtensions            CapabilityID = "pi-extensions"
+	CapabilityPrompt                  CapabilityID = "prompt"
+	CapabilitySkills                  CapabilityID = "skills"
+	CapabilityLoreServerMCP           CapabilityID = "lore-server-mcp"
+	CapabilityContext7MCP             CapabilityID = "context7-mcp"
+	CapabilityExtendedSkills          CapabilityID = "extended-skills"
+	CapabilityBoundedReviewProjection CapabilityID = "bounded-review-projection"
 
 	MergeModeReplace      MergeMode = "replace"
 	MergeModeAdditiveJSON MergeMode = "additive-json"
@@ -47,6 +49,7 @@ type RenderRequest struct {
 	HarnessRoot     string
 	RuntimeContract RuntimeContract
 	AgentConfig     agentconfig.Config
+	ServerScope     ServerScope
 }
 
 type RenderedFile struct {
@@ -99,6 +102,9 @@ func (r *Registry) Resolve(target TargetID) (HarnessAdapter, error) {
 }
 
 func (r RenderRequest) Validate() error {
+	if path := serverScopeValidationPath(r.ServerScope, false); path != "" {
+		return fmt.Errorf("server scope is invalid at %s", path)
+	}
 	if r.Target == "" {
 		return fmt.Errorf("target is required")
 	}

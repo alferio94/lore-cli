@@ -277,21 +277,19 @@ Theoretical warnings are reported as INFO in the verdict table. They are NOT fix
 
 ### Pattern 4: Fix and Re-judge
 
-1. If confirmed CRITICALs or real WARNINGs exist -> delegate a Fix Agent (separate delegation)
-2. After Fix Agent completes -> re-launch both judges in parallel (same blind protocol, fresh delegates)
-3. After 2 fix iterations, if issues remain -> present findings to user and ASK whether to continue
-4. If both judges return clean -> JUDGMENT: APPROVED
+1. If confirmed CRITICALs or real WARNINGs exist -> present the verdict table and ASK the user to approve the confirmed allowlist, then delegate a separate Fix Agent
+2. Every code-modifying Fix Agent action, including later rounds, MUST be followed by a fresh pair of two blind Judges before APPROVED.
+3. After every code-modifying Fix Agent action, immediately launch two fresh blind judges in parallel before any terminal judgment.
+4. After 2 fix iterations, if issues remain -> present findings to user and ASK whether to continue
+5. If both fresh judges return clean -> JUDGMENT: APPROVED
 
 ### Pattern 5: Convergence Threshold
 
-Round 1: Present the verdict table to the user. ASK: 'Fix confirmed issues?' Only fix after user confirms. Then re-judge with full scope.
+Round 1 and every later round: present the verdict table to the user. ASK: 'Fix confirmed issues?' Only fix after user confirms. Then re-judge with a fresh blind pair and full scope.
 
-Round 2+: Only re-judge if there are confirmed CRITICALs. For anything else:
-- Real WARNINGs (confirmed): Fix inline, do NOT re-launch judges
-- Theoretical WARNINGs: Report as INFO. Do NOT fix, do NOT re-judge
-- SUGGESTIONs: Fix inline if trivial. Do NOT re-judge
+Theoretical WARNINGs are INFO and SUGGESTIONs are reported; neither authorizes a code-modifying Fix. Any approved code-modifying Fix, regardless of severity or round, requires the fresh blind pair above.
 
-APPROVED criteria after Round 1: 0 confirmed CRITICALs + 0 confirmed real WARNINGs = APPROVED.
+APPROVED criteria: the latest fresh Judge A and Judge B both return CLEAN after the most recent code-modifying Fix, and there are 0 confirmed CRITICALs + 0 confirmed real WARNINGs.
 
 ## Sub-Agent Prompt Templates
 
@@ -389,10 +387,10 @@ Both judges pass clean. The target is cleared for merge.
 
 ## Blocking Rules (MANDATORY)
 
-1. MUST NOT declare JUDGMENT: APPROVED until: Round 1 judges return CLEAN, OR Round 2 judges confirm 0 CRITICALs + 0 confirmed real WARNINGs
-2. MUST NOT run code-modifying actions after fixes until re-judgment completes
+1. MUST NOT declare JUDGMENT: APPROVED until the latest fresh Judge A and Judge B both return CLEAN after every code-modifying Fix Agent action
+2. MUST NOT run another code-modifying action or terminal action after a Fix Agent action until fresh two-Judge re-judgment completes
 3. MUST NOT save a session summary or tell the user 'done' until every JD reaches a terminal state (APPROVED or ESCALATED)
-4. After the Fix Agent returns, your IMMEDIATE next action is re-launching judges in parallel for re-judgment
+4. After every code-modifying Fix Agent action, your IMMEDIATE next action is re-launching two fresh blind judges in parallel for re-judgment
 5. When running multiple JDs in parallel, each JD is independent
 
 ## Self-Check (before ANY terminal action)
@@ -401,8 +399,8 @@ Before pushing, committing, summarizing, or telling the user 'done':
 
 1. List every active JD target
 2. For each: is it in state APPROVED or ESCALATED?
-3. If ANY JD had fixes applied, did Round 2 run?
-4. If Round 2 found issues, did you ASK the user whether to continue?
+3. If ANY JD had a code-modifying Fix Agent action, did a fresh two-Judge re-judgment complete afterward?
+4. If two fix iterations found issues, did you ASK the user whether to continue?
 
 If ANY answer is 'no' — you skipped a step. Go back and complete it before proceeding.
 

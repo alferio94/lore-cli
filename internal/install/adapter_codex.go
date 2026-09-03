@@ -25,7 +25,7 @@ type codexAdapter struct {
 
 func defaultCodexAdapter() HarnessAdapter {
 	return codexAdapter{
-		target: TargetCodex,
+		target: TargetID(agentpack.HarnessCodex),
 		title:  "Codex",
 		capabilities: map[CapabilityID]Capability{
 			CapabilityAgentPack: {
@@ -38,6 +38,12 @@ func defaultCodexAdapter() HarnessAdapter {
 				ID:               CapabilityLoreServerMCP,
 				Component:        ComponentLoreServerMCP,
 				Description:      "Managed remote Lore MCP config for Codex.",
+				EnabledByDefault: true,
+			},
+			CapabilityContext7MCP: {
+				ID:               CapabilityContext7MCP,
+				Component:        ComponentContext7MCP,
+				Description:      "Managed Context7 remote MCP config for Codex without tool auto-approvals.",
 				EnabledByDefault: true,
 			},
 			CapabilityExtendedSkills: {
@@ -134,6 +140,10 @@ func (a codexAdapter) Render(_ context.Context, req RenderRequest) ([]RenderedFi
 		})
 	}
 
+	if containsComponent(components, ComponentCorePack) {
+		rendered = append(rendered, renderCodexSDDProfiles(req.AgentConfig)...)
+	}
+
 	rendered = append(rendered, renderCodexManagedSkills(req)...)
 	rendered = append(rendered, renderCodexSharedSkills()...)
 	rendered = append(rendered, renderCodexExtendedSkills(req)...)
@@ -203,7 +213,9 @@ func renderCodexAgentsMD(req RenderRequest) ([]byte, error) {
 		"",
 		"## Notes",
 		"- Codex receives a Lore-managed remote MCP entry pointing at your saved Lore server `/v1/mcp` endpoint.",
-		"- No `codex exec` runner, npm bootstrap, Pi overlays, or plugin behavior are installed by this target.",
+		"- No `codex exec` runner, npm bootstrap, Pi overlays, hooks, or plugin behavior are installed by this target.",
+		"",
+		renderCodexSDDSection(req.AgentConfig),
 		"",
 		"Load the Lore-managed skill files from `~/.codex/skills` when a task explicitly requires them.",
 		"",
@@ -223,6 +235,7 @@ func renderCodexMCPConfig(serverURL, token string) ([]byte, error) {
 	if trimmedToken == "" {
 		return nil, fmt.Errorf("saved token is required")
 	}
+	approvalFragment := renderCodexLoreMCPApprovalFragment()
 	text := strings.Join([]string{
 		codexMCPBlockStartMarker,
 		"[mcp_servers.lore]",
@@ -230,6 +243,11 @@ func renderCodexMCPConfig(serverURL, token string) ([]byte, error) {
 		"",
 		"[mcp_servers.lore.http_headers]",
 		fmt.Sprintf("Authorization = %q", "Bearer "+trimmedToken),
+		"",
+		approvalFragment,
+		"",
+		"[mcp_servers.context7]",
+		fmt.Sprintf("url = %q", Context7MCPRemoteURL),
 		codexMCPBlockEndMarker,
 		"",
 	}, "\n")
@@ -241,19 +259,23 @@ func renderCodexManagedSkills(req RenderRequest) []RenderedFile {
 	managedAgents := req.effectiveManagedAgents(CodexSkillPathResolver())
 	rendered := make([]RenderedFile, 0, len(managedAgents))
 	for _, agent := range managedAgents {
+		name := agent.Name
+		if phase, ok := agentpack.PhaseForAgentName(agent.Name); ok {
+			name = agentpack.PhaseAgentName(phase)
+		}
 		content := strings.Join([]string{
 			"---",
-			"name: " + agent.Name,
+			"name: " + name,
 			"description: " + agent.Description,
 			"---",
-			agent.Body,
+			agentpack.ProjectNativeHarnessManagedAgentPrompt(agentpack.HarnessCodex, agent.Body),
 		}, "\n")
 		if !strings.HasSuffix(content, "\n") {
 			content += "\n"
 		}
 		rendered = append(rendered, RenderedFile{
 			Component:    ComponentCorePack,
-			RelativePath: filepath.ToSlash(filepath.Join("skills", agent.Name, "SKILL.md")),
+			RelativePath: filepath.ToSlash(filepath.Join("skills", name, "SKILL.md")),
 			MergeMode:    MergeModeReplace,
 			Content:      []byte(content),
 		})
