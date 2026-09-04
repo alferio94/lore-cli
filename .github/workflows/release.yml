@@ -1,26 +1,57 @@
 name: release
 
 on:
-  push:
-    tags:
-      - 'v*'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing annotated stable tag (vX.Y.Z)
+        required: false
+        default: ''
+      profile_path:
+        description: Repository-relative canonical release profile
+        required: false
+        default: ''
+      profile_id:
+        description: Exact expected canonical profile identity
+        required: false
+        default: ''
+      authorize_release:
+        description: Authorize remote release actions for the exact tag and profile
+        required: false
+        type: boolean
+        default: false
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   validate:
     runs-on: ubuntu-latest
     steps:
-      - name: Check out source
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - name: Validate semantic annotated tag
+      - name: Require explicit release authorization before remote actions
+        env:
+          AUTHORIZED: ${{ inputs.authorize_release }}
+          TAG: ${{ inputs.release_tag }}
+          PROFILE: ${{ inputs.profile_path }}
+          PROFILE_ID: ${{ inputs.profile_id }}
         run: |
           set -euo pipefail
-          TAG="${GITHUB_REF_NAME}"
+          [[ "$AUTHORIZED" == "true" ]] || { echo "release authorization is required" >&2; exit 1; }
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "an exact stable release tag is required" >&2; exit 1; }
+          [[ "$PROFILE" =~ ^\.github/release-profiles/[A-Za-z0-9._-]+\.json$ ]] || { echo "an authorized repository-relative profile is required" >&2; exit 1; }
+          [[ "$PROFILE_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$ ]] || { echo "an exact safe profile identity is required" >&2; exit 1; }
+
+      - name: Check out authorized tag
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.release_tag }}
+
+      - name: Validate semantic annotated tag
+        env:
+          TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
           if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "release tags must match vX.Y.Z; got $TAG" >&2
             exit 1
@@ -34,20 +65,32 @@ jobs:
             echo "release tags must be annotated; got object type $TYPE" >&2
             exit 1
           fi
+          [[ "$(git rev-list -n 1 "refs/tags/${TAG}")" == "$(git rev-parse HEAD)" ]] || { echo "checked out commit does not match authorized tag" >&2; exit 1; }
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
           go-version-file: go.mod
           cache: true
 
+      - name: Validate authorized canonical profile
+        env:
+          TAG: ${{ inputs.release_tag }}
+          PROFILE: ${{ inputs.profile_path }}
+          PROFILE_ID: ${{ inputs.profile_id }}
+        run: |
+          set -euo pipefail
+          ./scripts/release-profile-ldflags.sh --guard "$PROFILE" "$TAG" "$PROFILE_ID"
+
       - name: Run test gate
-        run: go test ./...
+        run: |
+          go test ./...
+          go test -race ./...
 
       - name: Validate installer scripts
         run: |
           set -euo pipefail
-          bash -n scripts/install.sh
+          bash -n scripts/install.sh && bash scripts/test-release-workflow.sh
           pwsh -NoLogo -NoProfile -Command '$errors = $null; [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path "scripts/install.ps1"), [ref]$null, [ref]$errors); if ($errors) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }'
 
       - name: Run installer smoke tests
@@ -85,82 +128,126 @@ jobs:
             archive_ext: zip
             binary_name: lore.exe
     steps:
-      - name: Check out source
-        uses: actions/checkout@v6
+      - name: Check out authorized tag
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.release_tag }}
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
           go-version-file: go.mod
           cache: true
 
-      - name: Build release archive
+      - name: Build release archive and truthful evidence label
         env:
           CGO_ENABLED: 0
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           ARCHIVE_EXT: ${{ matrix.archive_ext }}
           BINARY_NAME: ${{ matrix.binary_name }}
-          TAG: ${{ github.ref_name }}
-          COMMIT: ${{ github.sha }}
+          TAG: ${{ inputs.release_tag }}
+          PROFILE: ${{ inputs.profile_path }}
+          PROFILE_ID: ${{ inputs.profile_id }}
         run: |
           set -euo pipefail
           BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          COMMIT="$(git rev-parse HEAD)"
           ARCHIVE="lore-cli_${TAG}_${GOOS}_${GOARCH}.${ARCHIVE_EXT}"
           BINARY_DIR="dist/${GOOS}_${GOARCH}"
           mkdir -p "$BINARY_DIR"
+          PROFILE_LDFLAGS="$(./scripts/release-profile-ldflags.sh "$PROFILE")"
           go build -trimpath \
-            -ldflags "-X github.com/alferio94/lore-cli/internal/version.Version=${TAG} -X github.com/alferio94/lore-cli/internal/version.Commit=${COMMIT} -X github.com/alferio94/lore-cli/internal/version.BuildDate=${BUILD_DATE}" \
+            -ldflags "-X=github.com/alferio94/lore-cli/internal/version.Version=${TAG} -X=github.com/alferio94/lore-cli/internal/version.Commit=${COMMIT} -X=github.com/alferio94/lore-cli/internal/version.BuildDate=${BUILD_DATE} ${PROFILE_LDFLAGS}" \
             -o "$BINARY_DIR/${BINARY_NAME}" ./cmd/lore
+          ./scripts/release-profile-ldflags.sh --verify-static "$PROFILE" "$BINARY_DIR/$BINARY_NAME"
+          RUNTIME_EVIDENCE="not-run-cross-build-only"
+          if [[ "$GOOS/$GOARCH" == "linux/amd64" ]]; then
+            ./scripts/release-profile-ldflags.sh --verify "$PROFILE" "$TAG" "$PROFILE_ID" "$BINARY_DIR/$BINARY_NAME"
+            RUNTIME_EVIDENCE="passed"
+          fi
           if [[ "$GOOS" == "windows" ]]; then
-            zip -j "dist/${ARCHIVE}" "$BINARY_DIR/${BINARY_NAME}"
+            zip -q -j "dist/${ARCHIVE}" "$BINARY_DIR/${BINARY_NAME}"
           else
             tar -C "$BINARY_DIR" -czf "dist/${ARCHIVE}" "$BINARY_NAME"
           fi
+          BINARY_SHA256="$(sha256sum "$BINARY_DIR/$BINARY_NAME" | awk '{print $1}')"
+          ARCHIVE_SHA256="$(sha256sum "dist/$ARCHIVE" | awk '{print $1}')"
+          printf '{"schema":"lore.release-build-evidence/v1","release":"%s","profile_id":"%s","os":"%s","arch":"%s","binary_sha256":"%s","archive_sha256":"%s","cross_build":"passed","race_linux_amd64":"passed","os_runtime":"%s","target_integration":"not-tested","adoption":"not-measured"}\n' \
+            "$TAG" "$PROFILE_ID" "$GOOS" "$GOARCH" "$BINARY_SHA256" "$ARCHIVE_SHA256" "$RUNTIME_EVIDENCE" > "dist/evidence-${GOOS}-${GOARCH}.json"
 
-      - name: Upload archive artifact
-        uses: actions/upload-artifact@v7
+      - name: Upload archive and build evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: archive-${{ matrix.goos }}-${{ matrix.goarch }}
           path: |
             dist/*.tar.gz
             dist/*.zip
+            dist/evidence-*.json
           if-no-files-found: error
 
-  publish:
+  attest:
     needs: build
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
+      id-token: write
+      attestations: write
     steps:
-      - name: Check out source
-        uses: actions/checkout@v6
-
       - name: Download archives
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: dist
           pattern: archive-*
           merge-multiple: true
 
-      - name: Render installer assets
+      - name: Attest release archives
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-path: |
+            dist/lore-cli_*.tar.gz
+            dist/lore-cli_*.zip
+
+  publish:
+    needs: [build, attest]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out authorized tag
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.release_tag }}
+
+      - name: Download archives
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: dist
+          pattern: archive-*
+          merge-multiple: true
+
+      - name: Render installer and profile assets
         env:
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ inputs.release_tag }}
+          PROFILE: ${{ inputs.profile_path }}
         run: |
           set -euo pipefail
           sed "s/__DEFAULT_VERSION__/${TAG}/g" scripts/install.sh > dist/install.sh
           sed "s/__DEFAULT_VERSION__/${TAG}/g" scripts/install.ps1 > dist/install.ps1
+          cp "$PROFILE" dist/RELEASE-PROFILE.json
           chmod +x dist/install.sh
           test -s dist/install.sh
           test -s dist/install.ps1
+          test -s dist/RELEASE-PROFILE.json
 
-      - name: Generate checksums and verify asset set
+      - name: Generate checksums, manifest, and verify asset set
         working-directory: dist
         env:
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ inputs.release_tag }}
+          PROFILE_ID: ${{ inputs.profile_id }}
         run: |
           set -euo pipefail
-          mapfile -t actual < <(find . -maxdepth 1 -type f \( -name 'lore-cli_*.tar.gz' -o -name 'lore-cli_*.zip' \) -printf '%f\n' | sort)
+          mapfile -t archives < <(find . -maxdepth 1 -type f \( -name 'lore-cli_*.tar.gz' -o -name 'lore-cli_*.zip' \) -printf '%f\n' | sort)
           expected=(
             "lore-cli_${TAG}_darwin_amd64.tar.gz"
             "lore-cli_${TAG}_darwin_arm64.tar.gz"
@@ -170,61 +257,39 @@ jobs:
             "lore-cli_${TAG}_windows_arm64.zip"
           )
           mapfile -t expected_sorted < <(printf '%s\n' "${expected[@]}" | sort)
-          if ! diff -u <(printf '%s\n' "${expected_sorted[@]}") <(printf '%s\n' "${actual[@]}"); then
-            echo "release asset set did not match expected filenames" >&2
-            exit 1
-          fi
-          sha256sum "${expected_sorted[@]}" > SHA256SUMS
-          if [[ $(wc -l < SHA256SUMS) -ne 6 ]]; then
-            echo "expected SHA256SUMS to contain 6 entries" >&2
-            exit 1
-          fi
-          for archive in "${expected_sorted[@]}"; do
-            if ! grep -Fq "  ${archive}" SHA256SUMS; then
-              echo "missing checksum for ${archive}" >&2
-              exit 1
-            fi
-          done
+          diff -u <(printf '%s\n' "${expected_sorted[@]}") <(printf '%s\n' "${archives[@]}")
+          [[ "$(find . -maxdepth 1 -name 'evidence-*.json' | wc -l)" -eq 6 ]] || { echo "expected six build-evidence records" >&2; exit 1; }
+          mapfile -t assets < <(find . -maxdepth 1 -type f \( -name 'lore-cli_*' -o -name 'evidence-*.json' -o -name 'install.sh' -o -name 'install.ps1' -o -name 'RELEASE-PROFILE.json' \) -printf '%f\n' | sort)
+          sha256sum "${assets[@]}" > SHA256SUMS
+          printf '{"schema":"lore.release-manifest/v1","release":"%s","profile_id":"%s","checksums":"SHA256SUMS","os_runtime":"per-build-evidence","race_linux_amd64":"passed","cross_build":"passed","target_integration":"not-tested","adoption":"not-measured"}\n' "$TAG" "$PROFILE_ID" > RELEASE-MANIFEST.json
+          sha256sum RELEASE-MANIFEST.json >> SHA256SUMS
+          sha256sum -c SHA256SUMS
 
       - name: Detect release notes file
         id: release_notes
         env:
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
           NOTES_FILE="docs/releases/${TAG}.md"
           if [[ -f "$NOTES_FILE" ]]; then
             echo "found=true" >> "$GITHUB_OUTPUT"
             echo "path=${NOTES_FILE}" >> "$GITHUB_OUTPUT"
-            echo "Using release notes from ${NOTES_FILE}"
           else
             echo "found=false" >> "$GITHUB_OUTPUT"
-            echo "path=${NOTES_FILE}" >> "$GITHUB_OUTPUT"
-            echo "No release notes file at ${NOTES_FILE}; falling back to generated release notes"
           fi
 
-      - name: Publish GitHub Release from notes file
-        if: steps.release_notes.outputs.found == 'true'
-        uses: softprops/action-gh-release@v3
-        with:
-          files: |
-            dist/lore-cli_*.tar.gz
-            dist/lore-cli_*.zip
-            dist/SHA256SUMS
-            dist/install.sh
-            dist/install.ps1
-          fail_on_unmatched_files: true
-          body_path: ${{ steps.release_notes.outputs.path }}
-
-      - name: Publish GitHub Release with generated notes
-        if: steps.release_notes.outputs.found != 'true'
-        uses: softprops/action-gh-release@v3
-        with:
-          files: |
-            dist/lore-cli_*.tar.gz
-            dist/lore-cli_*.zip
-            dist/SHA256SUMS
-            dist/install.sh
-            dist/install.ps1
-          fail_on_unmatched_files: true
-          generate_release_notes: true
+      - name: Publish authorized stable GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release_tag }}
+          NOTES_FOUND: ${{ steps.release_notes.outputs.found }}
+          NOTES_PATH: ${{ steps.release_notes.outputs.path }}
+        run: |
+          set -euo pipefail
+          mapfile -t assets < <(find dist -maxdepth 1 -type f -printf '%p\n' | sort)
+          if [[ "$NOTES_FOUND" == "true" ]]; then
+            gh release create "$TAG" --verify-tag --title "$TAG" --notes-file "$NOTES_PATH" "${assets[@]}"
+          else
+            gh release create "$TAG" --verify-tag --title "$TAG" --generate-notes "${assets[@]}"
+          fi
