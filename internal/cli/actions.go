@@ -114,6 +114,7 @@ type InteractiveActions struct {
 	ExecutePiInstall func(ctx context.Context, plan install.PiInstallPlan) ActionReport
 	InstallWorkflow  install.Workflow
 	LegacyAdapter    install.LegacyAdapter
+	ReleaseProfile   version.ReleaseProfile
 	CheckForUpdate   func(ctx context.Context) UpdateAvailability
 	Update           func(ctx context.Context) ActionReport
 }
@@ -136,6 +137,7 @@ func (a *App) InteractiveActions() InteractiveActions {
 		ExecutePiInstall: a.executePiInstallAction,
 		InstallWorkflow:  a.InstallWorkflow,
 		LegacyAdapter:    a.LegacyAdapter,
+		ReleaseProfile:   a.BuildInfo.ReleaseProfile,
 		CheckForUpdate:   a.checkForUpdateAction,
 		Update:           a.updateApplyAction,
 	}

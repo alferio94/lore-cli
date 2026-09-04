@@ -584,8 +584,10 @@ func TestVersionDefaultOutput(t *testing.T) {
 	if exitCode != 0 {
 		t.Fatalf("Run() exitCode = %d, want 0, stderr=%q", exitCode, stderr.String())
 	}
-	if got, want := stdout.String(), "lore version dev commit=none buildDate=unknown\n"; got != want {
-		t.Fatalf("stdout = %q, want %q", got, want)
+	for _, want := range []string{"lore version dev commit=none buildDate=unknown", "id=default-off", "provenance=default-off", "gates=pi:off,opencode:off,codex:off,antigravity:off"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout = %q, want %q", stdout.String(), want)
+		}
 	}
 	if stderr.Len() != 0 {
 		t.Fatalf("stderr = %q, want empty", stderr.String())
@@ -600,11 +602,11 @@ func TestVersionJSONOutput(t *testing.T) {
 		t.Fatalf("Run() exitCode = %d, want 0, stderr=%q", exitCode, stderr.String())
 	}
 
-	var got map[string]string
+	var got version.Info
 	if err := json.Unmarshal([]byte(stdout.String()), &got); err != nil {
 		t.Fatalf("json.Unmarshal() error = %v, stdout=%q", err, stdout.String())
 	}
-	if got["version"] != "v1.2.3" || got["commit"] != "abc1234" || got["buildDate"] != "2026-05-17T12:34:56Z" {
+	if got.Version != "v1.2.3" || got.Commit != "abc1234" || got.BuildDate != "2026-05-17T12:34:56Z" || got.ReleaseProfile.ProvenanceStatus != "default-off" {
 		t.Fatalf("JSON output = %#v", got)
 	}
 	if stderr.Len() != 0 {

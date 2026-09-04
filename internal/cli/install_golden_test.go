@@ -9,22 +9,24 @@ import (
 	"testing"
 
 	"github.com/alferio94/lore-cli/internal/install"
+	"github.com/alferio94/lore-cli/internal/version"
 )
 
 func TestW410CLIGoldensGuardModesStreamsSchemaOrderingAndRedaction(t *testing.T) {
+	profile := diagnosticProfileFixture()
 	for _, format := range []installFormat{installFormatHuman, installFormatJSON} {
 		var fixture strings.Builder
 		for _, mode := range []install.Mode{install.ModeExplain, install.ModeDryRun, install.ModeApply, install.ModeLegacyDryRun, install.ModeLegacyApply} {
 			result := w410CLIResult(mode)
 			var stdout, stderr bytes.Buffer
-			exit := (&App{Stdout: &stdout, Stderr: &stderr}).presentInstallResult(format, result)
+			exit := (&App{Stdout: &stdout, Stderr: &stderr, BuildInfo: version.Info{ReleaseProfile: profile}}).presentInstallResult(format, result)
 			if exit != 0 {
 				t.Fatalf("%s/%s exit=%d", format, mode, exit)
 			}
 			if format == installFormatJSON {
 				var envelope installResultEnvelope
-				if stderr.Len() != 0 || strings.Count(stdout.String(), "\n") != 1 || json.Unmarshal(stdout.Bytes(), &envelope) != nil || envelope.SchemaVersion != install.ResultSchemaVersion {
-					t.Fatalf("%s JSON stream/schema drift: %q/%q", mode, stdout.String(), stderr.String())
+				if stderr.Len() != 0 || strings.Count(stdout.String(), "\n") != 1 || json.Unmarshal(stdout.Bytes(), &envelope) != nil || envelope.SchemaVersion != install.ResultSchemaVersion || envelope.ReleaseProfile != profile {
+					t.Fatalf("%s JSON stream/schema/profile drift: %q/%q", mode, stdout.String(), stderr.String())
 				}
 			} else if mode == install.ModeLegacyApply || mode == install.ModeLegacyDryRun {
 				if !strings.Contains(stderr.String(), "warning[legacy-deprecated]") {
@@ -39,7 +41,10 @@ func TestW410CLIGoldensGuardModesStreamsSchemaOrderingAndRedaction(t *testing.T)
 			}
 		}
 		observed := fixture.String()
-		for _, forbidden := range []string{"/Users/private/credential", "Bearer fixture-secret", "\x1b["} {
+		if format == installFormatHuman && !strings.Contains(observed, profile.Summary()) {
+			t.Fatalf("%s missing shared profile diagnostics", format)
+		}
+		for _, forbidden := range []string{"/Users/private/credential", "Bearer fixture-secret", "eyJzY2hlbWEiOi", "\x1b["} {
 			if strings.Contains(observed, forbidden) {
 				t.Fatalf("%s leaked %q", format, forbidden)
 			}
@@ -48,6 +53,10 @@ func TestW410CLIGoldensGuardModesStreamsSchemaOrderingAndRedaction(t *testing.T)
 		assertCLIGolden(t, path, observed)
 		assertCLIGolden(t, path, observed)
 	}
+}
+
+func diagnosticProfileFixture() version.ReleaseProfile {
+	return version.ReleaseProfile{Schema: "lore.release-profile/v1", ID: "prerelease-opencode-e", Version: 1, Release: "v0.3.0-rc.1", Channel: "prerelease", ArtifactSHA256: strings.Repeat("a", 64), ProvenanceStatus: "valid", Gates: version.ProfileGates{Pi: "off", OpenCode: "E", Codex: "off", Antigravity: "off"}}
 }
 
 func TestW410CLIExitAndCancellationGuards(t *testing.T) {

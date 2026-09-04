@@ -7,31 +7,42 @@ import (
 	"testing"
 
 	"github.com/alferio94/lore-cli/internal/install"
+	"github.com/alferio94/lore-cli/internal/version"
 )
 
 func TestW410TUIGoldenGuardsModesRoutesCancellationAndRedaction(t *testing.T) {
 	var fixture strings.Builder
+	profile := tuiDiagnosticProfileFixture()
 	modes := []install.Mode{install.ModeExplain, install.ModeDryRun, install.ModeApply, install.ModeLegacyDryRun, install.ModeLegacyApply}
 	for _, mode := range modes {
-		m := &installModel{request: install.Request{Mode: mode, Target: install.TargetPi}, result: w410TUIResult(mode), stage: installResult, legacy: &tuiLegacyAdapterSpy{}}
+		m := &installModel{request: install.Request{Mode: mode, Target: install.TargetPi}, result: w410TUIResult(mode), profile: profile, stage: installResult, legacy: &tuiLegacyAdapterSpy{}}
 		fmt.Fprintf(&fixture, "## %s\n%s\n", mode, renderInstallView(m, 80))
 	}
 	cancelled := w410TUIResult(install.ModeApply)
 	cancelled.Status, cancelled.ChangedState, cancelled.Rollback = install.StatusCancelled, false, install.RollbackResult{Attempted: true, Complete: true}
-	fmt.Fprintf(&fixture, "## cancelled\n%s\n", renderInstallView(&installModel{request: install.Request{Mode: install.ModeApply, Target: install.TargetPi}, result: cancelled, stage: installResult}, 80))
+	fmt.Fprintf(&fixture, "## cancelled\n%s\n", renderInstallView(&installModel{request: install.Request{Mode: install.ModeApply, Target: install.TargetPi}, result: cancelled, profile: profile, stage: installResult}, 80))
 	observed := fixture.String()
 	for _, want := range []string{"canonical-sealed", "explicit-legacy", "legacy-deprecated", "outcome=cancelled", "rollback_complete=true"} {
 		if !strings.Contains(observed, want) {
 			t.Fatalf("TUI fixture missing %q", want)
 		}
 	}
-	for _, forbidden := range []string{"/Users/private/credential", "Bearer fixture-secret", "\x1b["} {
+	for _, want := range strings.Fields(profile.Summary()) {
+		if !strings.Contains(observed, want) {
+			t.Fatalf("TUI profile parity missing %q", want)
+		}
+	}
+	for _, forbidden := range []string{"/Users/private/credential", "Bearer fixture-secret", "eyJzY2hlbWEiOi", "\x1b["} {
 		if strings.Contains(observed, forbidden) {
 			t.Fatalf("TUI fixture leaked %q", forbidden)
 		}
 	}
 	assertTUIGolden(t, "testdata/w410_install.golden", observed)
 	assertTUIGolden(t, "testdata/w410_install.golden", observed)
+}
+
+func tuiDiagnosticProfileFixture() version.ReleaseProfile {
+	return version.ReleaseProfile{Schema: "lore.release-profile/v1", ID: "prerelease-opencode-e", Version: 1, Release: "v0.3.0-rc.1", Channel: "prerelease", ArtifactSHA256: strings.Repeat("a", 64), ProvenanceStatus: "valid", Gates: version.ProfileGates{Pi: "off", OpenCode: "E", Codex: "off", Antigravity: "off"}}
 }
 
 func w410TUIResult(mode install.Mode) install.Result {

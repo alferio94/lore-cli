@@ -11,6 +11,7 @@ func renderInstallView(m *installModel, width int) string {
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "Install %s\n", m.request.Mode)
+	fmt.Fprintln(&b, m.profile.Summary())
 	fmt.Fprintf(&b, "phase=%s", m.stage)
 	if m.cancelling {
 		b.WriteString(" cancellation=requested; waiting for final rollback result")
