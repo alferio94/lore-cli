@@ -53,14 +53,20 @@ func TestProfileSnapshotHumanJSONParityAndFullDigest(t *testing.T) {
 
 func TestProfileDiagnosticsRedactUnsafeIdentityAndNeverCarryPayload(t *testing.T) {
 	secret, opaque := "Bearer c2VjcmV0LXBheWxvYWQ=", "secret-token-value"
-	profile := ReleaseProfile{Schema: "/Users/private/profile.json", ID: opaque, Release: "/Users/private/home", Channel: "Authorization:secret", ArtifactSHA256: "aaaa", ProvenanceStatus: secret, Gates: ProfileGates{Pi: secret}}
+	profile := ReleaseProfile{Schema: "/Users/private/profile.json", ID: opaque, Release: "/Users/private/user-content", Channel: "Authorization:secret", ArtifactSHA256: "aaaa", ProvenanceStatus: secret, Gates: ProfileGates{Pi: "X-MCP-Header:" + secret}}
 	first, second := profile.Summary(), profile.Summary()
 	if first != second {
 		t.Fatal("profile diagnostics are nondeterministic")
 	}
-	for _, forbidden := range []string{secret, opaque, "/Users/private", "c2VjcmV0LXBheWxvYWQ=", "Authorization:"} {
-		if strings.Contains(first, forbidden) {
-			t.Fatalf("profile diagnostics leaked %q: %s", forbidden, first)
+	payload, err := (Info{ReleaseProfile: profile}).JSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, output := range []string{first, string(payload)} {
+		for _, forbidden := range []string{secret, opaque, "/Users/private", "user-content", "c2VjcmV0LXBheWxvYWQ=", "Authorization:", "X-MCP-Header"} {
+			if strings.Contains(output, forbidden) {
+				t.Fatalf("profile diagnostics leaked %q: %s", forbidden, output)
+			}
 		}
 	}
 	if !strings.Contains(first, "artifact_sha256:\nunknown") || strings.Contains(first, "artifact_sha256:\naaaa") {

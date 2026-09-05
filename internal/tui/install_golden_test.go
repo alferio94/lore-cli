@@ -32,7 +32,7 @@ func TestW410TUIGoldenGuardsModesRoutesCancellationAndRedaction(t *testing.T) {
 			t.Fatalf("TUI profile parity missing %q", want)
 		}
 	}
-	for _, forbidden := range []string{"/Users/private/credential", "Bearer fixture-secret", "eyJzY2hlbWEiOi", "\x1b["} {
+	for _, forbidden := range []string{"/Users/private", "user-content", "Authorization", "X-MCP-Header", "Bearer fixture-secret", "eyJzY2hlbWEiOi", "\x1b["} {
 		if strings.Contains(observed, forbidden) {
 			t.Fatalf("TUI fixture leaked %q", forbidden)
 		}
@@ -55,7 +55,7 @@ func w410TUIResult(mode install.Mode) install.Result {
 	result := install.Result{
 		SchemaVersion: install.ResultSchemaVersion, Mode: mode, Route: install.RouteCanonical, Target: install.TargetPi,
 		Status: status, Admitted: true, ChangedState: apply,
-		Report:     install.TransactionReport{ProvenancePath: "/Users/private/credential", Profile: install.PersistenceFact{ProfileID: "Bearer fixture-secret"}},
+		Report:     install.TransactionReport{ProvenancePath: "/Users/private/user-content/Authorization/X-MCP-Header/eyJzY2hlbWEiOi", Profile: install.PersistenceFact{ProfileID: "Bearer fixture-secret"}},
 		Operations: []install.Operation{{Resource: "AGENTS.md", Action: "replace"}, {Resource: "skills/a.md", Action: "create"}},
 		Guidance:   []install.Guidance{{Code: "canonical-gate", Message: "stable guidance"}},
 	}
