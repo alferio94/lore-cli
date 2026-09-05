@@ -31,6 +31,22 @@ on:
         description: Exact CSV pi,codex,antigravity after the OpenCode canary
         required: true
         default: ''
+      promotion_stage:
+        description: Exact publication stage authorized by predecessor evidence
+        required: true
+        default: ''
+      promotion_evidence_path:
+        description: Repository-relative sanitized promotion evidence
+        required: true
+        default: ''
+      promotion_evaluated_at:
+        description: Explicit UTC evidence evaluation time (YYYY-MM-DDTHH:MM:SSZ)
+        required: true
+        default: ''
+      remote_authorization_receipt:
+        description: Unique non-secret receipt for this publication only
+        required: true
+        default: ''
       authorize_release:
         description: Authorize remote release actions for the exact tag and profile
         required: false
@@ -50,6 +66,10 @@ jobs:
           OBSERVATION_WINDOW: ${{ inputs.observation_window }}
           ACCOUNTABLE_OWNER: ${{ inputs.accountable_owner }}
           REMAINING_TARGET_ORDER: ${{ inputs.remaining_target_order }}
+          PROMOTION_STAGE: ${{ inputs.promotion_stage }}
+          PROMOTION_EVIDENCE: ${{ inputs.promotion_evidence_path }}
+          PROMOTION_EVALUATED_AT: ${{ inputs.promotion_evaluated_at }}
+          REMOTE_AUTHORIZATION: ${{ inputs.remote_authorization_receipt }}
           AUTHORIZED: ${{ inputs.authorize_release }}
           TAG: ${{ inputs.release_tag }}
           PROFILE: ${{ inputs.profile_path }}
@@ -61,6 +81,10 @@ jobs:
           [[ "$OBSERVATION_WINDOW" =~ ^[1-9][0-9]{0,3}(h|d)$ ]] || fail observation-window
           [[ "$ACCOUNTABLE_OWNER" =~ ^[a-z0-9][a-z0-9._-]{0,63}$ ]] || fail accountable-owner
           [[ "$REMAINING_TARGET_ORDER" == "pi,codex,antigravity" ]] || fail remaining-target-order
+          [[ "$PROMOTION_STAGE" =~ ^[a-z0-9][a-z0-9._+-]{0,127}$ ]] || fail promotion-stage
+          [[ "$PROMOTION_EVIDENCE" =~ ^docs/rollout/evidence/[A-Za-z0-9._-]+\.json$ ]] || fail promotion-evidence
+          [[ "$PROMOTION_EVALUATED_AT" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || fail promotion-evaluated-at
+          [[ "$REMOTE_AUTHORIZATION" =~ ^[a-z0-9][a-z0-9._+-]{0,127}$ ]] || fail remote-authorization
           [[ "$AUTHORIZED" == "true" ]] || { echo "release authorization is required" >&2; exit 1; }
           [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "an exact stable release tag is required" >&2; exit 1; }
           [[ "$PROFILE" =~ ^\.github/release-profiles/[A-Za-z0-9._-]+\.json$ ]] || { echo "an authorized repository-relative profile is required" >&2; exit 1; }
@@ -71,6 +95,17 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ inputs.release_tag }}
+
+      - name: Validate promotion evidence and one-use remote authorization
+        env:
+          STAGE: ${{ inputs.promotion_stage }}
+          EVIDENCE: ${{ inputs.promotion_evidence_path }}
+          EVALUATED_AT: ${{ inputs.promotion_evaluated_at }}
+          AUTHORIZATION: ${{ inputs.remote_authorization_receipt }}
+          ORDER: ${{ inputs.remaining_target_order }}
+          WINDOW: ${{ inputs.observation_window }}
+          PROFILE: ${{ inputs.profile_path }}
+        run: ./scripts/release-promotion-guard.sh "$EVIDENCE" "$STAGE" "$ORDER" "$WINDOW" "$EVALUATED_AT" "$AUTHORIZATION" "$PROFILE"
 
       - name: Validate semantic annotated tag
         env:
