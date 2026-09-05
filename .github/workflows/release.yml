@@ -15,6 +15,22 @@ on:
         description: Exact expected canonical profile identity
         required: false
         default: ''
+      canary_audience:
+        description: Canary audience slug (lowercase letters, digits, dot, underscore, hyphen)
+        required: true
+        default: ''
+      observation_window:
+        description: Positive observation duration in hours or days (for example, 24h)
+        required: true
+        default: ''
+      accountable_owner:
+        description: Accountable owner slug (lowercase letters, digits, dot, underscore, hyphen)
+        required: true
+        default: ''
+      remaining_target_order:
+        description: Exact CSV pi,codex,antigravity after the OpenCode canary
+        required: true
+        default: ''
       authorize_release:
         description: Authorize remote release actions for the exact tag and profile
         required: false
@@ -28,14 +44,23 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     steps:
-      - name: Require explicit release authorization before remote actions
+      - name: Require operator checkpoint and explicit release authorization
         env:
+          CANARY_AUDIENCE: ${{ inputs.canary_audience }}
+          OBSERVATION_WINDOW: ${{ inputs.observation_window }}
+          ACCOUNTABLE_OWNER: ${{ inputs.accountable_owner }}
+          REMAINING_TARGET_ORDER: ${{ inputs.remaining_target_order }}
           AUTHORIZED: ${{ inputs.authorize_release }}
           TAG: ${{ inputs.release_tag }}
           PROFILE: ${{ inputs.profile_path }}
           PROFILE_ID: ${{ inputs.profile_id }}
         run: |
           set -euo pipefail
+          fail() { echo "operator checkpoint invalid: $1" >&2; exit 1; }
+          [[ "$CANARY_AUDIENCE" =~ ^[a-z0-9][a-z0-9._-]{0,63}$ ]] || fail canary-audience
+          [[ "$OBSERVATION_WINDOW" =~ ^[1-9][0-9]{0,3}(h|d)$ ]] || fail observation-window
+          [[ "$ACCOUNTABLE_OWNER" =~ ^[a-z0-9][a-z0-9._-]{0,63}$ ]] || fail accountable-owner
+          [[ "$REMAINING_TARGET_ORDER" == "pi,codex,antigravity" ]] || fail remaining-target-order
           [[ "$AUTHORIZED" == "true" ]] || { echo "release authorization is required" >&2; exit 1; }
           [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "an exact stable release tag is required" >&2; exit 1; }
           [[ "$PROFILE" =~ ^\.github/release-profiles/[A-Za-z0-9._-]+\.json$ ]] || { echo "an authorized repository-relative profile is required" >&2; exit 1; }
