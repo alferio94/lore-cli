@@ -58,8 +58,8 @@ func TestW33BTransactionFSRollbackRestoresFilesModesStatesAndDirectories(t *test
 	secureTransactionTestDirectory(t, existingDir)
 	mustWriteTransactionTestFile(t, filepath.Join(existingDir, "owned.txt"), "prior")
 	journal, err := applyTransactionFS(root, []transactionFSWrite{
-		{Path: filepath.Join("new", "deep", "absent.txt"), Data: []byte("created")},
-		{Path: filepath.Join("existing", "owned.txt"), Data: []byte("next")},
+		{Path: "new/deep/absent.txt", Data: []byte("created")},
+		{Path: "existing/owned.txt", Data: []byte("next")},
 	}, nil)
 	if err != nil {
 		t.Fatal(err)

@@ -338,7 +338,7 @@ func moveTransactionRecoveryJournalToCleanup(t *testing.T, journal string) {
 func transactionRecoveryProcessWrites() []transactionFSWrite {
 	return []transactionFSWrite{
 		{Path: provenanceV3Name, Data: []byte("next-manifest")},
-		{Path: filepath.Join("new", "deep", "created.txt"), Data: []byte("next-created")},
+		{Path: "new/deep/created.txt", Data: []byte("next-created")},
 		{Path: "b.txt", Data: []byte("next-b")},
 		{Path: "a.txt", Data: []byte("next-a")},
 	}
