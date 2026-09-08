@@ -1,0 +1,1 @@
+{"schema":"lore.release-profile/v1","id":"development-all-off","version":1,"release":{"version":"dev","channel":"development","artifact_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},"rollback":{"version":"dev","profile_id":"default-off"},"gates":{"pi":"off","opencode":"off","codex":"off","antigravity":"off"}}
