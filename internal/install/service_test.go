@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"path"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -239,12 +240,13 @@ func TestNoActiveSourceImportsOpencodereadyPackage(t *testing.T) {
 }
 
 func TestResolvePiLayoutModelsManagedPaths(t *testing.T) {
-	layout := ResolvePiLayout("/tmp/home")
-	if got, want := layout.AgentDir, "/tmp/home/.pi/agent"; got != want {
-		t.Fatalf("AgentDir = %q, want %q", got, want)
+	homeDir := filepath.Join("test-home")
+	layout := ResolvePiLayout(homeDir)
+	if got, want := layout.AgentDir, filepath.Join(homeDir, ".pi", "agent"); got != want {
+		t.Fatalf("AgentDir = %q, want native path %q", got, want)
 	}
-	if got, want := layout.ManifestPath, "/tmp/home/.pi/agent/lore-install.json"; got != want {
-		t.Fatalf("ManifestPath = %q, want %q", got, want)
+	if got, want := layout.ManifestPath, filepath.Join(homeDir, ".pi", "agent", "lore-install.json"); got != want {
+		t.Fatalf("ManifestPath = %q, want native path %q", got, want)
 	}
 	if len(layout.ManagedFiles) != 5 {
 		t.Fatalf("ManagedFiles = %v, want 5 managed paths (mcp.json + settings.json + 3 extended skills) — lore-memory assets are optional for Pi default", layout.ManagedFiles)
@@ -534,7 +536,7 @@ func TestInstallPiWritesManagedFilesBackupsAndManifest(t *testing.T) {
 	// delegation) and lore-memory.ts (deprecated Pi-native memory extension). The
 	// order is delegation first, then deprecated memory; the manifest refresh must
 	// reflect both cleanups.
-	wantDeleted := []string{filepath.Join("extensions", "lore-delegation.ts"), managedDeprecatedLoreMemoryRelativePath}
+	wantDeleted := []string{path.Join("extensions", "lore-delegation.ts"), managedDeprecatedLoreMemoryRelativePath}
 	if len(result.Summary.Deleted) != len(wantDeleted) {
 		t.Fatalf("Deleted = %v, want %v (legacy delegation + deprecated lore-memory cleanup)", result.Summary.Deleted, wantDeleted)
 	}
@@ -873,7 +875,7 @@ func TestInstallPiRejectsInvalidRenderedExtensionShapeBeforeAnyWrite(t *testing.
 	// to add an unexpected extra path that the adapter never renders, then explicitly
 	// select pi-extensions so the footer rendering path runs.
 	original := append([]string(nil), managedPiExtensionRelativePaths...)
-	managedPiExtensionRelativePaths = append(managedPiExtensionRelativePaths, filepath.Join("extensions", "unexpected-extra.ts"))
+	managedPiExtensionRelativePaths = append(managedPiExtensionRelativePaths, path.Join("extensions", "unexpected-extra.ts"))
 	defer func() {
 		managedPiExtensionRelativePaths = original
 	}()
@@ -1061,13 +1063,13 @@ func TestPlanAntigravityInstallReportsPromptSkillsActions(t *testing.T) {
 	if got := len(plan.Files); got == 0 {
 		t.Fatal("plan.Files is empty, want prompt/skills/manifest actions")
 	}
-	assertPlanFileAction(t, plan.Files, filepath.ToSlash(filepath.Join("..", "GEMINI.md")), "create")
-	assertPlanFileAction(t, plan.Files, filepath.ToSlash(filepath.Join("..", "config", "agents", "lore.json")), "create")
-	assertPlanFileAction(t, plan.Files, filepath.ToSlash(filepath.Join("..", "config", "mcp_config.json")), "create")
-	assertPlanFileAction(t, plan.Files, filepath.ToSlash(filepath.Join("skills", "sdd-apply", "SKILL.md")), "create")
+	assertPlanFileAction(t, plan.Files, path.Join("..", "GEMINI.md"), "create")
+	assertPlanFileAction(t, plan.Files, path.Join("..", "config", "agents", "lore.json"), "create")
+	assertPlanFileAction(t, plan.Files, path.Join("..", "config", "mcp_config.json"), "create")
+	assertPlanFileAction(t, plan.Files, path.Join("skills", "sdd-apply", "SKILL.md"), "create")
 	assertPlanFileAction(t, plan.Files, "lore-install.json", "create")
 	for _, action := range plan.Files {
-		if strings.HasPrefix(action.RelativePath, filepath.ToSlash(filepath.Join("agents", ""))) || strings.HasPrefix(action.RelativePath, filepath.ToSlash(filepath.Join("extensions", ""))) || action.RelativePath == "settings.json" {
+		if strings.HasPrefix(action.RelativePath, "agents/") || strings.HasPrefix(action.RelativePath, "extensions/") || action.RelativePath == "settings.json" {
 			t.Fatalf("plan leaked Pi-only artifact: %+v", action)
 		}
 	}
@@ -1249,10 +1251,10 @@ func TestExecuteAntigravityInstallMergesMCPConfigAtGeminiConfigPath(t *testing.T
 	if err != nil {
 		t.Fatalf("ExecuteAntigravityInstall(with MCP) error: %v", err)
 	}
-	if !containsSummaryEntry(result.Summary.Updated, filepath.ToSlash(filepath.Join("..", "config", "mcp_config.json")), "") {
+	if !containsSummaryEntry(result.Summary.Updated, path.Join("..", "config", "mcp_config.json"), "") {
 		t.Fatalf("Updated = %v, want managed MCP config update entry", result.Summary.Updated)
 	}
-	if !containsSummaryEntry(result.Summary.Updated, filepath.ToSlash(filepath.Join("..", "config", "agents", "lore.json")), "") {
+	if !containsSummaryEntry(result.Summary.Updated, path.Join("..", "config", "agents", "lore.json"), "") {
 		t.Fatalf("Updated = %v, want managed Gemini agent profile update entry", result.Summary.Updated)
 	}
 	agentProfileContent, err := os.ReadFile(filepath.Join(homeDir, ".gemini", "config", "agents", "lore.json"))
@@ -1302,11 +1304,11 @@ func TestExecuteAntigravityInstallMergesMCPConfigAtGeminiConfigPath(t *testing.T
 	if err != nil {
 		t.Fatalf("LoadManifest(antigravity with MCP) error: %v", err)
 	}
-	if !containsSummaryEntry(managedManifestPaths(manifest), filepath.ToSlash(filepath.Join(".gemini", "config", "mcp_config.json")), "") {
-		t.Fatalf("manifest managed paths = %v, want ~/.gemini/config/mcp_config.json", managedManifestPaths(manifest))
+	if !containsSummaryEntry(managedManifestPaths(manifest), mcpPath, "") {
+		t.Fatalf("manifest managed paths = %v, want native MCP path %q", managedManifestPaths(manifest), mcpPath)
 	}
-	if !containsSummaryEntry(managedManifestPaths(manifest), filepath.ToSlash(filepath.Join(".gemini", "config", "agents", "lore.json")), "") {
-		t.Fatalf("manifest managed paths = %v, want ~/.gemini/config/agents/lore.json", managedManifestPaths(manifest))
+	if !containsSummaryEntry(managedManifestPaths(manifest), agentProfilePath, "") {
+		t.Fatalf("manifest managed paths = %v, want native agent profile path %q", managedManifestPaths(manifest), agentProfilePath)
 	}
 }
 
@@ -1494,13 +1496,13 @@ func TestPlanPiInstallReportsManagedFileActions(t *testing.T) {
 		actions[action.RelativePath] = action
 	}
 	// lore-memory.ts should NOT be in the plan (dormant for default install).
-	if _, ok := actions[filepath.Join("extensions", "lore-memory.ts")]; ok {
+	if _, ok := actions[path.Join("extensions", "lore-memory.ts")]; ok {
 		t.Fatal("lore-memory.ts unexpectedly in managed file actions for default install")
 	}
-	if got := actions[filepath.Join("extensions", "lore-delegation.ts")]; got.Action != "delete" || !strings.HasPrefix(got.BackupPath, plan.ManagedBackupRoot) {
+	if got := actions[path.Join("extensions", "lore-delegation.ts")]; got.Action != "delete" || !strings.HasPrefix(got.BackupPath, plan.ManagedBackupRoot) {
 		t.Fatalf("lore-delegation action = %+v, want delete under %s", got, plan.ManagedBackupRoot)
 	}
-	for _, relativePath := range []string{"settings.json", "mcp.json", filepath.Join("agents", "lore-managed-lore-worker.md"), filepath.Join("agents", "lore-managed-sdd-apply.md")} {
+	for _, relativePath := range []string{"settings.json", "mcp.json", path.Join("agents", "lore-managed-lore-worker.md"), path.Join("agents", "lore-managed-sdd-apply.md")} {
 		if got := actions[relativePath].Action; got != "create" {
 			t.Fatalf("%s action = %q, want create", relativePath, got)
 		}
@@ -1617,7 +1619,7 @@ func TestExecutePiInstallRerunDoesNotDriftWhenManagedOverlaysAreUnchanged(t *tes
 	if got := len(result.Summary.Unchanged); got != 15 {
 		t.Fatalf("len(Unchanged) = %d, want 15 (5 base files + 10 overlays — lore-memory dormant for default install)", got)
 	}
-	if containsSummaryEntry(result.Summary.Unchanged, filepath.Join("themes", "alferio.json")) {
+	if containsSummaryEntry(result.Summary.Unchanged, path.Join("themes", "alferio.json")) {
 		t.Fatalf("Unchanged = %v, want theme bootstrap excluded from managed plan/summary accounting", result.Summary.Unchanged)
 	}
 	sharedResult := result.InstallResult()
@@ -2117,7 +2119,7 @@ func TestInstallPiManagedOverlayRerunDeletesStaleTrackedOverlay(t *testing.T) {
 func assertPlanFileAction(t *testing.T, actions []PlanFileAction, relativePath, wantAction string) {
 	t.Helper()
 	for _, action := range actions {
-		if filepath.ToSlash(action.RelativePath) != filepath.ToSlash(relativePath) {
+		if action.RelativePath != relativePath {
 			continue
 		}
 		if action.Action != wantAction {
