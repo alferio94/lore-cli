@@ -536,22 +536,17 @@ func TestInstallPiWritesManagedFilesBackupsAndManifest(t *testing.T) {
 	// delegation) and lore-memory.ts (deprecated Pi-native memory extension). The
 	// order is delegation first, then deprecated memory; the manifest refresh must
 	// reflect both cleanups.
-	wantDeleted := []string{path.Join("extensions", "lore-delegation.ts"), managedDeprecatedLoreMemoryRelativePath}
-	if len(result.Summary.Deleted) != len(wantDeleted) {
-		t.Fatalf("Deleted = %v, want %v (legacy delegation + deprecated lore-memory cleanup)", result.Summary.Deleted, wantDeleted)
-	}
-	for _, path := range wantDeleted {
-		if !containsSummaryEntry(result.Summary.Deleted, path) {
-			t.Fatalf("Deleted = %v, want entry %q present", result.Summary.Deleted, path)
-		}
+	wantDeleted := []string{path.Join("extensions", "lore-delegation.ts"), path.Join("extensions", "lore-memory.ts")}
+	if got := logicalSummaryEntries(result.Summary.Deleted); !reflect.DeepEqual(got, wantDeleted) {
+		t.Fatalf("Deleted = %v (logical %v), want ordered %v (legacy delegation + deprecated lore-memory cleanup)", result.Summary.Deleted, got, wantDeleted)
 	}
 	// BackedUp must include both cleanup paths plus the updated settings.json.
 	if len(result.Summary.BackedUp) < 3 {
 		t.Fatalf("BackedUp = %v, want at least 3 backups (legacy delegation + deprecated lore-memory + settings.json)", result.Summary.BackedUp)
 	}
-	for _, path := range wantDeleted {
-		if !containsSummaryEntry(result.Summary.BackedUp, path) {
-			t.Fatalf("BackedUp = %v, want entry %q present", result.Summary.BackedUp, path)
+	for _, logicalPath := range wantDeleted {
+		if !containsLogicalSummaryEntry(result.Summary.BackedUp, logicalPath) {
+			t.Fatalf("BackedUp = %v, want logical entry %q present", result.Summary.BackedUp, logicalPath)
 		}
 	}
 	if result.Manifest.AuthMode != "cli-request" || result.Manifest.ServerURL != "https://lore.example" {
@@ -781,25 +776,26 @@ func TestValidateManagedContentsRejectsDeprecatedLoreMemoryAndTokenLeak(t *testi
 	// validator must (1) reject the file as deprecated, and (2) flag any saved-token
 	// leak without echoing the raw token back into the finding message.
 	findings := validateManagedContents(map[string][]byte{
-		"extensions/lore-memory.ts": []byte(`
+		filepath.Join("extensions", "lore-memory.ts"): []byte(`
 const loreServerURL = "https://lore.example";
 export default function (pi: ExtensionAPI) {
   pi.registerTool({ name: "lore_search" });
 }
 secret-token
 `),
-		"extensions/lore-footer.ts": []byte("export default function (pi: ExtensionAPI) { ctx.ui.setFooter(() => ({ render() { return []; } })); } getContextUsage getExtensionStatuses"),
-		"settings.json":             []byte(`{"packages":["` + hostedPackage + `"],"lore":{"server_url":"https://lore.example"}}`),
+		filepath.Join("extensions", "lore-footer.ts"): []byte("export default function (pi: ExtensionAPI) { ctx.ui.setFooter(() => ({ render() { return []; } })); } getContextUsage getExtensionStatuses"),
+		"settings.json": []byte(`{"packages":["` + hostedPackage + `"],"lore":{"server_url":"https://lore.example"}}`),
 	}, PiInstallRequest{ServerURL: "https://lore.example", SavedToken: "secret-token"})
 	if len(findings) != 2 {
 		t.Fatalf("len(findings) = %d, want 2 (deprecated + saved auth material)", len(findings))
 	}
 	var sawDeprecated, sawAuthMaterial bool
 	for _, got := range findings {
-		if containsAll(got, "extensions/lore-memory.ts", "deprecated") {
+		diagnostic := filepath.ToSlash(got)
+		if containsAll(diagnostic, "extensions/lore-memory.ts", "deprecated") {
 			sawDeprecated = true
 		}
-		if containsAll(got, "saved auth material", "extensions/lore-memory.ts") && !strings.Contains(got, "secret-token") {
+		if containsAll(diagnostic, "saved auth material", "extensions/lore-memory.ts") && !strings.Contains(got, "secret-token") {
 			sawAuthMaterial = true
 		}
 	}
@@ -837,7 +833,7 @@ func TestValidateRenderedPiFilesRejectsDeprecatedLoreMemoryBeforeWrites(t *testi
 	}
 
 	err := validateRenderedPiFiles(files)
-	if err == nil || !containsAll(err.Error(), "extensions/lore-memory.ts", "deprecated") {
+	if err == nil || !containsAll(filepath.ToSlash(err.Error()), "extensions/lore-memory.ts", "deprecated") {
 		t.Fatalf("validateRenderedPiFiles error = %v, want deprecated lore-memory.ts rejection", err)
 	}
 	if _, statErr := os.Stat(layout.AgentDir); !os.IsNotExist(statErr) {
@@ -857,7 +853,7 @@ func TestValidateRenderedPiFilesRejectsMissingDefaultFactoryBeforeWrites(t *test
 	}
 
 	err := validateRenderedPiFiles(files)
-	if err == nil || !containsAll(err.Error(), "extensions/lore-footer.ts", "export default function") {
+	if err == nil || !containsAll(filepath.ToSlash(err.Error()), "extensions/lore-footer.ts", "export default function") {
 		t.Fatalf("validateRenderedPiFiles error = %v, want default factory rejection", err)
 	}
 	if _, statErr := os.Stat(layout.AgentDir); !os.IsNotExist(statErr) {
@@ -1493,7 +1489,7 @@ func TestPlanPiInstallReportsManagedFileActions(t *testing.T) {
 	}
 	actions := map[string]ManagedFileAction{}
 	for _, action := range plan.ManagedFileActions {
-		actions[action.RelativePath] = action
+		actions[path.Clean(filepath.ToSlash(action.RelativePath))] = action
 	}
 	// lore-memory.ts should NOT be in the plan (dormant for default install).
 	if _, ok := actions[path.Join("extensions", "lore-memory.ts")]; ok {
@@ -2136,6 +2132,23 @@ func managedManifestPaths(manifest Manifest) []string {
 		paths = append(paths, file.Path)
 	}
 	return paths
+}
+
+func logicalSummaryEntries(entries []string) []string {
+	logical := make([]string, len(entries))
+	for i, entry := range entries {
+		logical[i] = path.Clean(filepath.ToSlash(entry))
+	}
+	return logical
+}
+
+func containsLogicalSummaryEntry(entries []string, want string) bool {
+	for _, entry := range logicalSummaryEntries(entries) {
+		if entry == path.Clean(want) {
+			return true
+		}
+	}
+	return false
 }
 
 func containsSummaryEntry(entries []string, wants ...string) bool {
