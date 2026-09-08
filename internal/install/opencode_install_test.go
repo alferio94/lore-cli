@@ -1082,7 +1082,7 @@ func TestOpenCodePlanOpenCodeInstallIsIdempotent(t *testing.T) {
 		t.Fatalf("PlanOpenCodeInstall(second) error = %v, want nil", err)
 	}
 	for _, action := range plan2.Files {
-		if filepath.ToSlash(action.RelativePath) == opencodeManifestFileName {
+		if action.RelativePath == opencodeManifestFileName {
 			if action.Action != "unchanged" {
 				t.Fatalf("PlanOpenCodeInstall(second) manifest action %q; want unchanged when install clock is identical", action.Action)
 			}
@@ -1463,12 +1463,12 @@ func TestOpenCodeStaleManagedPluginCleanupRemovesModelVariants(t *testing.T) {
 	foundDelete := false
 	foundBackedUp := false
 	for _, p := range result.Summary.Deleted {
-		if filepath.ToSlash(p) == "plugins/model-variants.ts" {
+		if p == "plugins/model-variants.ts" {
 			foundDelete = true
 		}
 	}
 	for _, p := range result.Summary.BackedUp {
-		if filepath.ToSlash(p) == "plugins/model-variants.ts" {
+		if p == "plugins/model-variants.ts" {
 			foundBackedUp = true
 		}
 	}
@@ -1694,7 +1694,7 @@ func openCodeSummaryAsString(summary InstallSummary) string {
 
 func findOpenCodePlannedFileAction(actions []PlanFileAction, relativePath string) *PlanFileAction {
 	for i, action := range actions {
-		if filepath.ToSlash(action.RelativePath) == relativePath {
+		if action.RelativePath == relativePath {
 			return &actions[i]
 		}
 	}

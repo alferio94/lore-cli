@@ -76,6 +76,17 @@ func TestW33BWindowsTransactionFSUsesCurrentUserOnlyACLs(t *testing.T) {
 	}
 }
 
+func TestW33C1AWindowsCanonicalPathsRejectCaseCollisionsAndUseNativeJoins(t *testing.T) {
+	root := prepareTransactionTestRoot(t)
+	if _, err := normalizeTransactionWrites([]transactionFSWrite{{Path: "A/file"}, {Path: "a/file"}}); !errors.Is(err, errTransactionFSUnsafePath) {
+		t.Fatalf("case-colliding Windows resources error = %v", err)
+	}
+	got, err := transactionNativePath(root, "mcp/lore.json")
+	if err != nil || got != filepath.Join(root, "mcp", "lore.json") || strings.Contains(filepath.Base(got), "/") {
+		t.Fatalf("native path = %q, %v", got, err)
+	}
+}
+
 func TestW33BWindowsTransactionFSRollbackRestoresOriginalACL(t *testing.T) {
 	root := prepareTransactionTestRoot(t)
 	path := filepath.Join(root, "owned.txt")

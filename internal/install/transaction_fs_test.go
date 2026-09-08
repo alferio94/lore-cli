@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -57,6 +58,7 @@ func TestW33BTransactionFSRollbackRestoresFilesModesStatesAndDirectories(t *test
 	}
 	secureTransactionTestDirectory(t, existingDir)
 	mustWriteTransactionTestFile(t, filepath.Join(existingDir, "owned.txt"), "prior")
+	mustWriteTransactionTestFile(t, filepath.Join(existingDir, "foreign.txt"), "foreign")
 	journal, err := applyTransactionFS(root, []transactionFSWrite{
 		{Path: "new/deep/absent.txt", Data: []byte("created")},
 		{Path: "existing/owned.txt", Data: []byte("next")},
@@ -70,6 +72,7 @@ func TestW33BTransactionFSRollbackRestoresFilesModesStatesAndDirectories(t *test
 		t.Fatal(err)
 	}
 	assertTransactionTestFile(t, filepath.Join(existingDir, "owned.txt"), "prior")
+	assertTransactionTestFile(t, filepath.Join(existingDir, "foreign.txt"), "foreign")
 	if _, err := os.Lstat(filepath.Join(root, "new")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("created directory survived rollback: %v", err)
 	}
@@ -100,8 +103,9 @@ func TestW33BTransactionFSRollbackErrorsRetainPrimaryInStableOrder(t *testing.T)
 	assertNoTransactionResidue(t, root)
 }
 
-func TestW33BTransactionFSCommitKeepsWritesAndCleansJournal(t *testing.T) {
+func TestW33BW33EW48TransactionFSCommitKeepsWritesAndForeignContent(t *testing.T) {
 	root := prepareTransactionTestRoot(t)
+	mustWriteTransactionTestFile(t, filepath.Join(root, "foreign.txt"), "foreign")
 	journal, err := applyTransactionFS(root, []transactionFSWrite{{Path: "z.txt", Data: []byte("z")}, {Path: "a.txt", Data: []byte("a")}}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -111,6 +115,7 @@ func TestW33BTransactionFSCommitKeepsWritesAndCleansJournal(t *testing.T) {
 	}
 	assertTransactionTestFile(t, filepath.Join(root, "a.txt"), "a")
 	assertTransactionTestFile(t, filepath.Join(root, "z.txt"), "z")
+	assertTransactionTestFile(t, filepath.Join(root, "foreign.txt"), "foreign")
 	assertNoTransactionResidue(t, root)
 }
 
@@ -142,11 +147,11 @@ func assertNoTransactionResidue(t *testing.T, root string) {
 func TestW33C1ADurableJournalCodecRejectsNonCanonicalOrUnsafeEvidence(t *testing.T) {
 	root := sha256.Sum256([]byte("selected-root"))
 	states := []transactionFSState{
-		{path: "a.txt", backup: filepath.Join("backups", "000000"), exists: true, mode: 0o600},
-		{path: filepath.Join("new", "absent.txt")},
-		{path: provenanceV3Name, backup: filepath.Join("backups", "000002"), exists: true, mode: 0o600},
+		{path: "a.txt", backup: "backups/000000", exists: true, mode: 0o600},
+		{path: "new/absent.txt"},
+		{path: provenanceV3Name, backup: "backups/000002", exists: true, mode: 0o600},
 	}
-	created := []string{"new"}
+	created := []string{"new", "new/deep"}
 	encoded, err := encodeTransactionFSDurableJournal(root, states, created)
 	if err != nil {
 		t.Fatal(err)
@@ -163,6 +168,21 @@ func TestW33C1ADurableJournalCodecRejectsNonCanonicalOrUnsafeEvidence(t *testing
 	}
 	if !bytes.Equal(bytes.TrimSpace(encoded), bytes.TrimSpace(mustEncodeTransactionTestEnvelope(t, decoded))) {
 		t.Fatal("journal encoding was not canonical and repeatable")
+	}
+	if strings.Contains(string(encoded), `\\`) {
+		t.Fatalf("new journal persisted a backslash path: %s", encoded)
+	}
+
+	legacy := transactionFSDurableJournal{
+		Version:     transactionFSJournalVersion,
+		Root:        hex.EncodeToString(root[:]),
+		Entries:     []transactionFSDurableEntry{{Path: `mcp\lore.json`, Backup: `backups\000000`, Exists: true, Mode: 0o600}},
+		CreatedDirs: []string{`mcp`, `mcp\deep`},
+	}
+	legacyDecoded, err := decodeTransactionFSDurableJournal(mustEncodeTransactionTestEnvelope(t, legacy), root)
+	if err != nil || legacyDecoded.Entries[0].Path != "mcp/lore.json" || legacyDecoded.Entries[0].Backup != "backups/000000" ||
+		!reflect.DeepEqual(legacyDecoded.CreatedDirs, []string{"mcp", "mcp/deep"}) {
+		t.Fatalf("safe legacy journal decode = %#v, %v", legacyDecoded, err)
 	}
 
 	wrongRoot := sha256.Sum256([]byte("other-root"))
@@ -199,15 +219,64 @@ func TestW33C1ADurableJournalCodecRejectsNonCanonicalOrUnsafeEvidence(t *testing
 
 	invalidRecords := []transactionFSDurableJournal{
 		{Version: 2, Root: hex.EncodeToString(root[:])},
-		{Version: 1, Root: hex.EncodeToString(root[:]), Entries: []transactionFSDurableEntry{{Path: "../escape"}}},
 		{Version: 1, Root: hex.EncodeToString(root[:]), Entries: []transactionFSDurableEntry{{Path: "b"}, {Path: "a"}}},
 		{Version: 1, Root: hex.EncodeToString(root[:]), Entries: []transactionFSDurableEntry{{Path: "a", Exists: true, Backup: "backups/999999", Mode: 0o600}}},
 		{Version: 1, Root: hex.EncodeToString(root[:]), Entries: []transactionFSDurableEntry{{Path: "a", Backup: "backups/000000"}}},
-		{Version: 1, Root: hex.EncodeToString(root[:]), CreatedDirs: []string{filepath.Join("deep", "child"), "deep"}},
+		{Version: 1, Root: hex.EncodeToString(root[:]), CreatedDirs: []string{"deep/child", "deep"}},
+		{Version: 1, Root: hex.EncodeToString(root[:]), Entries: []transactionFSDurableEntry{{Path: `a\b`}, {Path: `a\b`}}},
+		{Version: 1, Root: hex.EncodeToString(root[:]), Entries: []transactionFSDurableEntry{{Path: "a/b"}, {Path: `a\b`}}},
 	}
 	for i, record := range invalidRecords {
 		if _, err := decodeTransactionFSDurableJournal(mustEncodeTransactionTestEnvelope(t, record), root); err == nil {
 			t.Fatalf("invalid record %d was admitted: %#v", i, record)
+		}
+	}
+
+	unsafePaths := []string{
+		"", ".", "a//b", "a/./b", "a/../b", "a/", "../config",
+		"/absolute", "//host/share", "C:/config", `C:\config`, `\absolute`, `\\host\share`,
+		`a\..\b`, `a\.\b`, `a/b\c`, "nul\x00path",
+	}
+	for _, path := range unsafePaths {
+		t.Run("path/"+strings.ReplaceAll(path, "/", "_"), func(t *testing.T) {
+			record := transactionFSDurableJournal{
+				Version: transactionFSJournalVersion,
+				Root:    hex.EncodeToString(root[:]),
+				Entries: []transactionFSDurableEntry{{Path: path}},
+			}
+			if _, err := decodeTransactionFSDurableJournal(mustEncodeTransactionTestEnvelope(t, record), root); err == nil {
+				t.Fatalf("unsafe path %q was admitted", path)
+			}
+		})
+	}
+}
+
+func TestW33C1ACanonicalResourceOrderingAndDepthAreHostIndependent(t *testing.T) {
+	ordered, err := normalizeTransactionWrites([]transactionFSWrite{
+		{Path: provenanceV3Name},
+		{Path: "z/deep/file"},
+		{Path: "a/file"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make([]string, len(ordered))
+	for i := range ordered {
+		got[i] = ordered[i].Path
+	}
+	want := []string{"a/file", "z/deep/file", provenanceV3Name}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ordered resources = %v, want %v", got, want)
+	}
+
+	dirs := []string{"z", "a/deep/leaf", "a", "a/deep"}
+	sort.Slice(dirs, func(i, j int) bool { return compareTransactionDirs(dirs[i], dirs[j]) < 0 })
+	if want := []string{"a", "z", "a/deep", "a/deep/leaf"}; !reflect.DeepEqual(dirs, want) {
+		t.Fatalf("ordered directories = %v, want %v", dirs, want)
+	}
+	for path, wantDepth := range map[string]int{"a": 1, "a/b": 2, "a/b/c": 3, `a\b`: 0, "a/../b": 0} {
+		if gotDepth := transactionPathDepth(path); gotDepth != wantDepth {
+			t.Errorf("transactionPathDepth(%q) = %d, want %d", path, gotDepth, wantDepth)
 		}
 	}
 }

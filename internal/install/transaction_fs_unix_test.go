@@ -97,6 +97,18 @@ func TestW33BUnixTransactionFSUsesRestrictiveJournalAndFiles(t *testing.T) {
 	}
 }
 
+func TestW33C1AUnixCanonicalPathsRemainCaseSensitiveAndUseNativeJoins(t *testing.T) {
+	root := prepareTransactionTestRoot(t)
+	ordered, err := normalizeTransactionWrites([]transactionFSWrite{{Path: "A/file"}, {Path: "a/file"}})
+	if err != nil || len(ordered) != 2 {
+		t.Fatalf("case-distinct Unix resources = %#v, %v", ordered, err)
+	}
+	got, err := transactionNativePath(root, "mcp/lore.json")
+	if err != nil || got != filepath.Join(root, "mcp", "lore.json") {
+		t.Fatalf("native path = %q, %v", got, err)
+	}
+}
+
 func TestW33C1AUnixOwnerDeathRecoveryPinsIdentityAndFlockThroughCleanup(t *testing.T) {
 	root := prepareTransactionRecoveryProcessRoot(t)
 	runTransactionRecoveryCrashHelper(t, root, "after-write-a")

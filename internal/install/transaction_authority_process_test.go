@@ -95,7 +95,7 @@ func TestW33C1ACorruptOrIncompleteJournalFailsClosedAndRetainsEvidence(t *testin
 	}
 }
 
-func TestW33C1AProcessAuthorityHeldThroughRecoveryCommitRollbackAndCleanup(t *testing.T) {
+func TestW33C1AW33EW48ProcessAuthorityHeldThroughRecoveryCommitRollbackAndCleanup(t *testing.T) {
 	for _, finish := range []string{"commit", "rollback"} {
 		t.Run(finish, func(t *testing.T) {
 			root := prepareTransactionRecoveryProcessRoot(t)
@@ -350,6 +350,7 @@ func prepareTransactionRecoveryProcessRoot(t *testing.T) string {
 	mustWriteTransactionTestFile(t, filepath.Join(root, "a.txt"), "prior-a")
 	mustWriteTransactionTestFile(t, filepath.Join(root, "b.txt"), "prior-b")
 	mustWriteTransactionTestFile(t, filepath.Join(root, provenanceV3Name), "prior-manifest")
+	mustWriteTransactionTestFile(t, filepath.Join(root, "foreign.txt"), "foreign")
 	return root
 }
 
@@ -376,6 +377,7 @@ func recoverTransactionBeforeAdmission(t *testing.T, root string, wantNext bool)
 
 func assertTransactionRecoveryState(t *testing.T, root string, wantNext bool) {
 	t.Helper()
+	assertTransactionTestFile(t, filepath.Join(root, "foreign.txt"), "foreign")
 	prefix := "prior-"
 	created := false
 	if wantNext {
