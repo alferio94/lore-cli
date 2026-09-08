@@ -81,6 +81,89 @@ func TestPiAdapterRenderMaterializesBearerTokenPlaintext(t *testing.T) {
 	}
 }
 
+func TestPiAdapterRenderMCPJSONPreservesPortableValuesAndTokenBoundary(t *testing.T) {
+	tests := []struct {
+		name      string
+		serverURL string
+		token     string
+	}{
+		{name: "windows backslashes and quotes", serverURL: `https://lore.example.test/tenant\"windows`, token: `tok\en-\"private\"`},
+		{name: "unix regression", serverURL: "https://lore.example.test", token: "unix-private-token"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rendered, err := defaultPiAdapter().Render(context.Background(), RenderRequest{
+				Target: TargetPi, Definition: agentpack.DefaultDefinition(),
+				Components: []ComponentID{ComponentCorePack, ComponentLoreServerMCP},
+				ServerURL:  tt.serverURL, SavedToken: tt.token,
+			})
+			if err != nil {
+				t.Fatalf("Render error = %v, want nil", err)
+			}
+
+			var mcp struct {
+				Servers map[string]struct {
+					URL       string            `json:"url"`
+					Headers   map[string]string `json:"headers"`
+					Lifecycle string            `json:"lifecycle"`
+				} `json:"mcpServers"`
+			}
+			foundMCP := false
+			for _, file := range rendered {
+				var decoded any
+				if err := json.Unmarshal(file.Content, &decoded); err != nil {
+					t.Fatalf("%s is not valid JSON: %v", file.RelativePath, err)
+				}
+				if file.RelativePath != "mcp.json" {
+					if containsDecodedString(decoded, tt.token) {
+						t.Fatalf("%s disclosed token outside mcp.json", file.RelativePath)
+					}
+					continue
+				}
+				foundMCP = true
+				if err := json.Unmarshal(file.Content, &mcp); err != nil {
+					t.Fatalf("decode mcp.json: %v", err)
+				}
+			}
+			if !foundMCP {
+				t.Fatal("rendered files missing mcp.json")
+			}
+			lore := mcp.Servers["lore"]
+			if lore.URL != tt.serverURL+"/v1/mcp" {
+				t.Fatalf("decoded lore URL = %q, want %q", lore.URL, tt.serverURL+"/v1/mcp")
+			}
+			if got := lore.Headers["Authorization"]; got != "Bearer "+tt.token {
+				t.Fatalf("decoded Authorization header = %q, want exact bearer token", got)
+			}
+			context7 := mcp.Servers[Context7MCPServerName]
+			if context7.URL != Context7MCPRemoteURL || context7.Lifecycle != "keep-alive" || len(context7.Headers) != 0 {
+				t.Fatalf("decoded Context7 settings = %+v, want public keep-alive server without token headers", context7)
+			}
+		})
+	}
+}
+
+func containsDecodedString(value any, needle string) bool {
+	switch value := value.(type) {
+	case string:
+		return strings.Contains(value, needle)
+	case []any:
+		for _, item := range value {
+			if containsDecodedString(item, needle) {
+				return true
+			}
+		}
+	case map[string]any:
+		for _, item := range value {
+			if containsDecodedString(item, needle) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func TestPiMCPAdditiveMergeAddsContext7KeepAliveOnRerun(t *testing.T) {
 	existing := []byte(`{"mcpServers":{"lore":{"url":"https://old.example/v1/mcp","headers":{"Authorization":"Bearer old-token"}},"context7":{"url":"https://mcp.context7.com/mcp"}},"userOwned":true}`)
 	desired := []byte(`{"mcpServers":{"context7":{"url":"https://mcp.context7.com/mcp","lifecycle":"keep-alive"}}}`)
