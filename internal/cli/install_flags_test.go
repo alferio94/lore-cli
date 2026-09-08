@@ -19,6 +19,7 @@ func TestInstallCommandDryRunAcceptsExplicitPiTargetAndComponents(t *testing.T) 
 	store := &fakeStore{path: filepath.Join(configDir, "config.json"), loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token=target-components"}}
 	client := &fakeClient{subject: httpclient.Subject{UserID: "user-1", Kind: "user"}}
 	app, stdout, stderr := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
+	app.UserHomeDir = func() (string, error) { return homeDir, nil }
 	app.ExecutablePath = func() (string, error) { return "/usr/local/bin/lore", nil }
 	app.BuildInfo = version.Info{Version: "v1.2.3"}
 
@@ -39,11 +40,12 @@ func TestInstallCommandDryRunAcceptsExplicitPiTargetAndComponents(t *testing.T) 
 }
 
 func TestInstallCommandRejectsUnsupportedInstallTarget(t *testing.T) {
-	_, piAgentDir := setIsolatedPiHome(t)
+	homeDir, piAgentDir := setIsolatedPiHome(t)
 	configDir := t.TempDir()
 	store := &fakeStore{path: filepath.Join(configDir, "config.json"), loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token=unsupported-target"}}
 	client := &fakeClient{subject: httpclient.Subject{UserID: "user-1", Kind: "user"}}
 	app, stdout, stderr := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
+	app.UserHomeDir = func() (string, error) { return homeDir, nil }
 	app.ExecutablePath = func() (string, error) { return "/usr/local/bin/lore", nil }
 	app.BuildInfo = version.Info{Version: "v1.2.3"}
 
@@ -262,11 +264,12 @@ func TestInstallCommandSupportsAntigravityDryRunAndApply(t *testing.T) {
 }
 
 func TestInstallCommandAcceptsLoreServerMCPWithPiTarget(t *testing.T) {
-	_, piAgentDir := setIsolatedPiHome(t)
+	homeDir, piAgentDir := setIsolatedPiHome(t)
 	configDir := t.TempDir()
 	store := &fakeStore{path: filepath.Join(configDir, "config.json"), loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token=pi-mcp"}}
 	client := &fakeClient{subject: httpclient.Subject{UserID: "user-1", Kind: "user"}}
 	app, stdout, stderr := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
+	app.UserHomeDir = func() (string, error) { return homeDir, nil }
 	app.ExecutablePath = func() (string, error) { return "/usr/local/bin/lore", nil }
 	app.BuildInfo = version.Info{Version: "v1.2.3"}
 

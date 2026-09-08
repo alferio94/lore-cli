@@ -311,8 +311,7 @@ func TestResultScreenEscBackAndQuit(t *testing.T) {
 }
 
 func TestInstallTargetSelectionAllowsAntigravityExecutionWithoutPiBackupPrompt(t *testing.T) {
-	homeDir := t.TempDir()
-	t.Setenv("HOME", homeDir)
+	homeDir := setIsolatedUserProfile(t)
 	if err := os.MkdirAll(filepath.Join(homeDir, ".pi"), 0o755); err != nil {
 		t.Fatalf("MkdirAll ~/.pi: %v", err)
 	}
@@ -408,8 +407,7 @@ func TestInstallTargetSelectionMovesBetweenSupportedTargetsOnly(t *testing.T) {
 }
 
 func TestInstallDetectsExistingPiAndPromptsForFullBackupBeforeMutation(t *testing.T) {
-	homeDir := t.TempDir()
-	t.Setenv("HOME", homeDir)
+	homeDir := setIsolatedUserProfile(t)
 	if err := os.MkdirAll(filepath.Join(homeDir, ".pi"), 0o755); err != nil {
 		t.Fatalf("MkdirAll ~/.pi: %v", err)
 	}
@@ -452,8 +450,7 @@ func TestInstallDetectsExistingPiAndPromptsForFullBackupBeforeMutation(t *testin
 }
 
 func TestInstallBackupDecisionDeclineContinuesWithoutFullBackup(t *testing.T) {
-	homeDir := t.TempDir()
-	t.Setenv("HOME", homeDir)
+	homeDir := setIsolatedUserProfile(t)
 	if err := os.MkdirAll(filepath.Join(homeDir, ".pi"), 0o755); err != nil {
 		t.Fatalf("MkdirAll ~/.pi: %v", err)
 	}
@@ -490,8 +487,7 @@ func TestInstallBackupDecisionDeclineContinuesWithoutFullBackup(t *testing.T) {
 }
 
 func TestInstallBackupDecisionAcceptContinuesInstall(t *testing.T) {
-	homeDir := t.TempDir()
-	t.Setenv("HOME", homeDir)
+	homeDir := setIsolatedUserProfile(t)
 	if err := os.MkdirAll(filepath.Join(homeDir, ".pi"), 0o755); err != nil {
 		t.Fatalf("MkdirAll ~/.pi: %v", err)
 	}
@@ -1221,6 +1217,21 @@ func TestWindowResizeClampsBodyScroll(t *testing.T) {
 	if m.bodyScroll.Offset > maxOffset {
 		t.Fatalf("resize offset = %d, want <= %d", m.bodyScroll.Offset, maxOffset)
 	}
+}
+
+func setIsolatedUserProfile(t *testing.T) string {
+	t.Helper()
+	homeDir := t.TempDir()
+	configDir := filepath.Join(homeDir, ".config")
+	volume := filepath.VolumeName(homeDir)
+	t.Setenv("HOME", homeDir)
+	t.Setenv("USERPROFILE", homeDir)
+	t.Setenv("HOMEDRIVE", volume)
+	t.Setenv("HOMEPATH", strings.TrimPrefix(homeDir, volume))
+	t.Setenv("XDG_CONFIG_HOME", configDir)
+	t.Setenv("APPDATA", configDir)
+	t.Setenv("LOCALAPPDATA", configDir)
+	return homeDir
 }
 
 func moveSelectionToInstall(t *testing.T, m model) model {
