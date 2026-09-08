@@ -276,6 +276,25 @@ func renderManagedAgentMarkdown(agent agentpack.ManagedAgent, packID string, con
 	return builder.String()
 }
 
+func jsonScalarReplacement(value string) (string, error) {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return "", fmt.Errorf("marshal JSON scalar replacement: %w", err)
+	}
+	return string(encoded[1 : len(encoded)-1]), nil
+}
+
+func setJSONScalarReplacements(replacements map[string]string, values map[string]string) error {
+	for placeholder, value := range values {
+		escaped, err := jsonScalarReplacement(value)
+		if err != nil {
+			return fmt.Errorf("render %s: %w", placeholder, err)
+		}
+		replacements[placeholder] = escaped
+	}
+	return nil
+}
+
 func piTemplateReplacements(definition agentpack.Definition, components []ComponentID) (map[string]string, error) {
 	phases := make([]string, 0, len(definition.Workflow.Phases))
 	for _, phase := range definition.Workflow.Phases {
@@ -311,14 +330,19 @@ func piTemplateReplacements(definition agentpack.Definition, components []Compon
 		return nil, fmt.Errorf("marshal managed extensions: %w", err)
 	}
 
-	return map[string]string{
+	replacements := map[string]string{
 		"{{LORE_SDD_PHASES}}":         string(sddPhasesJSON),
-		"{{LORE_PACK_ID}}":            definition.PackID,
-		"{{LORE_PERSONA_NAME}}":       definition.Persona.Name,
 		"{{LORE_PROFILE_IDS}}":        string(profileIDsJSON),
 		"{{LORE_ROLE_NAMES}}":         string(roleNamesJSON),
 		"{{LORE_MANAGED_EXTENSIONS}}": string(managedExtensionsJSON),
-	}, nil
+	}
+	if err := setJSONScalarReplacements(replacements, map[string]string{
+		"{{LORE_PACK_ID}}":      definition.PackID,
+		"{{LORE_PERSONA_NAME}}": definition.Persona.Name,
+	}); err != nil {
+		return nil, err
+	}
+	return replacements, nil
 }
 
 func renderRequestReplacements(req RenderRequest, components []ComponentID) (map[string]string, error) {
@@ -326,13 +350,17 @@ func renderRequestReplacements(req RenderRequest, components []ComponentID) (map
 	if err != nil {
 		return nil, err
 	}
-	base["{{LORE_SERVER_URL}}"] = strings.TrimSpace(req.ServerURL)
-	base["{{LORE_BINARY_PATH}}"] = strings.TrimSpace(req.LoreBinaryPath)
-	base["{{LORE_CONFIG_DIR}}"] = strings.TrimSpace(req.LoreConfigDir)
-	base["{{LORE_MCP_CONFIG_DIR}}"] = strings.TrimSpace(req.LoreConfigDir)
-	base["{{LORE_CLI_VERSION}}"] = strings.TrimSpace(req.LoreCLIVersion)
-	base["{{LORE_SETTINGS_PATH}}"] = filepath.ToSlash(strings.ReplaceAll(strings.TrimSpace(req.SettingsPath), "\\", "/"))
-	base["{{LORE_HOSTED_MCP_PACKAGE}}"] = piHostedMCPPackageSource()
-	base["{{LORE_API_TOKEN}}"] = strings.TrimSpace(req.SavedToken)
+	if err := setJSONScalarReplacements(base, map[string]string{
+		"{{LORE_SERVER_URL}}":         strings.TrimSpace(req.ServerURL),
+		"{{LORE_BINARY_PATH}}":        strings.TrimSpace(req.LoreBinaryPath),
+		"{{LORE_CONFIG_DIR}}":         strings.TrimSpace(req.LoreConfigDir),
+		"{{LORE_MCP_CONFIG_DIR}}":     strings.TrimSpace(req.LoreConfigDir),
+		"{{LORE_CLI_VERSION}}":        strings.TrimSpace(req.LoreCLIVersion),
+		"{{LORE_SETTINGS_PATH}}":      filepath.ToSlash(strings.ReplaceAll(strings.TrimSpace(req.SettingsPath), "\\", "/")),
+		"{{LORE_HOSTED_MCP_PACKAGE}}": piHostedMCPPackageSource(),
+		"{{LORE_API_TOKEN}}":          strings.TrimSpace(req.SavedToken),
+	}); err != nil {
+		return nil, err
+	}
 	return base, nil
 }

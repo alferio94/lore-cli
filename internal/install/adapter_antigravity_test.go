@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"path"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -48,7 +49,7 @@ func TestAntigravityAdapterRenderProducesPromptSkillsAndOptionalMCPWithoutPiArti
 		t.Fatalf("prompt content = %q, want Antigravity-owned prompt semantics without Pi path leakage", string(prompt.Content))
 	}
 
-	applySkill, ok := byPath[filepath.ToSlash(filepath.Join("skills", "sdd-apply", "SKILL.md"))]
+	applySkill, ok := byPath[path.Join("skills", "sdd-apply", "SKILL.md")]
 	if !ok {
 		t.Fatalf("Render(core-pack) paths = %v, want skills/sdd-apply/SKILL.md", sortedRenderedPaths(files))
 	}
@@ -68,7 +69,7 @@ func TestAntigravityAdapterRenderProducesPromptSkillsAndOptionalMCPWithoutPiArti
 	if !containsAll(string(applySkill.Content), "set `phase` to `apply`", "`status`, `phase`, `summary`, `artifacts`, `files`, `validations`, `risks`, `next_step`, `continuation`, `question`, `options`, `skill_resolution`") {
 		t.Fatalf("sdd-apply skill = %q, want canonical phase/envelope semantics", string(applySkill.Content))
 	}
-	workerPath := filepath.ToSlash(filepath.Join("skills", "lore-worker", "SKILL.md"))
+	workerPath := path.Join("skills", "lore-worker", "SKILL.md")
 	worker, ok := byPath[workerPath]
 	if !ok {
 		t.Fatalf("Render(core-pack) paths = %v, want %s", sortedRenderedPaths(files), workerPath)
@@ -81,18 +82,18 @@ func TestAntigravityAdapterRenderProducesPromptSkillsAndOptionalMCPWithoutPiArti
 			t.Fatalf("lore-worker skill = %q, want Pi-only runtime contract %q omitted", string(worker.Content), forbidden)
 		}
 	}
-	proposePath := filepath.ToSlash(filepath.Join("skills", "sdd-propose", "SKILL.md"))
+	proposePath := path.Join("skills", "sdd-propose", "SKILL.md")
 	propose, ok := byPath[proposePath]
 	if !ok || strings.Contains(string(propose.Content), "name: sdd-proposal") {
 		t.Fatalf("Render(core-pack) canonical proposal skill = %q ok=%v, want %s with canonical name", string(propose.Content), ok, proposePath)
 	}
-	if _, ok := byPath[filepath.ToSlash(filepath.Join("skills", "sdd-proposal", "SKILL.md"))]; ok {
+	if _, ok := byPath[path.Join("skills", "sdd-proposal", "SKILL.md")]; ok {
 		t.Fatalf("Render(core-pack) paths = %v, want no non-canonical sdd-proposal skill", sortedRenderedPaths(files))
 	}
-	if shared, ok := byPath[filepath.ToSlash(filepath.Join("skills", "_shared", "sdd-phase-common.md"))]; !ok || !strings.Contains(string(shared.Content), "SDD Phase Common Protocol") {
+	if shared, ok := byPath[path.Join("skills", "_shared", "sdd-phase-common.md")]; !ok || !strings.Contains(string(shared.Content), "SDD Phase Common Protocol") {
 		t.Fatalf("Render(core-pack) shared skill = %q ok=%v, want installed shared SDD phase protocol", string(shared.Content), ok)
 	}
-	agentProfileRelativePath := filepath.ToSlash(filepath.Join("..", "config", "agents", "lore.json"))
+	agentProfileRelativePath := path.Join("..", "config", "agents", "lore.json")
 	agentProfile, ok := byPath[agentProfileRelativePath]
 	if !ok {
 		t.Fatalf("Render(core-pack) paths = %v, want %s", sortedRenderedPaths(files), agentProfileRelativePath)
@@ -120,7 +121,7 @@ func TestAntigravityAdapterRenderProducesPromptSkillsAndOptionalMCPWithoutPiArti
 	if strings.Contains(string(agentProfile.Content), `"tools"`) {
 		t.Fatalf("agent profile = %q, want no tools field", string(agentProfile.Content))
 	}
-	mcpRelativePath := filepath.ToSlash(filepath.Join("..", "config", "mcp_config.json"))
+	mcpRelativePath := path.Join("..", "config", "mcp_config.json")
 	if _, ok := byPath[mcpRelativePath]; ok {
 		t.Fatal("Render(core-pack) unexpectedly produced optional mcp_config.json")
 	}
@@ -312,11 +313,11 @@ func TestAntigravityManifestTracksPromptSkillsAndManagedMCPFilesWithoutPiOverlay
 			t.Fatalf("managed path %q leaked Pi overlay semantics", path)
 		}
 	}
-	if !containsSummaryEntry(managedPaths, filepath.ToSlash(filepath.Join(".gemini", "config", "mcp_config.json")), "") {
-		t.Fatalf("managed paths = %v, want managed MCP config path", managedPaths)
+	if !containsSummaryEntry(managedPaths, layout.Paths["mcp_config"], "") {
+		t.Fatalf("managed paths = %v, want native MCP config path %q", managedPaths, layout.Paths["mcp_config"])
 	}
-	if !containsSummaryEntry(managedPaths, filepath.ToSlash(filepath.Join(".gemini", "config", "agents", "lore.json")), "") {
-		t.Fatalf("managed paths = %v, want managed Gemini agent profile path", managedPaths)
+	if !containsSummaryEntry(managedPaths, layout.Paths["agent_profile"], "") {
+		t.Fatalf("managed paths = %v, want native agent profile path %q", managedPaths, layout.Paths["agent_profile"])
 	}
 
 	repeatManifest, repeatManagedPaths, err := buildAntigravityManifest(layout, req, files)
@@ -417,7 +418,7 @@ func TestAntigravitySkillResolverUsesSelectedDesktopVariantRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Render error: %v", err)
 	}
-	applySkill := renderedFileByPath(t, files, filepath.ToSlash(filepath.Join("skills", "sdd-apply", "SKILL.md")))
+	applySkill := renderedFileByPath(t, files, path.Join("skills", "sdd-apply", "SKILL.md"))
 	skillText := string(applySkill.Content)
 	if !containsAll(skillText, "~/.gemini/antigravity-desktop/skills/sdd-apply/SKILL.md", "~/.gemini/antigravity-desktop/skills/_shared/sdd-phase-common.md") {
 		t.Fatalf("sdd-apply skill = %q, want selected desktop variant paths", skillText)
@@ -446,7 +447,7 @@ func TestAntigravityMCPNeverUsesVariantLocalPath(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Render error: %v", err)
 			}
-			mcpRelativePath := filepath.ToSlash(filepath.Join("..", "config", "mcp_config.json"))
+			mcpRelativePath := path.Join("..", "config", "mcp_config.json")
 			if _, ok := renderedFileByPathOK(files, mcpRelativePath); !ok {
 				t.Fatalf("rendered paths=%v, want global relative MCP path", sortedRenderedPaths(files))
 			}

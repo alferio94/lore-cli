@@ -111,7 +111,10 @@ func (p *windowsTransactionFS) begin() error {
 }
 
 func (p *windowsTransactionFS) backup(rel string, index int) (transactionFSState, error) {
-	path := filepath.Join(p.root, rel)
+	path, pathErr := transactionNativePath(p.root, rel)
+	if pathErr != nil {
+		return transactionFSState{}, pathErr
+	}
 	if !windowsTransactionAncestorsSafe(p.root, path) {
 		return transactionFSState{}, errTransactionFSUnsafePath
 	}
@@ -128,8 +131,11 @@ func (p *windowsTransactionFS) backup(rel string, index int) (transactionFSState
 	if err != nil {
 		return transactionFSState{}, errTransactionFSIO
 	}
-	backup := filepath.Join("backups", fmt.Sprintf("%06d", index))
-	backupPath := filepath.Join(p.prepare, backup)
+	backup := fmt.Sprintf("backups/%06d", index)
+	backupPath, pathErr := transactionNativePath(p.prepare, backup)
+	if pathErr != nil {
+		return transactionFSState{}, pathErr
+	}
 	file, err := os.OpenFile(backupPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err == nil {
 		err = windowsProtectFile(backupPath)
@@ -157,7 +163,11 @@ func (p *windowsTransactionFS) seal(states []transactionFSState) error {
 		return err
 	}
 	for _, state := range states {
-		temp, tempErr := p.transactionTempPath(filepath.Join(p.root, state.path))
+		path, pathErr := transactionNativePath(p.root, state.path)
+		if pathErr != nil {
+			return pathErr
+		}
+		temp, tempErr := p.transactionTempPath(path)
 		if tempErr != nil {
 			return tempErr
 		}
@@ -185,10 +195,18 @@ func (p *windowsTransactionFS) seal(states []transactionFSState) error {
 func (p *windowsTransactionFS) plannedCreatedDirs(states []transactionFSState) ([]string, error) {
 	missing := make(map[string]struct{})
 	for _, state := range states {
-		for current := filepath.Dir(filepath.Join(p.root, state.path)); current != p.root; current = filepath.Dir(current) {
+		path, err := transactionNativePath(p.root, state.path)
+		if err != nil {
+			return nil, err
+		}
+		for current := filepath.Dir(path); current != p.root; current = filepath.Dir(current) {
 			if _, err := os.Lstat(current); errors.Is(err, os.ErrNotExist) {
-				rel, relErr := filepath.Rel(p.root, current)
-				if relErr != nil || !validTransactionRelativePath(rel) {
+				nativeRel, relErr := filepath.Rel(p.root, current)
+				if relErr != nil {
+					return nil, errTransactionFSUnsafePath
+				}
+				rel, relErr := transactionLogicalPathFromNative(nativeRel)
+				if relErr != nil {
 					return nil, errTransactionFSUnsafePath
 				}
 				missing[rel] = struct{}{}
@@ -207,7 +225,10 @@ func (p *windowsTransactionFS) plannedCreatedDirs(states []transactionFSState) (
 }
 
 func (p *windowsTransactionFS) write(rel string, data []byte) error {
-	path := filepath.Join(p.root, rel)
+	path, pathErr := transactionNativePath(p.root, rel)
+	if pathErr != nil {
+		return pathErr
+	}
 	if err := p.ensureParents(filepath.Dir(path)); err != nil {
 		return err
 	}
@@ -222,7 +243,12 @@ func (p *windowsTransactionFS) write(rel string, data []byte) error {
 func (p *windowsTransactionFS) removeTemps(states []transactionFSState) error {
 	var result error
 	for _, state := range states {
-		path, err := p.transactionTempPath(filepath.Join(p.root, state.path))
+		target, err := transactionNativePath(p.root, state.path)
+		if err != nil {
+			result = errTransactionFSUnsafePath
+			continue
+		}
+		path, err := p.transactionTempPath(target)
 		if err != nil {
 			result = errTransactionFSUnsafePath
 			continue
@@ -241,7 +267,10 @@ func (p *windowsTransactionFS) removeTemps(states []transactionFSState) error {
 }
 
 func (p *windowsTransactionFS) restore(state transactionFSState) error {
-	path := filepath.Join(p.root, state.path)
+	path, pathErr := transactionNativePath(p.root, state.path)
+	if pathErr != nil {
+		return pathErr
+	}
 	if !windowsTransactionAncestorsSafe(p.root, path) {
 		return errTransactionFSUnsafePath
 	}
@@ -256,8 +285,8 @@ func (p *windowsTransactionFS) restore(state transactionFSState) error {
 		}
 		return nil
 	}
-	backup := filepath.Join(p.journal, state.backup)
-	if !windowsTransactionPathSafe(backup, false) {
+	backup, pathErr := transactionNativePath(p.journal, state.backup)
+	if pathErr != nil || !windowsTransactionPathSafe(backup, false) {
 		return errTransactionFSIO
 	}
 	data, err := os.ReadFile(backup)
@@ -279,7 +308,11 @@ func (p *windowsTransactionFS) ensureParents(dir string) error {
 	var missing []string
 	for current := dir; current != p.root; current = filepath.Dir(current) {
 		if _, err := os.Lstat(current); errors.Is(err, os.ErrNotExist) {
-			rel, relErr := filepath.Rel(p.root, current)
+			nativeRel, relErr := filepath.Rel(p.root, current)
+			if relErr != nil {
+				return errTransactionFSUnsafePath
+			}
+			rel, relErr := transactionLogicalPathFromNative(nativeRel)
 			if relErr != nil || !p.isPlannedCreatedDir(rel) {
 				return errTransactionFSUnsafePath
 			}
@@ -335,8 +368,12 @@ func (p *windowsTransactionFS) atomicWrite(path string, data []byte) error {
 }
 
 func (p *windowsTransactionFS) transactionTempPath(path string) (string, error) {
-	rel, err := filepath.Rel(p.root, path)
-	if err != nil || !validTransactionRelativePath(rel) {
+	nativeRel, err := filepath.Rel(p.root, path)
+	if err != nil {
+		return "", errTransactionFSUnsafePath
+	}
+	rel, err := transactionLogicalPathFromNative(nativeRel)
+	if err != nil {
 		return "", errTransactionFSUnsafePath
 	}
 	hash := sha256.New()
@@ -414,7 +451,8 @@ func restoreWindowsTransactionACL(path, encoded string) error {
 func validWindowsDurableJournal(root string, record transactionFSDurableJournal) bool {
 	for _, entry := range record.Entries {
 		if entry.Exists {
-			if entry.Mode != 0 || entry.WindowsACL == "" || !windowsTransactionPathSafe(filepath.Join(root, entry.Backup), false) {
+			backup, err := transactionNativePath(root, entry.Backup)
+			if err != nil || entry.Mode != 0 || entry.WindowsACL == "" || !windowsTransactionPathSafe(backup, false) {
 				return false
 			}
 			if _, err := windows.SecurityDescriptorFromString(entry.WindowsACL); err != nil {
@@ -428,7 +466,11 @@ func validWindowsDurableJournal(root string, record transactionFSDurableJournal)
 func (p *windowsTransactionFS) removeCreatedDirs() error {
 	var result error
 	for i := len(p.createdDirs) - 1; i >= 0; i-- {
-		path := filepath.Join(p.root, p.createdDirs[i])
+		path, pathErr := transactionNativePath(p.root, p.createdDirs[i])
+		if pathErr != nil {
+			result = errTransactionFSUnsafePath
+			continue
+		}
 		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			result = errTransactionFSIO
 		}

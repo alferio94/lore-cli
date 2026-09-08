@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -157,6 +158,9 @@ func TestCompareVersionsUsesSemanticOrdering(t *testing.T) {
 }
 
 func TestApplyReplacesUnixBinaryWithBackupAndChecksumVerification(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix executable replacement semantics do not apply on Windows")
+	}
 	t.Parallel()
 
 	targetDir := t.TempDir()
@@ -246,6 +250,9 @@ func TestApplyReplacesUnixBinaryWithBackupAndChecksumVerification(t *testing.T) 
 }
 
 func TestApplyRollsBackUnixBinaryWhenPostReplaceProbeReportsWrongVersion(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix executable replacement semantics do not apply on Windows")
+	}
 	t.Parallel()
 
 	targetDir := t.TempDir()
@@ -307,6 +314,9 @@ func TestApplyRollsBackUnixBinaryWhenPostReplaceProbeReportsWrongVersion(t *test
 }
 
 func TestApplyRollsBackUnixBinaryWhenPostReplaceProbeFails(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix executable replacement semantics do not apply on Windows")
+	}
 	t.Parallel()
 
 	targetDir := t.TempDir()
@@ -368,6 +378,9 @@ func TestApplyRollsBackUnixBinaryWhenPostReplaceProbeFails(t *testing.T) {
 }
 
 func TestApplyFailsClosedOnChecksumMismatch(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix executable replacement semantics do not apply on Windows")
+	}
 	t.Parallel()
 
 	targetDir := t.TempDir()
