@@ -1,0 +1,189 @@
+name: rollout-ci
+
+on:
+  push:
+    branches: ['**']
+    paths:
+      - '.github/workflows/rollout-ci.yml'
+      - '.github/workflows/release.yml'
+      - '.github/release-profiles/**'
+      - 'internal/releaseprofile/**'
+      - 'internal/install/release_profile_route*.go'
+      - 'internal/version/**'
+      - 'internal/cli/app*.go'
+      - 'internal/cli/actions*.go'
+      - 'internal/cli/install*.go'
+      - 'internal/tui/install_*.go'
+      - 'internal/tui/root.go'
+      - 'scripts/*release*.sh'
+      - 'scripts/*release*.ps1'
+      - 'scripts/promote-*.sh'
+      - 'scripts/install.sh'
+      - 'scripts/install.ps1'
+      - 'scripts/test-installers*'
+      - 'Makefile'
+      - 'go.mod'
+      - 'go.sum'
+  pull_request:
+    paths:
+      - '.github/workflows/rollout-ci.yml'
+      - '.github/workflows/release.yml'
+      - '.github/release-profiles/**'
+      - 'internal/releaseprofile/**'
+      - 'internal/install/release_profile_route*.go'
+      - 'internal/version/**'
+      - 'internal/cli/app*.go'
+      - 'internal/cli/actions*.go'
+      - 'internal/cli/install*.go'
+      - 'internal/tui/install_*.go'
+      - 'internal/tui/root.go'
+      - 'scripts/*release*.sh'
+      - 'scripts/*release*.ps1'
+      - 'scripts/promote-*.sh'
+      - 'scripts/install.sh'
+      - 'scripts/install.ps1'
+      - 'scripts/test-installers*'
+      - 'Makefile'
+      - 'go.mod'
+      - 'go.sum'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rollout-ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-tests:
+    name: native-${{ matrix.goos }}-${{ matrix.goarch }}-full-and-race
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {goos: linux, goarch: amd64, runner: ubuntu-latest}
+          - {goos: darwin, goarch: amd64, runner: macos-15-intel}
+          - {goos: windows, goarch: amd64, runner: windows-latest}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - name: Normalize Windows checkout line endings
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          git config core.autocrlf false
+          git checkout-index --force --all
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Record and verify native execution identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'evidence=native-execution runner=%s/%s image=%s/%s\n' \
+            "$RUNNER_OS" "$RUNNER_ARCH" "${ImageOS:-unknown}" "${ImageVersion:-unknown}"
+          go version
+          go env GOOS GOARCH GOVERSION
+          test "$(go env GOOS)" = '${{ matrix.goos }}'
+          test "$(go env GOARCH)" = '${{ matrix.goarch }}'
+      - name: Native full test execution
+        run: go test -count=1 ./...
+      - name: Native full race execution
+        run: go test -race -count=1 ./...
+
+  static-and-release-guards:
+    name: static-vet-snapshot-and-release-guards
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Parse workflows and check source diff
+        shell: bash
+        run: |
+          set -euo pipefail
+          ruby -e 'require "yaml"; Dir[".github/workflows/*.{yml,yaml}"].sort.each { |path| YAML.parse_file(path) }'
+          git diff --check
+      - name: Vet all packages
+        run: go vet ./...
+      - name: Existing profile snapshot and native embedding guards
+        shell: bash
+        run: |
+          set -euo pipefail
+          profile=.github/release-profiles/development-all-off.json
+          go test -count=1 ./internal/releaseprofile
+          ldflags="$(bash scripts/release-profile-ldflags.sh "$profile")"
+          go test -count=1 -ldflags "$ldflags" ./internal/releaseprofile \
+            -run '^TestCurrentProcessSnapshot$' -args -releaseprofile-status=valid
+          git diff --exit-code -- "$profile"
+      - name: Existing installer and release-script guards
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/install.sh scripts/release-profile-ldflags.sh scripts/test-installers.sh
+          pwsh -NoLogo -NoProfile -Command '$errors = $null; [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path "scripts/install.ps1"), [ref]$null, [ref]$errors); if ($errors) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }'
+          bash scripts/test-installers.sh
+      - name: Later rollout guards when present
+        shell: bash
+        run: |
+          set -euo pipefail
+          for guard in scripts/test-releaseprofile-snapshot.sh scripts/test-release-workflow.sh; do
+            if [[ -f "$guard" ]]; then
+              echo "RUN: $guard"
+              bash -n "$guard"
+              bash "$guard"
+            else
+              echo "::notice title=Rollout guard unavailable::SKIP: $guard is not present at $GITHUB_SHA"
+            fi
+          done
+
+  cross-build-profile:
+    name: cross-build-link-six-targets-with-profile-not-native
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Cross-compile and link six CLI and embedded-profile probes
+        shell: bash
+        run: |
+          set -euo pipefail
+          profile=.github/release-profiles/development-all-off.json
+          out="$RUNNER_TEMP/rollout-cross-build"
+          mkdir -p "$out"
+          ldflags="$(bash scripts/release-profile-ldflags.sh "$profile")"
+          read -r payload_flag digest_flag identity_flag <<< "$ldflags"
+          echo 'evidence=cross-build-compile-link-only native-execution=false profile-probe=releaseprofile-test-binary'
+          for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64 windows/arm64; do
+            goos="${target%/*}"
+            goarch="${target#*/}"
+            binary="$out/lore-${goos}-${goarch}"
+            probe="$out/releaseprofile-${goos}-${goarch}.test"
+            if [[ "$goos" == windows ]]; then
+              binary="${binary}.exe"
+              probe="${probe}.exe"
+            fi
+            GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 \
+              go build -trimpath -ldflags "$ldflags" -o "$binary" ./cmd/lore
+            GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 \
+              go test -c -ldflags "$ldflags" -o "$probe" ./internal/releaseprofile
+            test -s "$binary" && test -s "$probe"
+            for flag in "$payload_flag" "$digest_flag" "$identity_flag"; do
+              value="${flag#*=}"
+              value="${value#*=}"
+              test -n "$value"
+              grep -aF "$value" "$probe" >/dev/null
+            done
+            go version -m "$binary"
+            go version -m "$probe"
+            sha256sum "$binary" "$probe"
+          done
+          test "$(find "$out" -maxdepth 1 -type f | wc -l)" -eq 12
