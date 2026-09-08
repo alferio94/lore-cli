@@ -166,8 +166,9 @@ func TestInstallCommandSupportsAntigravityDryRunAndApply(t *testing.T) {
 			t.Fatalf("install --dry-run --target antigravity exitCode = %d, want 0, stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
 		}
 		out := stdout.String()
+		actionOut := canonicalManagedActionOutput(out)
 		for _, want := range []string{"install_target=antigravity", "runtime=antigravity-prompt-skills", "components=core-pack,lore-server-mcp,context7-mcp", "mode=dry-run", "managed_action=create:../GEMINI.md", "managed_action=create:../config/agents/lore.json", "managed_action=create:../config/mcp_config.json", "managed_action=create:skills/sdd-apply/SKILL.md", "managed_action=create:lore-install.json"} {
-			if !strings.Contains(out, want) {
+			if !strings.Contains(actionOut, want) {
 				t.Fatalf("stdout = %q, want substring %q", out, want)
 			}
 		}
@@ -184,12 +185,13 @@ func TestInstallCommandSupportsAntigravityDryRunAndApply(t *testing.T) {
 			t.Fatalf("install --target antigravity --component lore-server-mcp exitCode = %d, want 0, stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
 		}
 		out := stdout.String()
+		actionOut := canonicalManagedActionOutput(out)
 		for _, want := range []string{"install_target=antigravity", "runtime=antigravity-prompt-skills", "components=core-pack,lore-server-mcp", "managed_action=create:../config/agents/lore.json", "managed_action=create:../config/mcp_config.json", "managed_action=create:lore-install.json", "managed MCP config path="} {
-			if !strings.Contains(out, want) {
+			if !strings.Contains(actionOut, want) {
 				t.Fatalf("stdout = %q, want substring %q", out, want)
 			}
 		}
-		if !strings.Contains(out, filepath.ToSlash(filepath.Join(homeDir, ".gemini", "config", "mcp_config.json"))) {
+		if !strings.Contains(out, filepath.Join(homeDir, ".gemini", "config", "mcp_config.json")) {
 			t.Fatalf("stdout = %q, want managed mcp_config.json path", out)
 		}
 		if strings.Contains(out, "Coming soon") {
