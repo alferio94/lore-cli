@@ -49,7 +49,7 @@ func explainTUIResult() install.Result {
 func TestTUIExplainUsesSharedWorkflowWithTypedParityAndSafeNavigation(t *testing.T) {
 	t.Setenv("LORE_NO_ANIMATION", "1")
 	workflow := &tuiWorkflowSpy{result: explainTUIResult()}
-	m := newModel(cli.InteractiveActions{InstallWorkflow: workflow})
+	m := newModel(cli.InteractiveActions{InstallWorkflow: workflow, ReleaseProfile: tuiDiagnosticProfileFixture()})
 	m = moveSelectionToInstall(t, m)
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(model)
@@ -61,7 +61,7 @@ func TestTUIExplainUsesSharedWorkflowWithTypedParityAndSafeNavigation(t *testing
 	updated, _ = m.Update(cmd())
 	m = updated.(model)
 	view := m.View()
-	for _, want := range []string{"mode=explain", "route=canonical-sealed", "target=pi", "outcome=ready", "admitted=true", "changed_state=false", "operation action=replace", "warning[typed-warning]", "Esc back"} {
+	for _, want := range []string{"id=prerelease-opencode-e", strings.Repeat("a", 64), "opencode:E", "mode=explain", "route=canonical-sealed", "target=pi", "outcome=ready", "admitted=true", "changed_state=false", "operation action=replace", "warning[typed-warning]", "Esc back"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("TUI Explain missing %q:\n%s", want, view)
 		}

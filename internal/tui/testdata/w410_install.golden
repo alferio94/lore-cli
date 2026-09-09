@@ -1,5 +1,10 @@
 ## explain
 Install explain
+release_profile schema=lore.release-profile/v1 id=prerelease-opencode-e
+version=1 release=v0.3.0-rc.1 channel=prerelease
+artifact_sha256:
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+provenance=valid gates=pi:off,opencode:E,codex:off,antigravity:off
 phase=result
 mode=explain route=canonical-sealed target=pi outcome=ready admitted=true
 changed_state=false
@@ -10,6 +15,11 @@ guidance[canonical-gate]: stable guidance
 Enter canonical dry-run • l Legacy (advanced, deprecated) • Esc back
 ## dry-run
 Install dry-run
+release_profile schema=lore.release-profile/v1 id=prerelease-opencode-e
+version=1 release=v0.3.0-rc.1 channel=prerelease
+artifact_sha256:
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+provenance=valid gates=pi:off,opencode:E,codex:off,antigravity:off
 phase=result
 mode=dry-run route=canonical-sealed target=pi outcome=succeeded
 admitted=true changed_state=false
@@ -20,6 +30,11 @@ guidance[canonical-gate]: stable guidance
 Enter prepare canonical apply • Esc back
 ## apply
 Install apply
+release_profile schema=lore.release-profile/v1 id=prerelease-opencode-e
+version=1 release=v0.3.0-rc.1 channel=prerelease
+artifact_sha256:
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+provenance=valid gates=pi:off,opencode:E,codex:off,antigravity:off
 phase=result
 mode=apply route=canonical-sealed target=pi outcome=succeeded admitted=true
 changed_state=true
@@ -30,6 +45,11 @@ guidance[canonical-gate]: stable guidance
 Esc back
 ## legacy-dry-run
 Install legacy-dry-run
+release_profile schema=lore.release-profile/v1 id=prerelease-opencode-e
+version=1 release=v0.3.0-rc.1 channel=prerelease
+artifact_sha256:
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+provenance=valid gates=pi:off,opencode:E,codex:off,antigravity:off
 phase=result
 mode=legacy-dry-run route=explicit-legacy target=pi outcome=succeeded
 admitted=true changed_state=false
@@ -42,6 +62,11 @@ routing
 Esc back
 ## legacy-apply
 Install legacy-apply
+release_profile schema=lore.release-profile/v1 id=prerelease-opencode-e
+version=1 release=v0.3.0-rc.1 channel=prerelease
+artifact_sha256:
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+provenance=valid gates=pi:off,opencode:E,codex:off,antigravity:off
 phase=result
 mode=legacy-apply route=explicit-legacy target=pi outcome=succeeded
 admitted=true changed_state=true
@@ -54,6 +79,11 @@ routing
 Esc back
 ## cancelled
 Install apply
+release_profile schema=lore.release-profile/v1 id=prerelease-opencode-e
+version=1 release=v0.3.0-rc.1 channel=prerelease
+artifact_sha256:
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+provenance=valid gates=pi:off,opencode:E,codex:off,antigravity:off
 phase=result
 mode=apply route=canonical-sealed target=pi outcome=cancelled admitted=true
 changed_state=false

@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/alferio94/lore-cli/internal/install"
+	"github.com/alferio94/lore-cli/internal/version"
 )
 
 type installStage string
@@ -21,6 +22,7 @@ type installModel struct {
 	request     install.Request
 	prepared    install.Prepared
 	result      install.Result
+	profile     version.ReleaseProfile
 	events      []install.Event
 	stage       installStage
 	width       int

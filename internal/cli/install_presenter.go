@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/alferio94/lore-cli/internal/install"
+	"github.com/alferio94/lore-cli/internal/version"
 )
 
 type installFormat string
@@ -15,8 +16,9 @@ const (
 )
 
 type installResultEnvelope struct {
-	SchemaVersion string            `json:"schema_version"`
-	Result        installResultView `json:"result"`
+	SchemaVersion  string                 `json:"schema_version"`
+	ReleaseProfile version.ReleaseProfile `json:"release_profile"`
+	Result         installResultView      `json:"result"`
 }
 
 type installResultView struct {
@@ -73,8 +75,9 @@ func parseInstallFormat(value string) (installFormat, bool) {
 }
 
 func (a *App) presentInstallResult(format installFormat, result install.Result) int {
+	profile := a.BuildInfo.Normalized().ReleaseProfile
 	if format == installFormatJSON {
-		if err := writeJSON(a.Stdout, newInstallResultEnvelope(result)); err != nil {
+		if err := writeJSON(a.Stdout, newInstallResultEnvelope(result, profile)); err != nil {
 			fmt.Fprintln(a.Stderr, "install output failed")
 			return 1
 		}
@@ -82,9 +85,9 @@ func (a *App) presentInstallResult(format installFormat, result install.Result) 
 	}
 
 	if installResultSucceeded(result) {
-		fmt.Fprint(a.Stdout, renderHumanInstallResult(result))
+		fmt.Fprint(a.Stdout, renderHumanInstallResult(result, profile))
 	} else {
-		fmt.Fprint(a.Stderr, renderHumanInstallResult(result))
+		fmt.Fprint(a.Stderr, renderHumanInstallResult(result, profile))
 	}
 	for _, warning := range result.Warnings {
 		fmt.Fprintf(a.Stderr, "warning[%s]: %s\n", warning.Code, warning.Message)
@@ -92,7 +95,7 @@ func (a *App) presentInstallResult(format installFormat, result install.Result) 
 	return installExitCode(result)
 }
 
-func newInstallResultEnvelope(result install.Result) installResultEnvelope {
+func newInstallResultEnvelope(result install.Result, profile version.ReleaseProfile) installResultEnvelope {
 	view := installResultView{
 		Mode: result.Mode, Route: result.Route, Target: result.Target, Outcome: result.Status,
 		Admitted: result.Admitted, ChangedState: result.ChangedState, Interrupted: result.Interrupted,
@@ -111,7 +114,7 @@ func newInstallResultEnvelope(result install.Result) installResultEnvelope {
 			Retryable: result.Error.Retryable(), ResidualRisk: result.Error.ResidualRisk(),
 		}
 	}
-	return installResultEnvelope{SchemaVersion: install.ResultSchemaVersion, Result: view}
+	return installResultEnvelope{SchemaVersion: install.ResultSchemaVersion, ReleaseProfile: profile.Normalized(), Result: view}
 }
 
 func operationViews(operations []install.Operation) []operationView {
@@ -130,9 +133,10 @@ func guidanceViews(guidance []install.Guidance) []guidanceView {
 	return views
 }
 
-func renderHumanInstallResult(result install.Result) string {
+func renderHumanInstallResult(result install.Result, profile version.ReleaseProfile) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Lore install %s\n", result.Mode)
+	fmt.Fprintln(&b, profile.Summary())
 	fmt.Fprintf(&b, "mode=%s route=%s target=%s outcome=%s admitted=%t changed_state=%t interrupted=%t residual_risk=%t\n", result.Mode, result.Route, result.Target, result.Status, result.Admitted, result.ChangedState, result.Interrupted, result.ResidualRisk)
 	if result.Error != nil {
 		fmt.Fprintf(&b, "error[%s] path=%s: %s\n", result.Error.Code(), result.Error.Path(), result.Error.Error())
