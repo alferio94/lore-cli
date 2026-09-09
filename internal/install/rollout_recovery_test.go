@@ -91,10 +91,10 @@ func TestTask52ARecoveryRestorationAndInterruptionRetryRehearsal(t *testing.T) {
 	}
 
 	root := prepareTransactionRecoveryProcessRoot(t)
-	mustWriteTransactionTestFile(t, filepath.Join(root, "foreign.txt"), "foreign-user-content")
+	mustWriteTransactionTestFile(t, filepath.Join(root, "foreign.txt"), "foreign")
 	runTransactionRecoveryCrashHelper(t, root, "after-write-a")
 	recoverTransactionBeforeAdmission(t, root, false)
-	assertTransactionTestFile(t, filepath.Join(root, "foreign.txt"), "foreign-user-content")
+	assertTransactionTestFile(t, filepath.Join(root, "foreign.txt"), "foreign")
 	journal, err := applyTransactionFS(root, transactionRecoveryProcessWrites(), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -103,7 +103,7 @@ func TestTask52ARecoveryRestorationAndInterruptionRetryRehearsal(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertTransactionRecoveryState(t, root, true)
-	assertTransactionTestFile(t, filepath.Join(root, "foreign.txt"), "foreign-user-content")
+	assertTransactionTestFile(t, filepath.Join(root, "foreign.txt"), "foreign")
 	assertNoTransactionResidue(t, root)
 }
 
