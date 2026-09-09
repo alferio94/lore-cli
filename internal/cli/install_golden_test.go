@@ -44,7 +44,7 @@ func TestW410CLIGoldensGuardModesStreamsSchemaOrderingAndRedaction(t *testing.T)
 		if format == installFormatHuman && !strings.Contains(observed, profile.Summary()) {
 			t.Fatalf("%s missing shared profile diagnostics", format)
 		}
-		for _, forbidden := range []string{"/Users/private/credential", "Bearer fixture-secret", "eyJzY2hlbWEiOi", "\x1b["} {
+		for _, forbidden := range []string{"/Users/private", "user-content", "Authorization", "X-MCP-Header", "Bearer fixture-secret", "eyJzY2hlbWEiOi", "\x1b["} {
 			if strings.Contains(observed, forbidden) {
 				t.Fatalf("%s leaked %q", format, forbidden)
 			}
@@ -86,7 +86,7 @@ func w410CLIResult(mode install.Mode) install.Result {
 	result := install.Result{
 		SchemaVersion: install.ResultSchemaVersion, Mode: mode, Route: install.RouteCanonical, Target: install.TargetPi,
 		Status: status, Admitted: true, ChangedState: apply,
-		Report:     install.TransactionReport{IRID: "ir-safe", ManifestHash: "manifest-safe", AllAdmitted: true, FinalizationCount: 1, MutationCount: map[bool]int{true: 2}[apply], ProvenancePath: "/Users/private/credential", Profile: install.PersistenceFact{ProfileID: "Bearer fixture-secret"}},
+		Report:     install.TransactionReport{IRID: "ir-safe", ManifestHash: "manifest-safe", AllAdmitted: true, FinalizationCount: 1, MutationCount: map[bool]int{true: 2}[apply], ProvenancePath: "/Users/private/user-content/Authorization/X-MCP-Header/eyJzY2hlbWEiOi", Profile: install.PersistenceFact{ProfileID: "Bearer fixture-secret"}},
 		Operations: []install.Operation{{Resource: "AGENTS.md", Action: "replace"}, {Resource: "skills/a.md", Action: "create"}},
 		Guidance:   []install.Guidance{{Code: "canonical-gate", Message: "stable guidance"}},
 	}

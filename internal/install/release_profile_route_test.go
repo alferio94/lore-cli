@@ -68,6 +68,12 @@ func TestReleaseProfileRouteDefaultAndInvalidFailClosed(t *testing.T) {
 						t.Fatalf("%s/%s decision = %#v, error = %v", target, mode, decision, routeErr)
 					}
 				}
+				for _, mode := range []Mode{ModeLegacyDryRun, ModeLegacyApply} {
+					decision, routeErr := policy.Decide(Request{Target: target, Mode: mode})
+					if routeErr != nil || !decision.Admitted || decision.Route != RouteLegacy {
+						t.Fatalf("explicit legacy %s/%s decision = %#v, error = %v", target, mode, decision, routeErr)
+					}
+				}
 			}
 		})
 	}

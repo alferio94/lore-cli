@@ -66,6 +66,39 @@ func TestCanonicalDefaultOff(t *testing.T) {
 	require(t, err != nil, "duplicate accepted")
 }
 
+func TestTask71DefaultOffFailClosedAndOpenCodeERequiresBuildSelection(t *testing.T) {
+	load := func(name string) Profile {
+		data, err := os.ReadFile(filepath.Join("..", "..", ".github", "release-profiles", name))
+		require(t, err == nil, "read release profile")
+		profile, err := ParseCanonical(data)
+		require(t, err == nil, "parse release profile")
+		return profile
+	}
+	development := load("development-all-off.json")
+	developmentEmbedded, err := Encode(development)
+	require(t, err == nil, "encode development profile")
+
+	cases := []struct {
+		name     string
+		snapshot Snapshot
+	}{
+		{"unprofiled", Resolve(Embedded{}, ReleaseIdentity{}, RollbackIdentity{})},
+		{"development", Resolve(developmentEmbedded, development.Release, development.Rollback)},
+		{"malformed", Resolve(Embedded{PayloadBase64: "%%%", PayloadSHA256: strings.Repeat("0", 64)}, development.Release, development.Rollback)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, target := range []string{TargetPi, TargetOpenCode, TargetCodex, TargetAntigravity} {
+				require(t, tc.snapshot.Gate(target) == GateOff, tc.name+" profile enabled a gate")
+			}
+		})
+	}
+
+	canary := load("prerelease-opencode-e.json")
+	require(t, canary.Gates == (TargetGates{GateOff, GateE, GateOff, GateOff}), "OpenCode-E fixture enabled a neighbor")
+	require(t, Current().Status() == StatusDefaultOff && Current().Gate(TargetOpenCode) == GateOff, "profile fixture activated an unprofiled test binary")
+}
+
 func TestPrereleaseProfileSnapshot(t *testing.T) {
 	const (
 		wantDigest = "bdd0198c303dc9ccede88bb2e285399e41890e8eed925354e74fa7e2b5082e35"
