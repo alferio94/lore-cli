@@ -3,6 +3,7 @@ package agentconfig
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -124,7 +125,7 @@ func TestStoreSaveCreatesDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("File should exist: %v", err)
 	}
-	if info.Mode().Perm() != 0o600 {
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Errorf("File permissions = %o, want 0600", info.Mode().Perm())
 	}
 }

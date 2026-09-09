@@ -58,7 +58,10 @@ func (s Service) PlanOpenCodeInstall(req InstallRequest) (InstallPlan, error) {
 	if err != nil {
 		return InstallPlan{}, err
 	}
-	manifest.ManagedFiles = buildOpenCodeManifestManagedFileRecords(rendered, desiredContents, managedPaths)
+	manifest.ManagedFiles, err = buildOpenCodeManifestManagedFileRecords(layout, rendered, desiredContents, managedPaths)
+	if err != nil {
+		return InstallPlan{}, err
+	}
 	// Manifest-scoped stale managed-file cleanup (e.g. the
 	// `plugins/model-variants.ts` → `plugins/lore-models.ts`
 	// rename introduced by the `add-opencode-lore-models-plugin`
@@ -124,7 +127,10 @@ func (s Service) ExecuteOpenCodeInstall(plan InstallPlan, opts InstallCommandOpt
 	if err != nil {
 		return InstallResult{}, err
 	}
-	manifest.ManagedFiles = buildOpenCodeManifestManagedFileRecords(rendered, desiredContents, managedPaths)
+	manifest.ManagedFiles, err = buildOpenCodeManifestManagedFileRecords(plan.Layout, rendered, desiredContents, managedPaths)
+	if err != nil {
+		return InstallResult{}, err
+	}
 	// Manifest-scoped stale managed-file cleanup (e.g. the
 	// `plugins/model-variants.ts` → `plugins/lore-models.ts`
 	// rename). See `PlanOpenCodeInstall` for the planning
@@ -376,47 +382,32 @@ func planOpenCodeManifestAction(manifestPath, backupRoot string, manifest Manife
 	return action, nil
 }
 
-func buildOpenCodeManifestManagedFileRecords(files []RenderedFile, desiredContents map[string][]byte, managedPaths []string) []ManagedFileRecord {
-	records := make([]ManagedFileRecord, 0, len(managedPaths))
-	for _, path := range managedPaths {
-		var component ComponentID
-		var mergeMode MergeMode
-		var content []byte
-		matched := false
-		for _, f := range files {
-			if openCodeAbsolutePathFromPath(f.RelativePath, path) {
-				component = f.Component
-				mergeMode = f.MergeMode
-				content = desiredContents[filepath.ToSlash(f.RelativePath)]
-				matched = true
-				break
-			}
+func buildOpenCodeManifestManagedFileRecords(layout HarnessLayout, files []RenderedFile, desiredContents map[string][]byte, managedPaths []string) ([]ManagedFileRecord, error) {
+	if len(files) != len(managedPaths) {
+		return nil, fmt.Errorf("rendered files length = %d, want %d managed paths", len(files), len(managedPaths))
+	}
+	if len(files) != len(desiredContents) {
+		return nil, fmt.Errorf("desired contents length = %d, want %d rendered files", len(desiredContents), len(files))
+	}
+
+	records := make([]ManagedFileRecord, 0, len(files))
+	for i, file := range files {
+		relativePath := filepath.ToSlash(file.RelativePath)
+		content, ok := desiredContents[relativePath]
+		if !ok {
+			return nil, fmt.Errorf("desired content for rendered file %q is missing", relativePath)
 		}
-		if !matched {
-			continue
+		if got, want := filepath.Clean(managedPaths[i]), filepath.Clean(openCodeAbsolutePath(layout, relativePath)); got != want {
+			return nil, fmt.Errorf("managed path[%d] = %q, want %q for rendered file %q", i, managedPaths[i], want, relativePath)
 		}
 		records = append(records, ManagedFileRecord{
-			Path:        path,
-			Component:   component,
-			MergeMode:   mergeMode,
+			Path:        managedPaths[i],
+			Component:   file.Component,
+			MergeMode:   file.MergeMode,
 			ContentHash: contentHash(content),
 		})
 	}
-	return records
-}
-
-func openCodeAbsolutePathFromPath(relativePath, absolutePath string) bool {
-	relative := filepath.ToSlash(relativePath)
-	switch relative {
-	case opencodeAgentsFileName:
-		return strings.HasSuffix(absolutePath, "/AGENTS.md") || strings.HasSuffix(absolutePath, "AGENTS.md")
-	case opencodeConfigFileName:
-		return strings.HasSuffix(absolutePath, "/opencode.json") || strings.HasSuffix(absolutePath, "opencode.json")
-	case opencodeManifestFileName:
-		return strings.HasSuffix(absolutePath, "/lore-install.json") || strings.HasSuffix(absolutePath, "lore-install.json")
-	default:
-		return strings.HasSuffix(absolutePath, relativePath)
-	}
+	return records, nil
 }
 
 func buildOpenCodeManifest(layout HarnessLayout, req InstallRequest, files []RenderedFile, desiredContents map[string][]byte) (Manifest, []string, error) {

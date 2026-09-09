@@ -2,6 +2,7 @@ package install
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"reflect"
 	"strings"
@@ -261,6 +262,96 @@ func TestDefaultPiAdapterRenderUsesDefinitionAndPiAssets(t *testing.T) {
 		t.Fatal("rendered files missing mcp.json for hosted MCP default")
 	} else if mcpFile.MergeMode != MergeModeAdditiveJSON {
 		t.Fatalf("mcp.json merge mode = %q, want additive-json", mcpFile.MergeMode)
+	}
+}
+
+func TestPiAdapterRenderSettingsJSONPreservesPortableValuesAndArrays(t *testing.T) {
+	tests := []struct {
+		name       string
+		serverURL  string
+		binaryPath string
+		configDir  string
+		packID     string
+		persona    string
+	}{
+		{
+			name:       "windows paths and quotes",
+			serverURL:  `https://lore.example.test/tenant\"quoted`,
+			binaryPath: `C:\Program Files\Lore \"CLI\"\lore.exe`,
+			configDir:  `C:\Users\Lore User\AppData\Roaming\Lore`,
+			packID:     `portable-\"windows\"-pack`,
+			persona:    `Lore \"Windows\"`,
+		},
+		{
+			name:       "unix regression",
+			serverURL:  "https://lore.example.test",
+			binaryPath: "/usr/local/bin/lore",
+			configDir:  "/home/lore/.config/lore",
+			packID:     "portable-agent-pack",
+			persona:    "Lore",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			definition := agentpack.DefaultDefinition()
+			definition.PackID = tt.packID
+			definition.Persona.Name = tt.persona
+			var wantProfiles, wantRoles, wantPhases []string
+			for _, profile := range definition.Profiles {
+				wantProfiles = append(wantProfiles, profile.ID)
+			}
+			for _, role := range definition.Roles {
+				wantRoles = append(wantRoles, role.Name)
+			}
+			for _, phase := range definition.Workflow.Phases {
+				wantPhases = append(wantPhases, agentpack.PhaseAgentName(phase.ID))
+			}
+			rendered, err := defaultPiAdapter().Render(context.Background(), RenderRequest{
+				Target: TargetPi, Definition: definition,
+				Components: []ComponentID{ComponentCorePack, ComponentPiExtensions},
+				ServerURL:  tt.serverURL, LoreBinaryPath: tt.binaryPath, LoreConfigDir: tt.configDir,
+			})
+			if err != nil {
+				t.Fatalf("Render error = %v, want nil", err)
+			}
+
+			var settings struct {
+				Packages []string `json:"packages"`
+				Lore     struct {
+					ServerURL         string   `json:"server_url"`
+					BinaryPath        string   `json:"binary_path"`
+					ConfigDir         string   `json:"config_dir"`
+					ManagedExtensions []string `json:"managed_extensions"`
+					AgentPack         struct {
+						PackID      string   `json:"pack_id"`
+						PersonaName string   `json:"persona_name"`
+						ProfileIDs  []string `json:"profile_ids"`
+						RoleNames   []string `json:"role_names"`
+						SDDPhases   []string `json:"sdd_phases"`
+					} `json:"agent_pack"`
+				} `json:"lore"`
+			}
+			for _, file := range rendered {
+				if file.RelativePath == "settings.json" {
+					if err := json.Unmarshal(file.Content, &settings); err != nil {
+						t.Fatalf("settings.json is not valid JSON: %v", err)
+					}
+				}
+			}
+			if settings.Lore.ServerURL != tt.serverURL || settings.Lore.BinaryPath != tt.binaryPath || settings.Lore.ConfigDir != tt.configDir {
+				t.Fatalf("decoded settings paths = (%q, %q, %q), want (%q, %q, %q)", settings.Lore.ServerURL, settings.Lore.BinaryPath, settings.Lore.ConfigDir, tt.serverURL, tt.binaryPath, tt.configDir)
+			}
+			if settings.Lore.AgentPack.PackID != tt.packID || settings.Lore.AgentPack.PersonaName != tt.persona {
+				t.Fatalf("decoded agent pack scalars = (%q, %q), want (%q, %q)", settings.Lore.AgentPack.PackID, settings.Lore.AgentPack.PersonaName, tt.packID, tt.persona)
+			}
+			if len(settings.Packages) != 1 || settings.Packages[0] != PiHostedMCPPackageSource() {
+				t.Fatalf("decoded packages = %v, want hosted MCP package array", settings.Packages)
+			}
+			if !reflect.DeepEqual(settings.Lore.ManagedExtensions, managedPiExtensionRelativePaths) || !reflect.DeepEqual(settings.Lore.AgentPack.ProfileIDs, wantProfiles) || !reflect.DeepEqual(settings.Lore.AgentPack.RoleNames, wantRoles) || !reflect.DeepEqual(settings.Lore.AgentPack.SDDPhases, wantPhases) {
+				t.Fatalf("decoded pre-marshaled arrays = extensions %v, profiles %v, roles %v, phases %v", settings.Lore.ManagedExtensions, settings.Lore.AgentPack.ProfileIDs, settings.Lore.AgentPack.RoleNames, settings.Lore.AgentPack.SDDPhases)
+			}
+		})
 	}
 }
 
