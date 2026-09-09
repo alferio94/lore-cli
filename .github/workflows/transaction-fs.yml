@@ -43,6 +43,9 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v6
+      - name: Check repository EOL policy
+        shell: bash
+        run: bash scripts/check-eol-policy.sh
       - name: Normalize Windows checkout line endings
         if: runner.os == 'Windows'
         shell: bash
@@ -90,6 +93,9 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v6
+      - name: Check repository EOL policy
+        shell: bash
+        run: bash scripts/check-eol-policy.sh
       - name: Normalize Windows checkout line endings
         if: runner.os == 'Windows'
         shell: bash
@@ -120,6 +126,9 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v6
+      - name: Check repository EOL policy
+        shell: bash
+        run: bash scripts/check-eol-policy.sh
       - name: Normalize Windows checkout line endings
         shell: bash
         run: |
@@ -143,6 +152,9 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v6
+      - name: Check repository EOL policy
+        shell: bash
+        run: bash scripts/check-eol-policy.sh
       - name: Normalize Windows checkout line endings
         shell: bash
         run: |
@@ -173,6 +185,9 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v6
+      - name: Check repository EOL policy
+        shell: bash
+        run: bash scripts/check-eol-policy.sh
       - name: Normalize Windows checkout line endings
         if: runner.os == 'Windows'
         shell: bash
@@ -260,6 +275,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      - name: Check repository EOL policy
+        shell: bash
+        run: bash scripts/check-eol-policy.sh
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
