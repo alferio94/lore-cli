@@ -335,7 +335,7 @@ func TestDoctorReportsOpenCodeNativeAgentGuidanceAndRedactsMCPToken(t *testing.T
 	homeDir := t.TempDir()
 	root := filepath.Join(homeDir, ".config", "opencode")
 	for _, rel := range []string{"prompts/lore.md", "prompts/lore-worker.md", "prompts/sdd/init.md", "prompts/sdd/explore.md", "prompts/sdd/propose.md", "prompts/sdd/spec.md", "prompts/sdd/design.md", "prompts/sdd/tasks.md", "prompts/sdd/apply.md", "prompts/sdd/verify.md", "prompts/sdd/archive.md"} {
-		path := filepath.Join(root, rel)
+		path := filepath.Join(root, filepath.FromSlash(rel))
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s) error = %v", filepath.Dir(path), err)
 		}
@@ -343,7 +343,7 @@ func TestDoctorReportsOpenCodeNativeAgentGuidanceAndRedactsMCPToken(t *testing.T
 			t.Fatalf("WriteFile(%s) error = %v", path, err)
 		}
 	}
-	configJSON := `{"agent":{"lore":{"prompt":"{file:./prompts/lore.md}","model":"openai/gpt-4o"},"lore-worker":{"prompt":"{file:./prompts/lore-worker.md}","model":"openai/gpt-4o"},"sdd-init":{"prompt":"{file:./prompts/sdd/init.md}","model":"openai/gpt-4o"},"sdd-explore":{"prompt":"{file:./prompts/sdd/explore.md}","model":"openai/gpt-4o"},"sdd-propose":{"prompt":"{file:./prompts/sdd/propose.md}","model":"openai/gpt-4o"},"sdd-spec":{"prompt":"{file:./prompts/sdd/spec.md}","model":"openai/gpt-4o"},"sdd-design":{"prompt":"{file:./prompts/sdd/design.md}","model":"openai/gpt-4o"},"sdd-tasks":{"prompt":"{file:./prompts/sdd/tasks.md}","model":"openai/gpt-4o"},"sdd-apply":{"prompt":"{file:./prompts/sdd/apply.md}","model":"openai/gpt-4o"},"sdd-verify":{"prompt":"{file:./prompts/sdd/verify.md}","model":"openai/gpt-4o"},"sdd-archive":{"prompt":"{file:./prompts/sdd/archive.md}","model":"openai/gpt-4o"}},"mcp":{"lore":{"type":"remote","url":"https://lore.example/v1/mcp","enabled":true,"headers":{"Authorization":"Bearer secret-token"}}}}`
+	configJSON := `{"agent":{"lore":{"prompt":"{file:./prompts/lore.md}","model":"openai/gpt-4o","permission":{"task":{"sdd-*":"allow","lore-worker":"allow"}}},"lore-worker":{"prompt":"{file:./prompts/lore-worker.md}","model":"openai/gpt-4o"},"sdd-init":{"prompt":"{file:./prompts/sdd/init.md}","model":"openai/gpt-4o"},"sdd-explore":{"prompt":"{file:./prompts/sdd/explore.md}","model":"openai/gpt-4o"},"sdd-propose":{"prompt":"{file:./prompts/sdd/propose.md}","model":"openai/gpt-4o"},"sdd-spec":{"prompt":"{file:./prompts/sdd/spec.md}","model":"openai/gpt-4o"},"sdd-design":{"prompt":"{file:./prompts/sdd/design.md}","model":"openai/gpt-4o"},"sdd-tasks":{"prompt":"{file:./prompts/sdd/tasks.md}","model":"openai/gpt-4o"},"sdd-apply":{"prompt":"{file:./prompts/sdd/apply.md}","model":"openai/gpt-4o"},"sdd-verify":{"prompt":"{file:./prompts/sdd/verify.md}","model":"openai/gpt-4o"},"sdd-archive":{"prompt":"{file:./prompts/sdd/archive.md}","model":"openai/gpt-4o"}},"mcp":{"lore":{"type":"remote","url":"https://lore.example/v1/mcp","enabled":true,"headers":{"Authorization":"Bearer secret-token"}}}}`
 	if err := os.WriteFile(filepath.Join(root, "opencode.json"), []byte(configJSON), 0o600); err != nil {
 		t.Fatalf("WriteFile(opencode.json) error = %v", err)
 	}
@@ -388,7 +388,7 @@ func TestDoctorFlagsInvalidOpenCodeManagedAgentModel(t *testing.T) {
 	}
 	agents := make(map[string]any, len(prompts))
 	for name, rel := range prompts {
-		path := filepath.Join(root, rel)
+		path := filepath.Join(root, filepath.FromSlash(rel))
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s) error = %v", filepath.Dir(path), err)
 		}
@@ -397,6 +397,7 @@ func TestDoctorFlagsInvalidOpenCodeManagedAgentModel(t *testing.T) {
 		}
 		agents[name] = map[string]any{"prompt": "{file:./" + filepath.ToSlash(rel) + "}", "model": "openai/gpt-4o"}
 	}
+	agents["lore"].(map[string]any)["permission"] = map[string]any{"task": map[string]any{"sdd-*": "allow", "lore-worker": "allow"}}
 	agents["sdd-apply"].(map[string]any)["model"] = "not-a-known-model"
 	configJSON, err := json.Marshal(map[string]any{"agent": agents})
 	if err != nil {
@@ -424,6 +425,7 @@ func TestDoctorFlagsInvalidOpenCodeManagedAgentModel(t *testing.T) {
 			t.Fatalf("doctor output = %q, want substring %q", out, want)
 		}
 	}
+	assertNoTokenLeak(t, out, "", "secret-token")
 }
 
 func TestDoctorReportsOpenCodeStartupRiskRecovery(t *testing.T) {

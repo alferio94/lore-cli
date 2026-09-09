@@ -3,6 +3,7 @@ package install
 import (
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -148,16 +149,16 @@ func TestAntigravityRerunReconciliesExtendedSkills(t *testing.T) {
 
 	// Extended skills should be unchanged on converged rerun. The manifest may update
 	// run metadata, but the skill files themselves must not be recreated or rewritten.
-	for _, path := range []string{
-		filepath.ToSlash(filepath.Join("skills", "judgment-day", "SKILL.md")),
-		filepath.ToSlash(filepath.Join("skills", "skill-creator", "SKILL.md")),
-		filepath.ToSlash(filepath.Join("skills", "skill-registry", "SKILL.md")),
+	for _, logicalPath := range []string{
+		path.Join("skills", "judgment-day", "SKILL.md"),
+		path.Join("skills", "skill-creator", "SKILL.md"),
+		path.Join("skills", "skill-registry", "SKILL.md"),
 	} {
-		if containsSummaryEntry(second.Summary.Created, path) || containsSummaryEntry(second.Summary.Updated, path) || containsSummaryEntry(second.Summary.Deleted, path) {
-			t.Fatalf("extended skill %s mutated on rerun; summary = %+v", path, second.Summary)
+		if containsSummaryEntry(second.Summary.Created, logicalPath) || containsSummaryEntry(second.Summary.Updated, logicalPath) || containsSummaryEntry(second.Summary.Deleted, logicalPath) {
+			t.Fatalf("extended skill %s mutated on rerun; summary = %+v", logicalPath, second.Summary)
 		}
-		if !containsSummaryEntry(second.Summary.Unchanged, path) {
-			t.Fatalf("extended skill %s not reported unchanged on rerun; summary = %+v", path, second.Summary)
+		if !containsSummaryEntry(second.Summary.Unchanged, logicalPath) {
+			t.Fatalf("extended skill %s not reported unchanged on rerun; summary = %+v", logicalPath, second.Summary)
 		}
 	}
 }
@@ -204,7 +205,7 @@ User's custom judgment-day override.
 		t.Fatalf("InstallPi error: %v", err)
 	}
 
-	skillRelativePath := filepath.ToSlash(filepath.Join("skills", "judgment-day", "SKILL.md"))
+	skillRelativePath := path.Join("skills", "judgment-day", "SKILL.md")
 	if !containsSummaryEntry(result.Summary.Updated, skillRelativePath) {
 		t.Fatalf("Updated = %v, want pre-existing judgment-day skill replaced as managed file", result.Summary.Updated)
 	}
@@ -276,7 +277,7 @@ func TestAntigravityExtendedSkillBackupOnUpdate(t *testing.T) {
 	// Find the extended skill action.
 	var skillCreatorAction PlanFileAction
 	for _, action := range plan.Files {
-		if action.RelativePath == filepath.ToSlash(filepath.Join("skills", "skill-creator", "SKILL.md")) && action.Component == ComponentExtendedSkills {
+		if action.RelativePath == path.Join("skills", "skill-creator", "SKILL.md") && action.Component == ComponentExtendedSkills {
 			skillCreatorAction = action
 			break
 		}
@@ -298,7 +299,7 @@ func TestAntigravityExtendedSkillBackupOnUpdate(t *testing.T) {
 	}
 
 	// Extended skill should be updated.
-	if !containsSummaryEntry(result.Summary.Updated, filepath.ToSlash(filepath.Join("skills", "skill-creator", "SKILL.md"))) {
+	if !containsSummaryEntry(result.Summary.Updated, path.Join("skills", "skill-creator", "SKILL.md")) {
 		t.Fatalf("Updated = %v, want skill-creator in updated list", result.Summary.Updated)
 	}
 
@@ -416,9 +417,9 @@ func TestAntigravityPlanIncludesExtendedSkillsByDefault(t *testing.T) {
 
 	// Extended skills should appear in the plan by default.
 	extendedSkillPaths := []string{
-		filepath.ToSlash(filepath.Join("skills", "judgment-day", "SKILL.md")),
-		filepath.ToSlash(filepath.Join("skills", "skill-creator", "SKILL.md")),
-		filepath.ToSlash(filepath.Join("skills", "skill-registry", "SKILL.md")),
+		path.Join("skills", "judgment-day", "SKILL.md"),
+		path.Join("skills", "skill-creator", "SKILL.md"),
+		path.Join("skills", "skill-registry", "SKILL.md"),
 	}
 	foundCount := 0
 	for _, action := range plan.Files {
@@ -443,7 +444,7 @@ func TestAntigravityPlanIncludesExtendedSkillsByDefault(t *testing.T) {
 	for _, want := range extendedSkillPaths {
 		found := false
 		for _, action := range plan.Files {
-			if filepath.ToSlash(action.RelativePath) == want && action.Component == ComponentExtendedSkills {
+			if action.RelativePath == want && action.Component == ComponentExtendedSkills {
 				found = true
 				if action.Action != "create" {
 					t.Errorf("plan action for %s = %q, want create", want, action.Action)
@@ -539,9 +540,9 @@ func TestPiExtendedSkillsPlanCreateActions(t *testing.T) {
 
 	// Extended skill files should appear as create actions.
 	extendedSkillPaths := []string{
-		filepath.ToSlash(filepath.Join("skills", "judgment-day", "SKILL.md")),
-		filepath.ToSlash(filepath.Join("skills", "skill-creator", "SKILL.md")),
-		filepath.ToSlash(filepath.Join("skills", "skill-registry", "SKILL.md")),
+		path.Join("skills", "judgment-day", "SKILL.md"),
+		path.Join("skills", "skill-creator", "SKILL.md"),
+		path.Join("skills", "skill-registry", "SKILL.md"),
 	}
 	for _, want := range extendedSkillPaths {
 		action, ok := func() (ManagedFileAction, bool) {

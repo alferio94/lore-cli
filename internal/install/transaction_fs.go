@@ -206,28 +206,94 @@ func transactionFSTargetDigest(guard targetGuard) ([sha256.Size]byte, bool) {
 func normalizeTransactionWrites(in []transactionFSWrite) ([]transactionFSWrite, error) {
 	out := make([]transactionFSWrite, len(in))
 	for i, write := range in {
-		clean := filepath.Clean(write.Path)
-		if !validTransactionRelativePath(write.Path) || clean != write.Path {
+		if !validTransactionRelativePath(write.Path) || !validTransactionNativeRelativePath(write.Path) {
 			return nil, errTransactionFSUnsafePath
 		}
-		out[i] = transactionFSWrite{Path: clean, Data: append([]byte(nil), write.Data...)}
+		out[i] = transactionFSWrite{Path: write.Path, Data: append([]byte(nil), write.Data...)}
 	}
 	sort.Slice(out, func(i, j int) bool { return compareTransactionResources(out[i].Path, out[j].Path) < 0 })
-	for i := 1; i < len(out); i++ {
-		if out[i-1].Path == out[i].Path {
+	seen := make(map[string]struct{}, len(out))
+	for _, write := range out {
+		key := transactionPathKey(write.Path)
+		if _, exists := seen[key]; exists {
 			return nil, errTransactionFSUnsafePath
 		}
+		seen[key] = struct{}{}
 	}
 	return out, nil
 }
 
-func validTransactionRelativePath(path string) bool {
-	return path != "" && len(path) <= 4096 && strings.IndexByte(path, 0) < 0 && filepath.Clean(path) != "." && !filepath.IsAbs(path) && filepath.IsLocal(path)
+func validTransactionRelativePath(name string) bool {
+	if name == "" || len(name) > 4096 || strings.IndexByte(name, 0) >= 0 || strings.Contains(name, `\`) {
+		return false
+	}
+	if len(name) >= 2 && (name[0] >= 'a' && name[0] <= 'z' || name[0] >= 'A' && name[0] <= 'Z') && name[1] == ':' {
+		return false
+	}
+	for _, part := range strings.Split(name, "/") {
+		if part == "" || part == "." || part == ".." {
+			return false
+		}
+	}
+	return true
+}
+
+func validTransactionNativeRelativePath(logical string) bool {
+	native := filepath.FromSlash(logical)
+	if filepath.IsAbs(native) || filepath.VolumeName(native) != "" || !filepath.IsLocal(native) || filepath.ToSlash(filepath.Clean(native)) != logical {
+		return false
+	}
+	if filepath.Separator == '\\' {
+		for _, part := range strings.Split(logical, "/") {
+			if part == "" || strings.HasSuffix(part, ".") || strings.HasSuffix(part, " ") || strings.ContainsAny(part, `<>:"|?*`) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func transactionNativePath(root, logical string) (string, error) {
+	if !validTransactionRelativePath(logical) || !validTransactionNativeRelativePath(logical) {
+		return "", errTransactionFSUnsafePath
+	}
+	native := filepath.FromSlash(logical)
+	joined := filepath.Join(root, native)
+	rel, err := filepath.Rel(filepath.Clean(root), joined)
+	if err != nil || filepath.IsAbs(rel) || filepath.VolumeName(rel) != "" || filepath.ToSlash(filepath.Clean(rel)) != logical {
+		return "", errTransactionFSUnsafePath
+	}
+	return joined, nil
+}
+
+func transactionLogicalPathFromNative(rel string) (string, error) {
+	if filepath.IsAbs(rel) || filepath.VolumeName(rel) != "" || !filepath.IsLocal(rel) {
+		return "", errTransactionFSUnsafePath
+	}
+	logical := filepath.ToSlash(filepath.Clean(rel))
+	if !validTransactionRelativePath(logical) || !validTransactionNativeRelativePath(logical) || filepath.Clean(filepath.FromSlash(logical)) != filepath.Clean(rel) {
+		return "", errTransactionFSUnsafePath
+	}
+	return logical, nil
+}
+
+func transactionPathKey(name string) string {
+	if filepath.Separator == '\\' {
+		return strings.ToUpper(filepath.FromSlash(name))
+	}
+	return name
+}
+
+func transactionPathBase(name string) string {
+	if index := strings.LastIndexByte(name, '/'); index >= 0 {
+		return name[index+1:]
+	}
+	return name
 }
 
 func compareTransactionResources(a, b string) int {
-	aManifest := filepath.Base(a) == provenanceV3Name
-	bManifest := filepath.Base(b) == provenanceV3Name
+	aManifest := transactionPathBase(a) == provenanceV3Name
+	bManifest := transactionPathBase(b) == provenanceV3Name
 	if aManifest != bManifest {
 		if aManifest {
 			return 1
@@ -400,6 +466,9 @@ func decodeTransactionFSDurableJournal(data []byte, root [sha256.Size]byte) (tra
 	if err != nil || !bytes.Equal(envelope.Payload, canonicalPayload) {
 		return transactionFSDurableJournal{}, errTransactionFSIO
 	}
+	if err := normalizeTransactionFSLegacyJournal(&record); err != nil {
+		return transactionFSDurableJournal{}, err
+	}
 	if err := validateTransactionFSDurableJournal(record, root); err != nil {
 		return transactionFSDurableJournal{}, err
 	}
@@ -418,32 +487,81 @@ func decodeTransactionFSJSON(data []byte, dst any) error {
 	return nil
 }
 
+func normalizeTransactionFSLegacyJournal(record *transactionFSDurableJournal) error {
+	if record == nil {
+		return errTransactionFSIO
+	}
+	var slash, backslash bool
+	observe := func(name string) error {
+		hasSlash, hasBackslash := strings.Contains(name, "/"), strings.Contains(name, `\`)
+		if hasSlash && hasBackslash {
+			return errTransactionFSIO
+		}
+		slash, backslash = slash || hasSlash, backslash || hasBackslash
+		return nil
+	}
+	for _, entry := range record.Entries {
+		if err := observe(entry.Path); err != nil {
+			return err
+		}
+		if entry.Backup != "" {
+			if err := observe(entry.Backup); err != nil {
+				return err
+			}
+		}
+	}
+	for _, dir := range record.CreatedDirs {
+		if err := observe(dir); err != nil {
+			return err
+		}
+	}
+	if slash && backslash {
+		return errTransactionFSIO
+	}
+	if backslash {
+		for i := range record.Entries {
+			record.Entries[i].Path = strings.ReplaceAll(record.Entries[i].Path, `\`, "/")
+			record.Entries[i].Backup = strings.ReplaceAll(record.Entries[i].Backup, `\`, "/")
+		}
+		for i := range record.CreatedDirs {
+			record.CreatedDirs[i] = strings.ReplaceAll(record.CreatedDirs[i], `\`, "/")
+		}
+	}
+	return nil
+}
+
 func validateTransactionFSDurableJournal(record transactionFSDurableJournal, root [sha256.Size]byte) error {
 	if record.Version != transactionFSJournalVersion || record.Root != hex.EncodeToString(root[:]) || len(record.Entries) > transactionFSJournalMaxItems || len(record.CreatedDirs) > transactionFSJournalMaxItems {
 		return errTransactionFSIO
 	}
+	entryPaths := make(map[string]struct{}, len(record.Entries))
 	for i, entry := range record.Entries {
-		if !validTransactionRelativePath(entry.Path) || entry.Path != filepath.Clean(entry.Path) || strings.IndexByte(entry.WindowsACL, 0) >= 0 || len(entry.WindowsACL) > 1<<20 {
+		if !validTransactionRelativePath(entry.Path) || !validTransactionNativeRelativePath(entry.Path) || strings.IndexByte(entry.WindowsACL, 0) >= 0 || len(entry.WindowsACL) > 1<<20 {
 			return errTransactionFSIO
 		}
-		if i > 0 && compareTransactionResources(record.Entries[i-1].Path, entry.Path) >= 0 {
+		key := transactionPathKey(entry.Path)
+		if _, exists := entryPaths[key]; exists || i > 0 && compareTransactionResources(record.Entries[i-1].Path, entry.Path) >= 0 {
 			return errTransactionFSIO
 		}
+		entryPaths[key] = struct{}{}
 		if entry.Exists {
-			if entry.Backup != fmt.Sprintf("backups/%06d", i) && entry.Backup != fmt.Sprintf("backups%c%06d", filepath.Separator, i) {
+			if entry.Backup != fmt.Sprintf("backups/%06d", i) {
 				return errTransactionFSIO
 			}
 		} else if entry.Backup != "" || entry.Mode != 0 || entry.WindowsACL != "" {
 			return errTransactionFSIO
 		}
 	}
+	dirs := make(map[string]struct{}, len(record.CreatedDirs))
 	for i, dir := range record.CreatedDirs {
-		if !validTransactionRelativePath(dir) || dir != filepath.Clean(dir) {
+		if !validTransactionRelativePath(dir) || !validTransactionNativeRelativePath(dir) {
 			return errTransactionFSIO
 		}
-		if i > 0 && compareTransactionDirs(record.CreatedDirs[i-1], dir) >= 0 {
+		key := transactionPathKey(dir)
+		if _, exists := dirs[key]; exists || i > 0 && compareTransactionDirs(record.CreatedDirs[i-1], dir) >= 0 {
 			return errTransactionFSIO
 		}
+		dirs[key] = struct{}{}
 	}
 	return nil
 }
@@ -459,13 +577,11 @@ func compareTransactionDirs(a, b string) int {
 	return strings.Compare(a, b)
 }
 
-func transactionPathDepth(path string) int {
-	depth := 0
-	for path != "." && path != string(filepath.Separator) {
-		depth++
-		path = filepath.Dir(path)
+func transactionPathDepth(name string) int {
+	if !validTransactionRelativePath(name) {
+		return 0
 	}
-	return depth
+	return strings.Count(name, "/") + 1
 }
 
 func durableTransactionStates(record transactionFSDurableJournal) []transactionFSState {
