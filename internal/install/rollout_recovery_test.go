@@ -51,14 +51,14 @@ func TestTask52ARecoveryRestorationAndInterruptionRetryRehearsal(t *testing.T) {
 		mustWriteTransactionTestFile(t, filepath.Join(root, provenanceV3Name), "prior-manifest")
 		mustWriteTransactionTestFile(t, filepath.Join(root, "foreign.txt"), "foreign-user-content")
 		receiptRoot := t.TempDir()
-		receipt := task52AcceptedBackup(t, root, receiptRoot, []string{filepath.Join("managed", "config.json"), provenanceV3Name})
+		receipt := task52AcceptedBackup(t, root, receiptRoot, []string{"managed/config.json", provenanceV3Name})
 		writes := []transactionFSWrite{
 			{Path: provenanceV3Name, Data: []byte("next-manifest")},
-			{Path: filepath.Join("managed", "config.json"), Data: []byte("next-owned")},
+			{Path: "managed/config.json", Data: []byte("next-owned")},
 		}
 		ownedMutated := false
 		_, err := applyTransactionFS(root, writes, func(stage, path string) error {
-			if stage == "write" && path == filepath.Join("managed", "config.json") {
+			if stage == "write" && path == "managed/config.json" {
 				ownedMutated = true
 			}
 			if stage == "write" && path == provenanceV3Name {
