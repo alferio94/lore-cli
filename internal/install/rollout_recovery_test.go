@@ -47,6 +47,7 @@ func TestTask52ARecoveryRestorationAndInterruptionRetryRehearsal(t *testing.T) {
 		if err := os.Mkdir(filepath.Join(root, "managed"), 0o700); err != nil {
 			t.Fatal(err)
 		}
+		secureTransactionTestDirectory(t, filepath.Join(root, "managed"))
 		mustWriteTransactionTestFile(t, filepath.Join(root, "managed", "config.json"), "prior-owned")
 		mustWriteTransactionTestFile(t, filepath.Join(root, provenanceV3Name), "prior-manifest")
 		mustWriteTransactionTestFile(t, filepath.Join(root, "foreign.txt"), "foreign-user-content")
