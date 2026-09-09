@@ -1,0 +1,19 @@
+# Repository-authored text and reviewed text fixtures use LF checkouts.
+*.go text eol=lf
+*.ts text eol=lf
+*.mod text eol=lf
+*.sum text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.toml text eol=lf
+*.golden text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.sh text eol=lf
+*.ps1 text eol=lf
+Makefile text eol=lf
+.gitignore text eol=lf
+.gitattributes text eol=lf
+
+# Future binary or intentional-CRLF content requires an exact-path -text rule,
+# a documented byte contract, and a matching guard exclusion; wildcard exceptions are forbidden.
