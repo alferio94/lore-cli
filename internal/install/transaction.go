@@ -161,8 +161,12 @@ func newHostedMCPCompletionHandoff(plan TransactionPlan, input TransactionInput,
 		return nil, hostedMCPError(CodeHostedMCPInvalidIntent)
 	}
 	paths := hostedMCPJournalStatePaths(journal)
-	provenanceRel, err := filepath.Rel(root, filepath.Clean(report.ProvenancePath))
-	if err != nil || !validTransactionRelativePath(provenanceRel) || filepath.Base(provenanceRel) != provenanceV3Name {
+	nativeProvenanceRel, err := filepath.Rel(root, filepath.Clean(report.ProvenancePath))
+	if err != nil {
+		return nil, hostedMCPError(CodeHostedMCPInvalidIntent)
+	}
+	provenanceRel, err := transactionLogicalPathFromNative(nativeProvenanceRel)
+	if err != nil || transactionPathBase(provenanceRel) != provenanceV3Name {
 		return nil, hostedMCPError(CodeHostedMCPInvalidIntent)
 	}
 	return &hostedMCPCompletionHandoff{
@@ -218,13 +222,17 @@ func rollbackHostedMCPCompletion(owner *hostedMCPCompletionOwner, primary error)
 	return primary
 }
 
-func completionProvenanceRelativePath(root, path string) string {
-	root, path = filepath.Clean(root), filepath.Clean(path)
-	rel, err := filepath.Rel(root, path)
-	if err != nil || !validTransactionRelativePath(rel) || filepath.Base(rel) != provenanceV3Name {
+func completionProvenanceRelativePath(root, nativePath string) string {
+	root, nativePath = filepath.Clean(root), filepath.Clean(nativePath)
+	nativeRel, err := filepath.Rel(root, nativePath)
+	if err != nil {
 		return ""
 	}
-	return rel
+	logical, err := transactionLogicalPathFromNative(nativeRel)
+	if err != nil || transactionPathBase(logical) != provenanceV3Name {
+		return ""
+	}
+	return logical
 }
 
 // completeHostedMCPCompletion is D's sole completion entry. It claims exactly

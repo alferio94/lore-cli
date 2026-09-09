@@ -197,10 +197,7 @@ func TestW33C1ALocalLifecycleHoldsAuthorityThroughCommitAndRollback(t *testing.T
 	for _, finish := range []string{"commit", "rollback"} {
 		t.Run(finish, func(t *testing.T) {
 			resetTargetAuthorityTestState(t)
-			root := t.TempDir()
-			if err := os.Chmod(root, 0o700); err != nil {
-				t.Fatal(err)
-			}
+			root := prepareTransactionTestRoot(t)
 			start := time.Date(2045, 2, 3, 4, 5, 6, 0, time.UTC)
 			clock := newTargetAuthorityTestWaiter(start)
 			var events []string

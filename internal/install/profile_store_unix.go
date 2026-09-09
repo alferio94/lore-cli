@@ -486,11 +486,14 @@ func syncUnixDirectory(parent *os.File) error {
 // with D's target-scoped v3 state. The durable header is replaced before the
 // manifest write, so owner death still restores the complete boundary.
 func (p *unixTransactionFS) appendCompletionBackup(rel string, index int, states []transactionFSState) (transactionFSState, error) {
-	if p == nil || filepath.Base(rel) != provenanceV3Name || index != len(states) || !validTransactionRelativePath(rel) {
+	if p == nil || transactionPathBase(rel) != provenanceV3Name || index != len(states) || !validTransactionRelativePath(rel) {
 		return transactionFSState{}, errTransactionFSUnsafePath
 	}
-	path := filepath.Join(p.root, rel)
-	info, err := p.validate(path, true)
+	target, err := transactionNativePath(p.root, rel)
+	if err != nil {
+		return transactionFSState{}, err
+	}
+	info, err := p.validate(target, true)
 	state := transactionFSState{path: rel}
 	createdBackup, complete := "", false
 	defer func() {
@@ -503,7 +506,7 @@ func (p *unixTransactionFS) appendCompletionBackup(rel string, index int, states
 	} else if err != nil || info.IsDir() {
 		return transactionFSState{}, errTransactionFSUnsafePath
 	} else {
-		fd, openErr := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+		fd, openErr := unix.Open(target, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 		if openErr != nil {
 			return transactionFSState{}, errTransactionFSIO
 		}
@@ -517,8 +520,11 @@ func (p *unixTransactionFS) appendCompletionBackup(rel string, index int, states
 		if unix.Fstat(fd, &stat) != nil || !safeTransactionUnixFile(stat) {
 			return transactionFSState{}, errTransactionFSUnsafePath
 		}
-		backup := filepath.Join("backups", fmt.Sprintf("%06d", index))
-		backupPath := filepath.Join(p.journal, backup)
+		backup := fmt.Sprintf("backups/%06d", index)
+		backupPath, pathErr := transactionNativePath(p.journal, backup)
+		if pathErr != nil {
+			return transactionFSState{}, pathErr
+		}
 		out, createErr := os.OpenFile(backupPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 		if createErr == nil {
 			_, createErr = out.ReadFrom(source)
@@ -559,17 +565,20 @@ func (p *unixTransactionFS) appendCompletionBackup(rel string, index int, states
 }
 
 func (p *unixTransactionFS) publishCompletionManifest(rel string, data []byte, fail transactionFSFailpoint) (err error) {
-	if filepath.Base(rel) != provenanceV3Name || len(data) == 0 {
+	if transactionPathBase(rel) != provenanceV3Name || len(data) == 0 {
 		return errTransactionFSUnsafePath
 	}
-	path := filepath.Join(p.root, rel)
-	if err := p.ensureParents(filepath.Dir(path)); err != nil {
+	target, err := transactionNativePath(p.root, rel)
+	if err != nil {
 		return err
 	}
-	if _, err := p.validate(path, true); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := p.ensureParents(filepath.Dir(target)); err != nil {
+		return err
+	}
+	if _, err := p.validate(target, true); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return errTransactionFSUnsafePath
 	}
-	name, err := p.transactionTempPath(path)
+	name, err := p.transactionTempPath(target)
 	if err != nil {
 		return err
 	}
@@ -608,13 +617,13 @@ func (p *unixTransactionFS) publishCompletionManifest(rel string, data []byte, f
 		err = injectTransactionFS(fail, "manifest-replace", rel)
 	}
 	if err == nil {
-		err = os.Rename(name, path)
+		err = os.Rename(name, target)
 	}
 	if err == nil {
 		err = injectTransactionFS(fail, "manifest-dirsync", rel)
 	}
 	if err == nil {
-		err = syncTransactionUnixDir(filepath.Dir(path))
+		err = syncTransactionUnixDir(filepath.Dir(target))
 	}
 	if err == nil {
 		err = injectTransactionFS(fail, "manifest-cleanup", rel)

@@ -47,18 +47,19 @@ func TestTask52ARecoveryRestorationAndInterruptionRetryRehearsal(t *testing.T) {
 		if err := os.Mkdir(filepath.Join(root, "managed"), 0o700); err != nil {
 			t.Fatal(err)
 		}
+		secureTransactionTestDirectory(t, filepath.Join(root, "managed"))
 		mustWriteTransactionTestFile(t, filepath.Join(root, "managed", "config.json"), "prior-owned")
 		mustWriteTransactionTestFile(t, filepath.Join(root, provenanceV3Name), "prior-manifest")
 		mustWriteTransactionTestFile(t, filepath.Join(root, "foreign.txt"), "foreign-user-content")
 		receiptRoot := t.TempDir()
-		receipt := task52AcceptedBackup(t, root, receiptRoot, []string{filepath.Join("managed", "config.json"), provenanceV3Name})
+		receipt := task52AcceptedBackup(t, root, receiptRoot, []string{"managed/config.json", provenanceV3Name})
 		writes := []transactionFSWrite{
 			{Path: provenanceV3Name, Data: []byte("next-manifest")},
-			{Path: filepath.Join("managed", "config.json"), Data: []byte("next-owned")},
+			{Path: "managed/config.json", Data: []byte("next-owned")},
 		}
 		ownedMutated := false
 		_, err := applyTransactionFS(root, writes, func(stage, path string) error {
-			if stage == "write" && path == filepath.Join("managed", "config.json") {
+			if stage == "write" && path == "managed/config.json" {
 				ownedMutated = true
 			}
 			if stage == "write" && path == provenanceV3Name {
@@ -91,10 +92,10 @@ func TestTask52ARecoveryRestorationAndInterruptionRetryRehearsal(t *testing.T) {
 	}
 
 	root := prepareTransactionRecoveryProcessRoot(t)
-	mustWriteTransactionTestFile(t, filepath.Join(root, "foreign.txt"), "foreign-user-content")
+	mustWriteTransactionTestFile(t, filepath.Join(root, "foreign.txt"), "foreign")
 	runTransactionRecoveryCrashHelper(t, root, "after-write-a")
 	recoverTransactionBeforeAdmission(t, root, false)
-	assertTransactionTestFile(t, filepath.Join(root, "foreign.txt"), "foreign-user-content")
+	assertTransactionTestFile(t, filepath.Join(root, "foreign.txt"), "foreign")
 	journal, err := applyTransactionFS(root, transactionRecoveryProcessWrites(), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -103,7 +104,7 @@ func TestTask52ARecoveryRestorationAndInterruptionRetryRehearsal(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertTransactionRecoveryState(t, root, true)
-	assertTransactionTestFile(t, filepath.Join(root, "foreign.txt"), "foreign-user-content")
+	assertTransactionTestFile(t, filepath.Join(root, "foreign.txt"), "foreign")
 	assertNoTransactionResidue(t, root)
 }
 
@@ -138,7 +139,7 @@ func task52AcceptedBackup(t *testing.T, root, backupRoot string, paths []string)
 		if err != nil {
 			t.Fatal(err)
 		}
-		backup := filepath.Join("backups", fmt.Sprintf("%06d", i))
+		backup := fmt.Sprintf("backups/%06d", i)
 		if err := os.WriteFile(filepath.Join(backupRoot, backup), data, 0o600); err != nil {
 			t.Fatal(err)
 		}

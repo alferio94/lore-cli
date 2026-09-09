@@ -55,7 +55,7 @@ func TestW33BWindowsTransactionFSRejectsReparseTraversal(t *testing.T) {
 	if output, err := exec.Command("cmd", "/c", "mklink", "/J", link, outside).CombinedOutput(); err != nil {
 		t.Fatalf("create required junction fixture: %v: %s", err, output)
 	}
-	_, err := applyTransactionFS(root, []transactionFSWrite{{Path: filepath.Join("link", "victim"), Data: []byte("changed")}}, nil)
+	_, err := applyTransactionFS(root, []transactionFSWrite{{Path: "link/victim", Data: []byte("changed")}}, nil)
 	if err == nil || !errors.Is(err, errTransactionFSUnsafePath) {
 		t.Fatalf("reparse apply error = %v", err)
 	}
@@ -65,7 +65,7 @@ func TestW33BWindowsTransactionFSRejectsReparseTraversal(t *testing.T) {
 
 func TestW33BWindowsTransactionFSUsesCurrentUserOnlyACLs(t *testing.T) {
 	root := prepareTransactionTestRoot(t)
-	journal, err := applyTransactionFS(root, []transactionFSWrite{{Path: filepath.Join("deep", "file"), Data: []byte("next")}}, nil)
+	journal, err := applyTransactionFS(root, []transactionFSWrite{{Path: "deep/file", Data: []byte("next")}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,6 +73,17 @@ func TestW33BWindowsTransactionFSUsesCurrentUserOnlyACLs(t *testing.T) {
 	assertTransactionTestProtection(t, filepath.Join(root, "deep/file"), false)
 	if err := journal.Rollback(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestW33C1AWindowsCanonicalPathsRejectCaseCollisionsAndUseNativeJoins(t *testing.T) {
+	root := prepareTransactionTestRoot(t)
+	if _, err := normalizeTransactionWrites([]transactionFSWrite{{Path: "A/file"}, {Path: "a/file"}}); !errors.Is(err, errTransactionFSUnsafePath) {
+		t.Fatalf("case-colliding Windows resources error = %v", err)
+	}
+	got, err := transactionNativePath(root, "mcp/lore.json")
+	if err != nil || got != filepath.Join(root, "mcp", "lore.json") || strings.Contains(filepath.Base(got), "/") {
+		t.Fatalf("native path = %q, %v", got, err)
 	}
 }
 
