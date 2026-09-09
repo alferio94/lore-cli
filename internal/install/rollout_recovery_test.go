@@ -138,7 +138,7 @@ func task52AcceptedBackup(t *testing.T, root, backupRoot string, paths []string)
 		if err != nil {
 			t.Fatal(err)
 		}
-		backup := filepath.Join("backups", fmt.Sprintf("%06d", i))
+		backup := fmt.Sprintf("backups/%06d", i)
 		if err := os.WriteFile(filepath.Join(backupRoot, backup), data, 0o600); err != nil {
 			t.Fatal(err)
 		}
