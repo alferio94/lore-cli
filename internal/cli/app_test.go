@@ -788,6 +788,7 @@ func TestInstallCommandRunsPiInstallAndPrintsSummary(t *testing.T) {
 	store := &fakeStore{path: "/tmp/lore/config/config.json", loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token"}}
 	client := &fakeClient{subject: httpclient.Subject{UserID: "user-1", Kind: "user"}}
 	app, stdout, stderr := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
+	app.UserHomeDir = func() (string, error) { return homeDir, nil }
 	app.ExecutablePath = func() (string, error) { return "/usr/local/bin/lore", nil }
 	app.BuildInfo = version.Info{Version: "v1.2.3"}
 
@@ -805,12 +806,13 @@ func TestInstallCommandRunsPiInstallAndPrintsSummary(t *testing.T) {
 		t.Fatalf("stale managed overlay stat err = %v, want cleanup after install", err)
 	}
 	out := stdout.String()
+	actionOut := canonicalManagedActionOutput(out)
 	for _, want := range []string{"Lore install", "[OK] healthz", "[OK] install", "runtime=pi-remote-package", "remote_package=git:github.com/nicobailon/pi-mcp-adapter@1091b34da83d58bd2d9fcaff2dc31f449a94bf1f", "managed_local_files=5", "project_agents=disabled(default-lore-managed)", "created=13", "updated=1", "deleted=2", "conflicted=1", "managed_action=update:agents/lore-managed-lore-worker.md", "managed_action=delete:agents/lore-managed-stale-agent.md", "managed_action=delete:extensions/lore-delegation.ts", "managed_action=conflict:agents/lore-managed-sdd-archive.md", "manifest", manifestPath} {
-		if !strings.Contains(out, want) {
+		if !strings.Contains(actionOut, want) {
 			t.Fatalf("stdout = %q, want substring %q", out, want)
 		}
 	}
-	if strings.Contains(out, "managed_action=create:extensions/lore-delegation.ts") {
+	if strings.Contains(actionOut, "managed_action=create:extensions/lore-delegation.ts") {
 		t.Fatalf("stdout = %q, want no delegation regeneration action", out)
 	}
 	assertNoTokenLeak(t, out, stderr.String(), "secret-token")
@@ -822,6 +824,7 @@ func TestInstallCommandPassesSavedTokenToValidationWithoutLeakingIt(t *testing.T
 	store := &fakeStore{path: "/tmp/lore/config/config.json", loaded: config.Config{ServerURL: "https://example.test", APIToken: "TEST_TOKEN_LEAK"}}
 	client := &fakeClient{subject: httpclient.Subject{UserID: "user-1", Kind: "user"}}
 	app, stdout, stderr := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
+	app.UserHomeDir = func() (string, error) { return homeDir, nil }
 	app.ExecutablePath = func() (string, error) { return "/usr/local/bin/lore", nil }
 	app.BuildInfo = version.Info{Version: "v1.2.3"}
 
@@ -849,6 +852,7 @@ func TestInstallCommandBlocksWhenLoginIsRequired(t *testing.T) {
 	homeDir, piAgentDir := setIsolatedPiHome(t)
 	store := &fakeStore{path: "/tmp/lore/config/config.json", loadErr: config.ErrNotFound}
 	app, stdout, stderr := newTestApp(store, nil)
+	app.UserHomeDir = func() (string, error) { return homeDir, nil }
 	app.ExecutablePath = func() (string, error) { return "/usr/local/bin/lore", nil }
 
 	if exitCode := app.Run([]string{"install", "--legacy", "--yes"}); exitCode != 1 {
@@ -914,6 +918,7 @@ func TestInstallCommandDryRunReportsPlanWithoutMutation(t *testing.T) {
 	store := &fakeStore{path: filepath.Join(configDir, "config.json"), loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token=plan"}}
 	client := &fakeClient{subject: httpclient.Subject{UserID: "user-1", Kind: "user"}}
 	app, stdout, stderr := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
+	app.UserHomeDir = func() (string, error) { return homeDir, nil }
 	app.ExecutablePath = func() (string, error) { return "/usr/local/bin/lore", nil }
 	app.BuildInfo = version.Info{Version: "v1.2.3"}
 
@@ -989,6 +994,7 @@ func TestInstallCommandDryRunSurfacesManagedFileActions(t *testing.T) {
 	store := &fakeStore{path: filepath.Join(configDir, "config.json"), loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token=plan-actions"}}
 	client := &fakeClient{subject: httpclient.Subject{UserID: "user-1", Kind: "user"}}
 	app, stdout, stderr := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
+	app.UserHomeDir = func() (string, error) { return homeDir, nil }
 	app.ExecutablePath = func() (string, error) { return "/usr/local/bin/lore", nil }
 	app.BuildInfo = version.Info{Version: "v1.2.3"}
 
@@ -1006,6 +1012,7 @@ func TestInstallCommandDryRunSurfacesManagedFileActions(t *testing.T) {
 		t.Fatalf("legacy lore-memory.ts stat err = %v, want pre-existing file preserved across dry-run", err)
 	}
 	out := stdout.String()
+	actionOut := canonicalManagedActionOutput(out)
 	for _, want := range []string{
 		"runtime=pi-remote-package",
 		"remote_package=git:github.com/nicobailon/pi-mcp-adapter@1091b34da83d58bd2d9fcaff2dc31f449a94bf1f",
@@ -1020,11 +1027,11 @@ func TestInstallCommandDryRunSurfacesManagedFileActions(t *testing.T) {
 		"managed_action=delete:agents/lore-managed-stale-agent.md",
 		"managed_action=conflict:agents/lore-managed-sdd-archive.md",
 	} {
-		if !strings.Contains(out, want) {
+		if !strings.Contains(actionOut, want) {
 			t.Fatalf("stdout = %q, want action-level dry-run detail %q", out, want)
 		}
 	}
-	if strings.Contains(out, "managed_action=create:extensions/lore-footer.ts") {
+	if strings.Contains(actionOut, "managed_action=create:extensions/lore-footer.ts") {
 		t.Fatalf("stdout = %q, want no lore-footer managed action (dormant for default)", out)
 	}
 	assertNoTokenLeak(t, out, stderr.String(), "secret-token=plan-actions")
@@ -1050,6 +1057,7 @@ func TestInstallCommandReportsLoreMemoryCleanupActionInDryRun(t *testing.T) {
 	store := &fakeStore{path: filepath.Join(configDir, "config.json"), loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token=dryrun-memory"}}
 	client := &fakeClient{subject: httpclient.Subject{UserID: "user-1", Kind: "user"}}
 	app, stdout, stderr := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
+	app.UserHomeDir = func() (string, error) { return homeDir, nil }
 	app.ExecutablePath = func() (string, error) { return "/usr/local/bin/lore", nil }
 	app.BuildInfo = version.Info{Version: "v1.2.3"}
 
@@ -1061,7 +1069,7 @@ func TestInstallCommandReportsLoreMemoryCleanupActionInDryRun(t *testing.T) {
 		t.Fatalf("lore-memory.ts after dry-run = %q err=%v, want pre-existing content preserved", string(got), err)
 	}
 	out := stdout.String()
-	if !strings.Contains(out, "managed_action=delete:extensions/lore-memory.ts") {
+	if !strings.Contains(canonicalManagedActionOutput(out), "managed_action=delete:extensions/lore-memory.ts") {
 		t.Fatalf("stdout = %q, want managed_action=delete:extensions/lore-memory.ts", out)
 	}
 	assertNoTokenLeak(t, out, stderr.String(), "secret-token=dryrun-memory")
@@ -1087,6 +1095,7 @@ func TestInstallCommandApplyRemovesAndBacksUpPreExistingLoreMemoryExtension(t *t
 	store := &fakeStore{path: filepath.Join(configDir, "config.json"), loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token=apply-memory"}}
 	client := &fakeClient{subject: httpclient.Subject{UserID: "user-1", Kind: "user"}}
 	app, stdout, stderr := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
+	app.UserHomeDir = func() (string, error) { return homeDir, nil }
 	app.ExecutablePath = func() (string, error) { return "/usr/local/bin/lore", nil }
 	app.BuildInfo = version.Info{Version: "v1.2.3"}
 
@@ -1098,7 +1107,7 @@ func TestInstallCommandApplyRemovesAndBacksUpPreExistingLoreMemoryExtension(t *t
 		t.Fatalf("lore-memory.ts stat error = %v, want file removed after apply", err)
 	}
 	out := stdout.String()
-	if !strings.Contains(out, "managed_action=delete:extensions/lore-memory.ts") {
+	if !strings.Contains(canonicalManagedActionOutput(out), "managed_action=delete:extensions/lore-memory.ts") {
 		t.Fatalf("stdout = %q, want managed_action=delete:extensions/lore-memory.ts", out)
 	}
 	// Manifest must be refreshed and must NOT record the deprecated path as a
@@ -1155,6 +1164,7 @@ func TestInstallCommandIdempotentRerunAfterLoreMemoryCleanup(t *testing.T) {
 	store := &fakeStore{path: filepath.Join(configDir, "config.json"), loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token=rerun-memory"}}
 	client := &fakeClient{subject: httpclient.Subject{UserID: "user-1", Kind: "user"}}
 	app, _, stderr := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
+	app.UserHomeDir = func() (string, error) { return homeDir, nil }
 	app.ExecutablePath = func() (string, error) { return "/usr/local/bin/lore", nil }
 	app.BuildInfo = version.Info{Version: "v1.2.3"}
 
@@ -1167,6 +1177,7 @@ func TestInstallCommandIdempotentRerunAfterLoreMemoryCleanup(t *testing.T) {
 
 	// Second run must be idempotent: no failure, no duplicate cleanup, file absent.
 	app2, stdout2, stderr2 := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
+	app2.UserHomeDir = func() (string, error) { return homeDir, nil }
 	app2.ExecutablePath = func() (string, error) { return "/usr/local/bin/lore", nil }
 	app2.BuildInfo = version.Info{Version: "v1.2.3"}
 	if exitCode := app2.Run([]string{"install", "--legacy", "--yes"}); exitCode != 0 {
@@ -1176,7 +1187,7 @@ func TestInstallCommandIdempotentRerunAfterLoreMemoryCleanup(t *testing.T) {
 		t.Fatalf("lore-memory.ts stat error = %v, want absent after idempotent rerun", err)
 	}
 	out := stdout2.String()
-	if strings.Contains(out, "managed_action=delete:extensions/lore-memory.ts") {
+	if strings.Contains(canonicalManagedActionOutput(out), "managed_action=delete:extensions/lore-memory.ts") {
 		t.Fatalf("stdout = %q, want no managed_action=delete:extensions/lore-memory.ts on idempotent rerun", out)
 	}
 	assertNoTokenLeak(t, out, stderr2.String(), "secret-token=rerun-memory")
@@ -1196,6 +1207,7 @@ func TestInstallCommandYesModeBacksUpExistingPiWithoutPrompt(t *testing.T) {
 	store := &fakeStore{path: filepath.Join(configDir, "config.json"), loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token=yes"}}
 	client := &fakeClient{subject: httpclient.Subject{UserID: "user-1", Kind: "user"}}
 	app, stdout, stderr := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
+	app.UserHomeDir = func() (string, error) { return homeDir, nil }
 	app.ExecutablePath = func() (string, error) { return "/usr/local/bin/lore", nil }
 	app.BuildInfo = version.Info{Version: "v1.2.3"}
 
@@ -1247,6 +1259,7 @@ func TestInstallCommandPiMCPConfigMaterializesBearerTokenPlaintext(t *testing.T)
 	store := &fakeStore{path: filepath.Join(configDir, "config.json"), loaded: config.Config{ServerURL: "https://lore.example.test", APIToken: tokenForMCPConfig}}
 	client := &fakeClient{subject: httpclient.Subject{UserID: "user-1", Kind: "user"}}
 	app, stdout, stderr := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
+	app.UserHomeDir = func() (string, error) { return homeDir, nil }
 	app.ExecutablePath = func() (string, error) { return "/usr/local/bin/lore", nil }
 	app.BuildInfo = version.Info{Version: "v1.2.3"}
 
@@ -1304,6 +1317,7 @@ func TestUpdateCommandDryRunReportsBinaryOnlyPlanWithoutPiMutation(t *testing.T)
 
 	store := &fakeStore{path: filepath.Join(t.TempDir(), "config.json"), loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token=update-dry-run"}}
 	app, stdout, stderr := newTestApp(store, nil)
+	app.UserHomeDir = func() (string, error) { return homeDir, nil }
 	app.ExecutablePath = func() (string, error) { return "/tmp/lore", nil }
 	app.LookPath = func(name string) (string, error) { return "/tmp/other-lore", nil }
 	app.BuildInfo = version.Info{Version: "v0.2.5"}
@@ -1336,6 +1350,7 @@ func TestUpdateCommandYesModeFailsClosedOnUnsafeTargetWithoutPiMutation(t *testi
 
 	store := &fakeStore{path: filepath.Join(t.TempDir(), "config.json"), loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token=update-yes"}}
 	app, stdout, stderr := newTestApp(store, nil)
+	app.UserHomeDir = func() (string, error) { return homeDir, nil }
 	app.ExecutablePath = func() (string, error) { return "/tmp/link/lore", nil }
 	app.LookPath = func(name string) (string, error) { return "/tmp/link/lore", nil }
 	app.BuildInfo = version.Info{Version: "dev"}
@@ -1390,6 +1405,7 @@ func TestInstallCommandPromptsForFullBackupAndAllowsExplicitDecline(t *testing.T
 	store := &fakeStore{path: filepath.Join(configDir, "config.json"), loaded: config.Config{ServerURL: "https://example.test", APIToken: "secret-token=decline"}}
 	client := &fakeClient{subject: httpclient.Subject{UserID: "user-1", Kind: "user"}}
 	app, stdout, stderr := newTestApp(store, func(baseURL string) (httpclient.Client, error) { return client, nil })
+	app.UserHomeDir = func() (string, error) { return homeDir, nil }
 	app.ExecutablePath = func() (string, error) { return "/usr/local/bin/lore", nil }
 	app.BuildInfo = version.Info{Version: "v1.2.3"}
 	app.InstallConfirm = func() (bool, error) { return false, nil }
@@ -1527,11 +1543,29 @@ func readTestMCPJSONLResponse(t *testing.T, output string) []byte {
 	return []byte(line)
 }
 
+func canonicalManagedActionOutput(out string) string {
+	fields := strings.Fields(out)
+	for i, field := range fields {
+		if strings.HasPrefix(field, "managed_action=") {
+			fields[i] = filepath.ToSlash(field)
+		}
+	}
+	return strings.Join(fields, " ")
+}
+
 func setIsolatedPiHome(t *testing.T) (homeDir string, piAgentDir string) {
 	t.Helper()
 	homeDir = t.TempDir()
 	piAgentDir = filepath.Join(homeDir, ".pi", "agent")
+	configDir := filepath.Join(homeDir, ".config")
+	volume := filepath.VolumeName(homeDir)
 	t.Setenv("HOME", homeDir)
+	t.Setenv("USERPROFILE", homeDir)
+	t.Setenv("HOMEDRIVE", volume)
+	t.Setenv("HOMEPATH", strings.TrimPrefix(homeDir, volume))
+	t.Setenv("XDG_CONFIG_HOME", configDir)
+	t.Setenv("APPDATA", configDir)
+	t.Setenv("LOCALAPPDATA", configDir)
 	t.Setenv("PI_CODING_AGENT_DIR", piAgentDir)
 	return homeDir, piAgentDir
 }

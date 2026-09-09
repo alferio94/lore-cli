@@ -403,11 +403,11 @@ func (p windowsStorePlatform) restore(a *windowsStoreAuthority, prior []byte) er
 // appendCompletionBackup durably extends the active selected-target journal
 // with the prior v3 state before D publishes the canonical replacement.
 func (p *windowsTransactionFS) appendCompletionBackup(rel string, index int, states []transactionFSState) (transactionFSState, error) {
-	if p == nil || filepath.Base(rel) != provenanceV3Name || index != len(states) || !validTransactionRelativePath(rel) {
+	if p == nil || transactionPathBase(rel) != provenanceV3Name || index != len(states) || !validTransactionRelativePath(rel) {
 		return transactionFSState{}, errTransactionFSUnsafePath
 	}
-	path := filepath.Join(p.root, rel)
-	if !windowsTransactionAncestorsSafe(p.root, path) {
+	target, pathErr := transactionNativePath(p.root, rel)
+	if pathErr != nil || !windowsTransactionAncestorsSafe(p.root, target) {
 		return transactionFSState{}, errTransactionFSUnsafePath
 	}
 	state := transactionFSState{path: rel}
@@ -417,21 +417,24 @@ func (p *windowsTransactionFS) appendCompletionBackup(rel string, index int, sta
 			_ = os.Remove(createdBackup)
 		}
 	}()
-	if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Lstat(target); errors.Is(err, os.ErrNotExist) {
 		// Exact absence is represented independently from empty prior bytes.
-	} else if err != nil || !windowsTransactionPathSafe(path, false) {
+	} else if err != nil || !windowsTransactionPathSafe(target, false) {
 		return transactionFSState{}, errTransactionFSUnsafePath
 	} else {
-		acl, err := windowsTransactionACL(path)
+		acl, err := windowsTransactionACL(target)
 		if err != nil {
 			return transactionFSState{}, errTransactionFSIO
 		}
-		data, err := os.ReadFile(path)
+		data, err := os.ReadFile(target)
 		if err != nil {
 			return transactionFSState{}, errTransactionFSIO
 		}
-		backup := filepath.Join("backups", fmt.Sprintf("%06d", index))
-		backupPath := filepath.Join(p.journal, backup)
+		backup := fmt.Sprintf("backups/%06d", index)
+		backupPath, pathErr := transactionNativePath(p.journal, backup)
+		if pathErr != nil {
+			return transactionFSState{}, pathErr
+		}
 		file, err := os.OpenFile(backupPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 		if err == nil {
 			err = windowsProtectFile(backupPath)
@@ -475,19 +478,22 @@ func (p *windowsTransactionFS) appendCompletionBackup(rel string, index int, sta
 }
 
 func (p *windowsTransactionFS) publishCompletionManifest(rel string, data []byte, fail transactionFSFailpoint) (err error) {
-	if filepath.Base(rel) != provenanceV3Name || len(data) == 0 {
+	if transactionPathBase(rel) != provenanceV3Name || len(data) == 0 {
 		return errTransactionFSUnsafePath
 	}
-	path := filepath.Join(p.root, rel)
-	if err := p.ensureParents(filepath.Dir(path)); err != nil {
+	target, err := transactionNativePath(p.root, rel)
+	if err != nil {
 		return err
 	}
-	if _, err := os.Lstat(path); err == nil && !windowsTransactionPathSafe(path, false) {
+	if err := p.ensureParents(filepath.Dir(target)); err != nil {
+		return err
+	}
+	if _, err := os.Lstat(target); err == nil && !windowsTransactionPathSafe(target, false) {
 		return errTransactionFSUnsafePath
 	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return errTransactionFSUnsafePath
 	}
-	name, err := p.transactionTempPath(path)
+	name, err := p.transactionTempPath(target)
 	if err != nil {
 		return err
 	}
@@ -529,7 +535,7 @@ func (p *windowsTransactionFS) publishCompletionManifest(rel string, data []byte
 		err = injectTransactionFS(fail, "manifest-replace", rel)
 	}
 	if err == nil {
-		err = moveWindowsFile(name, path)
+		err = moveWindowsFile(name, target)
 	}
 	if err == nil {
 		err = injectTransactionFS(fail, "manifest-dirsync", rel)

@@ -110,7 +110,10 @@ func (p *unixTransactionFS) begin() error {
 }
 
 func (p *unixTransactionFS) backup(rel string, index int) (transactionFSState, error) {
-	path := filepath.Join(p.root, rel)
+	path, err := transactionNativePath(p.root, rel)
+	if err != nil {
+		return transactionFSState{}, err
+	}
 	info, err := p.validate(path, true)
 	if errors.Is(err, os.ErrNotExist) {
 		return transactionFSState{path: rel}, nil
@@ -128,8 +131,11 @@ func (p *unixTransactionFS) backup(rel string, index int) (transactionFSState, e
 	if unix.Fstat(fd, &stat) != nil || !safeTransactionUnixFile(stat) {
 		return transactionFSState{}, errTransactionFSUnsafePath
 	}
-	backup := filepath.Join("backups", fmt.Sprintf("%06d", index))
-	backupPath := filepath.Join(p.prepare, backup)
+	backup := fmt.Sprintf("backups/%06d", index)
+	backupPath, err := transactionNativePath(p.prepare, backup)
+	if err != nil {
+		return transactionFSState{}, err
+	}
 	out, err := os.OpenFile(backupPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err == nil {
 		_, err = out.ReadFrom(file)
@@ -154,7 +160,11 @@ func (p *unixTransactionFS) seal(states []transactionFSState) error {
 		return err
 	}
 	for _, state := range states {
-		temp, tempErr := p.transactionTempPath(filepath.Join(p.root, state.path))
+		path, pathErr := transactionNativePath(p.root, state.path)
+		if pathErr != nil {
+			return pathErr
+		}
+		temp, tempErr := p.transactionTempPath(path)
 		if tempErr != nil {
 			return tempErr
 		}
@@ -185,11 +195,19 @@ func (p *unixTransactionFS) seal(states []transactionFSState) error {
 func (p *unixTransactionFS) plannedCreatedDirs(states []transactionFSState) ([]string, error) {
 	missing := make(map[string]struct{})
 	for _, state := range states {
-		for current := filepath.Dir(filepath.Join(p.root, state.path)); current != p.root; current = filepath.Dir(current) {
+		path, err := transactionNativePath(p.root, state.path)
+		if err != nil {
+			return nil, err
+		}
+		for current := filepath.Dir(path); current != p.root; current = filepath.Dir(current) {
 			info, err := os.Lstat(current)
 			if errors.Is(err, os.ErrNotExist) {
-				rel, relErr := filepath.Rel(p.root, current)
-				if relErr != nil || !validTransactionRelativePath(rel) {
+				nativeRel, relErr := filepath.Rel(p.root, current)
+				if relErr != nil {
+					return nil, errTransactionFSUnsafePath
+				}
+				rel, relErr := transactionLogicalPathFromNative(nativeRel)
+				if relErr != nil {
 					return nil, errTransactionFSUnsafePath
 				}
 				missing[rel] = struct{}{}
@@ -209,7 +227,10 @@ func (p *unixTransactionFS) plannedCreatedDirs(states []transactionFSState) ([]s
 }
 
 func (p *unixTransactionFS) write(rel string, data []byte) error {
-	path := filepath.Join(p.root, rel)
+	path, err := transactionNativePath(p.root, rel)
+	if err != nil {
+		return err
+	}
 	if err := p.ensureParents(filepath.Dir(path)); err != nil {
 		return err
 	}
@@ -222,7 +243,12 @@ func (p *unixTransactionFS) write(rel string, data []byte) error {
 func (p *unixTransactionFS) removeTemps(states []transactionFSState) error {
 	var result error
 	for _, state := range states {
-		path, err := p.transactionTempPath(filepath.Join(p.root, state.path))
+		target, err := transactionNativePath(p.root, state.path)
+		if err != nil {
+			result = errTransactionFSUnsafePath
+			continue
+		}
+		path, err := p.transactionTempPath(target)
 		if err != nil {
 			result = errTransactionFSUnsafePath
 			continue
@@ -241,7 +267,10 @@ func (p *unixTransactionFS) removeTemps(states []transactionFSState) error {
 }
 
 func (p *unixTransactionFS) restore(state transactionFSState) error {
-	path := filepath.Join(p.root, state.path)
+	path, pathErr := transactionNativePath(p.root, state.path)
+	if pathErr != nil {
+		return pathErr
+	}
 	info, pathErr := p.validate(path, true)
 	if !state.exists {
 		if pathErr != nil && !errors.Is(pathErr, os.ErrNotExist) {
@@ -260,8 +289,8 @@ func (p *unixTransactionFS) restore(state transactionFSState) error {
 	if pathErr != nil && !errors.Is(pathErr, os.ErrNotExist) {
 		return errTransactionFSUnsafePath
 	}
-	backup := filepath.Join(p.journal, state.backup)
-	if !unixTransactionRegularFileSafe(backup) {
+	backup, err := transactionNativePath(p.journal, state.backup)
+	if err != nil || !unixTransactionRegularFileSafe(backup) {
 		return errTransactionFSIO
 	}
 	data, err := os.ReadFile(backup)
@@ -276,7 +305,11 @@ func (p *unixTransactionFS) ensureParents(dir string) error {
 	for current := dir; current != p.root; current = filepath.Dir(current) {
 		info, err := os.Lstat(current)
 		if errors.Is(err, os.ErrNotExist) {
-			rel, relErr := filepath.Rel(p.root, current)
+			nativeRel, relErr := filepath.Rel(p.root, current)
+			if relErr != nil {
+				return errTransactionFSUnsafePath
+			}
+			rel, relErr := transactionLogicalPathFromNative(nativeRel)
 			if relErr != nil || !p.isPlannedCreatedDir(rel) {
 				return errTransactionFSUnsafePath
 			}
@@ -336,8 +369,12 @@ func (p *unixTransactionFS) atomicWrite(path string, data []byte, mode os.FileMo
 }
 
 func (p *unixTransactionFS) transactionTempPath(path string) (string, error) {
-	rel, err := filepath.Rel(p.root, path)
-	if err != nil || !validTransactionRelativePath(rel) {
+	nativeRel, err := filepath.Rel(p.root, path)
+	if err != nil {
+		return "", errTransactionFSUnsafePath
+	}
+	rel, err := transactionLogicalPathFromNative(nativeRel)
+	if err != nil {
 		return "", errTransactionFSUnsafePath
 	}
 	hash := sha256.New()
@@ -348,8 +385,12 @@ func (p *unixTransactionFS) transactionTempPath(path string) (string, error) {
 }
 
 func (p *unixTransactionFS) validate(path string, finalFile bool) (os.FileInfo, error) {
-	rel, err := filepath.Rel(p.root, path)
-	if err != nil || !filepath.IsLocal(rel) {
+	nativeRel, err := filepath.Rel(p.root, path)
+	if err != nil {
+		return nil, errTransactionFSUnsafePath
+	}
+	rel, err := transactionLogicalPathFromNative(nativeRel)
+	if err != nil {
 		return nil, errTransactionFSUnsafePath
 	}
 	current := p.root
@@ -404,7 +445,8 @@ func unixTransactionRegularFileSafe(path string) bool {
 func validUnixDurableJournal(root string, record transactionFSDurableJournal) bool {
 	for _, entry := range record.Entries {
 		if entry.Exists {
-			if entry.Mode != 0o600 || entry.WindowsACL != "" || !unixTransactionRegularFileSafe(filepath.Join(root, entry.Backup)) {
+			backup, err := transactionNativePath(root, entry.Backup)
+			if err != nil || entry.Mode != 0o600 || entry.WindowsACL != "" || !unixTransactionRegularFileSafe(backup) {
 				return false
 			}
 		}
@@ -415,7 +457,11 @@ func validUnixDurableJournal(root string, record transactionFSDurableJournal) bo
 func (p *unixTransactionFS) removeCreatedDirs() error {
 	var result error
 	for i := len(p.createdDirs) - 1; i >= 0; i-- {
-		path := filepath.Join(p.root, p.createdDirs[i])
+		path, pathErr := transactionNativePath(p.root, p.createdDirs[i])
+		if pathErr != nil {
+			result = errTransactionFSUnsafePath
+			continue
+		}
 		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			result = errTransactionFSIO
 		} else if err == nil && syncTransactionUnixDir(filepath.Dir(path)) != nil {
