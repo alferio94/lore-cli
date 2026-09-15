@@ -58,7 +58,7 @@ output="$(AUTHORIZED=false run_checkpoint test-canary 24h test-owner pi,codex,an
 [[ "$output" == 'release authorization is required' ]]
 [[ -z "$(run_checkpoint test-canary 24h test-owner pi,codex,antigravity)" ]]
 
-PROMOTION="$WORK_DIR/promotion.json"; PROMOTION_PROFILE="$WORK_DIR/promotion-profile.json"
+PROMOTION="$WORK_DIR/promotion.json"; PROMOTION_PROFILE="$PROFILE"
 make_evidence() { python3 - "$PROMOTION" "$PROMOTION_PROFILE" "$1" "${2:-valid}" <<'PY'
 import json,sys
 from datetime import datetime,timedelta,timezone
@@ -72,11 +72,11 @@ for i,stage in enumerate(seq[:seq.index(current)]):
  records.append(r)
 profile_id=f'profile-{current}'
 if records: records[-1].update(next_profile_id=profile_id,next_artifact_digest='e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855')
-gates={target:'off' for target in ['opencode','pi','codex','antigravity']}
+gates={target:'off' for target in ['pi','opencode','codex','antigravity']}
 for event in seq[1:seq.index(current)+1]:
  if event in {'e-observation','recovery-rehearsal','stable'}: continue
  gates['opencode' if 'opencode' in event else event[2:]]='E' if event=='opencode-e-canary' else event[0].upper()
-profile={'id':profile_id,'release':{'channel':'stable' if current=='stable' else 'prerelease','artifact_sha256':'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'},'gates':gates}
+profile={'schema':'lore.release-profile/v1','id':profile_id,'version':1,'release':{'version':'v9.9.8','channel':'stable' if current=='stable' else 'prerelease','artifact_sha256':'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'},'rollback':{'version':'v9.9.7','profile_id':'default-off'},'gates':gates}
 data={'schema':'lore.promotion-evidence/v1','admission_blocked':False,'undo_claimed':False,'records':records}
 if mutation=='missing': records.clear()
 elif mutation=='failed': records[-1]['outcome']='no-go'
@@ -97,6 +97,10 @@ PY
 run_promotion() { scripts/release-promotion-guard.sh "$PROMOTION" "$1" "$2" 24h 2026-01-20T00:00:00Z "$3" "$PROMOTION_PROFILE"; }
 for stage in opencode-e-canary e-pi e-codex e-antigravity d-opencode-canary d-pi d-codex d-antigravity a-opencode-canary a-pi a-codex a-antigravity stable; do
   make_evidence "$stage"; run_promotion "$stage" pi,codex,antigravity "auth-current-$stage" >/dev/null
+  if ! ./scripts/release-profile-ldflags.sh --guard "$PROMOTION_PROFILE" v9.9.8 "profile-$stage" >/dev/null; then
+    echo "promotion-accepted stage profile rejected by ldflags guard: $stage" >&2
+    exit 1
+  fi
 done
 expect_promotion_failure() { expected=$1 stage=$2 mutation=$3 auth=${4-auth-current}; make_evidence "$stage" "$mutation"; output="$(run_promotion "$stage" pi,codex,antigravity "$auth" 2>&1)" && return 1; [[ "$output" == "promotion checkpoint invalid: $expected" ]]; }
 expect_promotion_failure stage-order stable missing
@@ -141,8 +145,22 @@ LDFLAGS="$(./scripts/release-profile-ldflags.sh "$PROFILE")"
 go build -trimpath -ldflags "-X=github.com/alferio94/lore-cli/internal/version.Version=v9.9.8 $LDFLAGS" -o "$WORK_DIR/lore" ./cmd/lore
 ./scripts/release-profile-ldflags.sh --verify-static "$PROFILE" "$WORK_DIR/lore" >/dev/null
 ./scripts/release-profile-ldflags.sh --verify "$PROFILE" v9.9.8 task51-all-off "$WORK_DIR/lore" >/dev/null
-if ./scripts/release-profile-ldflags.sh --guard .github/release-profiles/prerelease-opencode-e.json v0.3.0-rc.1 prerelease-opencode-e >/dev/null 2>&1; then
-  echo "task 5.1 unexpectedly authorized the prerelease profile" >&2
-  exit 1
-fi
+./scripts/release-profile-ldflags.sh --guard .github/release-profiles/prerelease-opencode-e.json v0.3.0-rc.1 prerelease-opencode-e >/dev/null
+expect_identity_failure() {
+  if output="$(./scripts/release-profile-ldflags.sh --guard "$@" 2>&1)"; then
+    echo "release profile identity guard unexpectedly accepted invalid input" >&2
+    exit 1
+  fi
+  [[ -n "$output" ]]
+}
+expect_identity_failure "$PROFILE" v9.9.8 wrong-profile-id
+expect_identity_failure "$PROFILE" v9.9.9 task51-all-off
+python3 - "$PROFILE" <<'PY'
+import json, sys
+path = sys.argv[1]
+profile = json.load(open(path, encoding="utf-8"))
+profile["release"]["artifact_sha256"] = "not-a-digest"
+open(path, "w", encoding="utf-8").write(json.dumps(profile, separators=(",", ":")))
+PY
+expect_identity_failure "$PROFILE" v9.9.8 task51-all-off
 echo "release workflow guards passed"
