@@ -1,0 +1,49 @@
+name: Bug report
+description: Report a Lore CLI bug, including release-workflow problems.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: List the exact commands, inputs, and sequence that reproduce the problem.
+      placeholder: |
+        1. Run `lore ...`
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: Describe what should have happened.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include the observed output or error when useful.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Lore CLI version
+      description: Use `lore version` when available. Source commit or "not available" is also useful.
+      placeholder: v0.0.0, commit abc1234, or not available
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: "Optional: OS, shell, installation method, and relevant configuration context."
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Sanitized diagnostics
+      description: "Optional: logs, stack traces, or release-workflow output. Do not include tokens or passwords."
+      render: shell
