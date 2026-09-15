@@ -11,3 +11,8 @@ config.local.json
 
 # macOS / editor
 .DS_Store
+
+# Local Pi runtime state
+.atl/
+/.codegraph/
+/.pi/gentle-ai/
