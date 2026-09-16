@@ -2,7 +2,7 @@ name: transaction-fs
 
 on:
   push:
-    branches: ['**']
+    branches: [main]
     paths:
       - 'internal/install/hosted_mcp_finalizer*.go'
       - 'internal/install/profile_store*.go'

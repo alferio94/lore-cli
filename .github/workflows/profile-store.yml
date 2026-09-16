@@ -2,7 +2,7 @@ name: profile-store
 
 on:
   push:
-    branches: ['**']
+    branches: [main]
     paths:
       - 'internal/install/profile_store*.go'
       - '.github/workflows/profile-store.yml'
