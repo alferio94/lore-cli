@@ -15,7 +15,11 @@ import (
 	"github.com/alferio94/lore-cli/internal/compiler"
 )
 
-const processHelperEnv = "LORE_PROFILE_PROCESS_HELPER"
+const (
+	processHelperEnv                   = "LORE_PROFILE_PROCESS_HELPER"
+	helperTypedStoreErrorDiagnostic    = "typed-store-error"
+	helperTypedStoreErrorFailureOutput = "helper failed [" + helperTypedStoreErrorDiagnostic + "]\n"
+)
 
 func TestProfileStoreProcessHelper(t *testing.T) {
 	if os.Getenv(processHelperEnv) != "1" {
@@ -51,7 +55,14 @@ func TestProfileStoreProcessHelper(t *testing.T) {
 			budget = 0
 		}
 		err = store.CompleteWithOptions(prepared, fact, ApplyBoundarySuccess, CommitOptions{WaitBudget: budget})
-		helperDone(helperResult(err) == os.Getenv("LORE_STORE_EXPECT"))
+		if helperResult(err) == os.Getenv("LORE_STORE_EXPECT") {
+			helperDone(true)
+		}
+		var typed *ProfileStoreError
+		if errors.As(err, &typed) {
+			helperDone(false, helperTypedStoreErrorDiagnostic)
+		}
+		helperDone(false)
 	case "owner":
 		platform := defaultStorePlatform()
 		canonical, err := platform.Canonical(path)
@@ -75,6 +86,44 @@ func TestProfileStoreProcessHelper(t *testing.T) {
 		helperDone(false)
 	}
 }
+
+func TestSafeProcessHelperFailureDiagnostic(t *testing.T) {
+	secret := "sensitive-child-output"
+	for _, test := range []struct {
+		name   string
+		output string
+		err    error
+		want   string
+	}{
+		{
+			name:   "typed store error",
+			output: "helper failed [typed-store-error]\n",
+			err:    processExitError(2),
+			want:   "diagnostic=typed-store-error exit=2",
+		},
+		{
+			name:   "parent process failure",
+			output: secret,
+			err:    errors.New(secret),
+			want:   "diagnostic=parent-process-failure exit=unavailable",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got := safeProcessHelperFailureDiagnostic(test.output, test.err)
+			if got != test.want {
+				t.Fatalf("diagnostic = %q, want %q", got, test.want)
+			}
+			if strings.Contains(got, secret) {
+				t.Fatal("diagnostic disclosed child output")
+			}
+		})
+	}
+}
+
+type processExitError int
+
+func (err processExitError) Error() string { return "synthetic process failure" }
+func (err processExitError) ExitCode() int { return int(err) }
 
 func TestProfileStoreProcessGlobalProjectAndAmbiguousRetry(t *testing.T) {
 	t.Run("global-project", processGlobalProject)
@@ -358,11 +407,24 @@ func waitHelper(t *testing.T, child *processChild, success bool) {
 	<-child.done
 	err := child.err
 	if success && (err != nil || child.out.String() != "ok\n") {
-		t.Fatal("process helper failed without disclosing child context")
+		t.Fatal(safeProcessHelperFailureDiagnostic(child.out.String(), err))
 	}
 	if !success && err == nil {
 		t.Fatal("process helper unexpectedly survived forced death")
 	}
+}
+
+func safeProcessHelperFailureDiagnostic(output string, err error) string {
+	category := "parent-process-failure"
+	if output == helperTypedStoreErrorFailureOutput {
+		category = helperTypedStoreErrorDiagnostic
+	}
+	exit := "unavailable"
+	var exitError interface{ ExitCode() int }
+	if errors.As(err, &exitError) {
+		exit = fmt.Sprintf("%d", exitError.ExitCode())
+	}
+	return "diagnostic=" + category + " exit=" + exit
 }
 
 func killHelper(t *testing.T, child *processChild) {
@@ -411,12 +473,16 @@ func helperWait(path string) bool {
 	return false
 }
 
-func helperDone(ok bool) {
+func helperDone(ok bool, diagnostic ...string) {
 	if ok {
 		fmt.Println("ok")
 		os.Exit(0)
 	}
-	fmt.Println("helper failed")
+	if len(diagnostic) == 1 && diagnostic[0] == helperTypedStoreErrorDiagnostic {
+		fmt.Print(helperTypedStoreErrorFailureOutput)
+	} else {
+		fmt.Println("helper failed")
+	}
 	os.Exit(2)
 }
 
