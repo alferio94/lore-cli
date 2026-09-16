@@ -8,6 +8,49 @@ cleanup() { rm -rf "$WORK_DIR" "$PROFILE"; }
 trap cleanup EXIT
 
 ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0))' .github/workflows/release.yml
+ruby -ryaml - <<'RUBY'
+expected_paths = {
+  '.github/workflows/profile-store.yml' => [
+    'internal/install/profile_store*.go',
+    '.github/workflows/profile-store.yml',
+  ],
+  '.github/workflows/transaction-fs.yml' => [
+    'internal/install/hosted_mcp_finalizer*.go',
+    'internal/install/profile_store*.go',
+    'internal/install/transaction*.go',
+    '.github/workflows/transaction-fs.yml',
+  ],
+  '.github/workflows/rollout-ci.yml' => [
+    '.github/workflows/rollout-ci.yml',
+    '.github/workflows/release.yml',
+    '.github/release-profiles/**',
+    'cmd/lore/**',
+    'internal/releaseprofile/**',
+    'internal/install/release_profile_route*.go',
+    'internal/version/**',
+    'internal/cli/app*.go',
+    'internal/cli/actions*.go',
+    'internal/cli/install*.go',
+    'internal/tui/install_*.go',
+    'internal/tui/root.go',
+    'scripts/*release*.sh',
+    'scripts/*release*.ps1',
+    'scripts/promote-*.sh',
+    'scripts/install.sh',
+    'scripts/install.ps1',
+    'scripts/test-installers*',
+    'Makefile',
+    'go.mod',
+    'go.sum',
+  ],
+}
+
+expected_paths.each do |path, paths|
+  triggers = YAML.load_file(path).fetch(true) # Psych parses GitHub's `on` key as true.
+  abort "unexpected push trigger in #{path}" unless triggers.fetch('push') == {'branches' => ['main'], 'paths' => paths}
+  abort "unexpected pull request trigger in #{path}" unless triggers.fetch('pull_request') == {'paths' => paths}
+end
+RUBY
 bash -n scripts/release-profile-ldflags.sh scripts/release-promotion-guard.sh
 python3 -c 'import json,re,pathlib; text=pathlib.Path(".github/workflows/release.yml").read_text(); pattern="printf "+chr(39)+r"(\{.*?\})\\n"+chr(39); records=re.findall(pattern,text); assert len(records)==2; [json.loads(record.replace("%s","x")) for record in records]'
 ! grep -Eq '^[[:space:]]+push:' .github/workflows/release.yml
