@@ -60,7 +60,7 @@ func TestProfileStoreProcessHelper(t *testing.T) {
 		}
 		var typed *ProfileStoreError
 		if errors.As(err, &typed) {
-			helperDone(false, helperTypedStoreErrorDiagnostic)
+			helperDone(false, helperTypedStoreErrorFailureOutputFor(err))
 		}
 		helperDone(false)
 	case "owner":
@@ -96,10 +96,58 @@ func TestSafeProcessHelperFailureDiagnostic(t *testing.T) {
 		want   string
 	}{
 		{
-			name:   "typed store error",
-			output: "helper failed [typed-store-error]\n",
+			name:   "invalid profile state",
+			output: "helper failed [typed-store-error invalid_profile_state]\n",
 			err:    processExitError(2),
-			want:   "diagnostic=typed-store-error exit=2",
+			want:   "diagnostic=typed-store-error code=invalid_profile_state exit=2",
+		},
+		{
+			name:   "corrupt profile state",
+			output: "helper failed [typed-store-error corrupt_profile_state]\n",
+			err:    processExitError(2),
+			want:   "diagnostic=typed-store-error code=corrupt_profile_state exit=2",
+		},
+		{
+			name:   "profile state busy",
+			output: "helper failed [typed-store-error profile_state_busy]\n",
+			err:    processExitError(2),
+			want:   "diagnostic=typed-store-error code=profile_state_busy exit=2",
+		},
+		{
+			name:   "profile state timeout",
+			output: "helper failed [typed-store-error profile_state_timeout]\n",
+			err:    processExitError(2),
+			want:   "diagnostic=typed-store-error code=profile_state_timeout exit=2",
+		},
+		{
+			name:   "profile state conflict",
+			output: "helper failed [typed-store-error profile_state_conflict]\n",
+			err:    processExitError(2),
+			want:   "diagnostic=typed-store-error code=profile_state_conflict exit=2",
+		},
+		{
+			name:   "profile state io",
+			output: "helper failed [typed-store-error profile_state_io]\n",
+			err:    processExitError(2),
+			want:   "diagnostic=typed-store-error code=profile_state_io exit=2",
+		},
+		{
+			name:   "generic typed store error is redacted",
+			output: helperTypedStoreErrorFailureOutput,
+			err:    processExitError(2),
+			want:   "diagnostic=typed-store-error code=redacted exit=2",
+		},
+		{
+			name:   "unknown typed marker is rejected",
+			output: "helper failed [typed-store-error " + secret + "]\n",
+			err:    processExitError(2),
+			want:   "diagnostic=parent-process-failure exit=2",
+		},
+		{
+			name:   "near match marker is rejected",
+			output: "helper failed [typed-store-error profile_state_io]\nextra",
+			err:    processExitError(2),
+			want:   "diagnostic=parent-process-failure exit=2",
 		},
 		{
 			name:   "parent process failure",
@@ -115,6 +163,33 @@ func TestSafeProcessHelperFailureDiagnostic(t *testing.T) {
 			}
 			if strings.Contains(got, secret) {
 				t.Fatal("diagnostic disclosed child output")
+			}
+		})
+	}
+}
+
+func TestHelperTypedStoreErrorFailureOutputFor(t *testing.T) {
+	secret := ProfileStoreCode("sensitive-child-code")
+	for _, test := range []struct {
+		name string
+		code ProfileStoreCode
+		want string
+	}{
+		{"invalid", CodeProfileInvalid, "helper failed [typed-store-error invalid_profile_state]\n"},
+		{"corrupt", CodeProfileCorrupt, "helper failed [typed-store-error corrupt_profile_state]\n"},
+		{"busy", CodeProfileBusy, "helper failed [typed-store-error profile_state_busy]\n"},
+		{"timeout", CodeProfileTimeout, "helper failed [typed-store-error profile_state_timeout]\n"},
+		{"conflict", CodeProfileConflict, "helper failed [typed-store-error profile_state_conflict]\n"},
+		{"io", CodeProfileIO, "helper failed [typed-store-error profile_state_io]\n"},
+		{"unknown is redacted", secret, helperTypedStoreErrorFailureOutput},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got := helperTypedStoreErrorFailureOutputFor(newProfileStoreError(test.code, "sensitive-path", false))
+			if got != test.want {
+				t.Fatalf("output = %q, want %q", got, test.want)
+			}
+			if strings.Contains(got, string(secret)) || strings.Contains(got, "sensitive-path") {
+				t.Fatal("output disclosed typed error data")
 			}
 		})
 	}
@@ -416,8 +491,21 @@ func waitHelper(t *testing.T, child *processChild, success bool) {
 
 func safeProcessHelperFailureDiagnostic(output string, err error) string {
 	category := "parent-process-failure"
-	if output == helperTypedStoreErrorFailureOutput {
-		category = helperTypedStoreErrorDiagnostic
+	switch output {
+	case helperTypedStoreErrorFailureOutput:
+		category = helperTypedStoreErrorDiagnostic + " code=redacted"
+	case "helper failed [typed-store-error invalid_profile_state]\n":
+		category = helperTypedStoreErrorDiagnostic + " code=invalid_profile_state"
+	case "helper failed [typed-store-error corrupt_profile_state]\n":
+		category = helperTypedStoreErrorDiagnostic + " code=corrupt_profile_state"
+	case "helper failed [typed-store-error profile_state_busy]\n":
+		category = helperTypedStoreErrorDiagnostic + " code=profile_state_busy"
+	case "helper failed [typed-store-error profile_state_timeout]\n":
+		category = helperTypedStoreErrorDiagnostic + " code=profile_state_timeout"
+	case "helper failed [typed-store-error profile_state_conflict]\n":
+		category = helperTypedStoreErrorDiagnostic + " code=profile_state_conflict"
+	case "helper failed [typed-store-error profile_state_io]\n":
+		category = helperTypedStoreErrorDiagnostic + " code=profile_state_io"
 	}
 	exit := "unavailable"
 	var exitError interface{ ExitCode() int }
@@ -458,6 +546,29 @@ func helperResult(err error) string {
 	return string(typed.Code()) + "@" + typed.Path()
 }
 
+func helperTypedStoreErrorFailureOutputFor(err error) string {
+	var typed *ProfileStoreError
+	if !errors.As(err, &typed) {
+		return helperTypedStoreErrorFailureOutput
+	}
+	switch typed.Code() {
+	case CodeProfileInvalid:
+		return "helper failed [typed-store-error invalid_profile_state]\n"
+	case CodeProfileCorrupt:
+		return "helper failed [typed-store-error corrupt_profile_state]\n"
+	case CodeProfileBusy:
+		return "helper failed [typed-store-error profile_state_busy]\n"
+	case CodeProfileTimeout:
+		return "helper failed [typed-store-error profile_state_timeout]\n"
+	case CodeProfileConflict:
+		return "helper failed [typed-store-error profile_state_conflict]\n"
+	case CodeProfileIO:
+		return "helper failed [typed-store-error profile_state_io]\n"
+	default:
+		return helperTypedStoreErrorFailureOutput
+	}
+}
+
 func helperTouch(path string) bool {
 	return path != "" && os.WriteFile(path, []byte("ready"), 0o600) == nil
 }
@@ -473,13 +584,13 @@ func helperWait(path string) bool {
 	return false
 }
 
-func helperDone(ok bool, diagnostic ...string) {
+func helperDone(ok bool, output ...string) {
 	if ok {
 		fmt.Println("ok")
 		os.Exit(0)
 	}
-	if len(diagnostic) == 1 && diagnostic[0] == helperTypedStoreErrorDiagnostic {
-		fmt.Print(helperTypedStoreErrorFailureOutput)
+	if len(output) == 1 {
+		fmt.Print(output[0])
 	} else {
 		fmt.Println("helper failed")
 	}
